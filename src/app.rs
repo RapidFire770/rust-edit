@@ -3,13 +3,30 @@
 
 #![allow(dead_code)]
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, Language};
 use crate::config::Config;
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use crate::ui::find::FindState;
 use crate::utils::clipboard::ClipboardWrapper;
+use ratatui::text::Span;
 use std::path::PathBuf;
+
+/// Cached syntax-highlight spans for the currently visible editor window.
+///
+/// Recomputed only when one of its keys changes — the buffer's `generation`
+/// (bumped on every edit/undo/redo), the active `language` (tab switch or
+/// re-detect), or the `start_line` of the visible region (scroll). Otherwise the
+/// spans are reused frame-to-frame, so rendering no longer re-highlights every
+/// visible line on every keystroke/scroll (AGENTS §6 "Syntax Highlighting").
+#[derive(Clone)]
+pub struct CachedHighlights {
+    pub language: Language,
+    pub generation: u64,
+    pub start_line: usize,
+    pub count: usize,
+    pub spans: Vec<Vec<Span<'static>>>,
+}
 
 #[derive(Default)] // Debug removed because SyntaxHighlighter doesn't impl it
 pub struct App {
@@ -42,6 +59,9 @@ pub struct App {
     pub should_quit: bool,
     /// Last known height (in lines) of the editor viewport area. Used for PgUp/PgDn and better scrolling.
     pub editor_visible_lines: std::cell::Cell<usize>,
+    /// Cached syntax spans for the active buffer's visible window. Refreshed each
+    /// frame by `refresh_highlight_cache` only when content/scroll/language changed.
+    pub cached_highlights: Option<CachedHighlights>,
 }
 
 impl App {
@@ -95,6 +115,7 @@ impl App {
             file_dialog_message: String::new(),
             should_quit: false,
             editor_visible_lines: std::cell::Cell::new(20),
+            cached_highlights: None,
         }
     }
 
@@ -104,6 +125,59 @@ impl App {
 
     pub fn active_buffer_mut(&mut self) -> &mut Buffer {
         &mut self.buffers[self.active]
+    }
+
+    /// Ensure `cached_highlights` matches the active buffer's visible window.
+    ///
+    /// Recomputes (and rebuilds one shared `HighlightLines` for the whole window)
+    /// only when the cache key is stale: the buffer's text `generation`, its
+    /// `language`, or the visible region's `start_line`/`count`. On a steady
+    /// render (no edit, no scroll, no resize) this is a cheap key comparison and
+    /// the editor reuses the existing spans — eliminating the per-frame re-highlight
+    /// that caused lag on large files.
+    pub fn refresh_highlight_cache(&mut self, start_line: usize, count: usize) {
+        let buf = self.active_buffer();
+        let language = buf.language;
+        let generation = buf.generation;
+
+        let needs_recompute = match &self.cached_highlights {
+            None => true,
+            Some(c) => {
+                c.language != language
+                    || c.generation != generation
+                    || c.start_line != start_line
+                    || c.count != count
+            }
+        };
+
+        if needs_recompute {
+            // Collect the visible lines (clamped to the buffer) without joining them
+            // into a single String — highlight_window feeds them one at a time to a
+            // single HighlightLines, preserving multi-line syntax state.
+            let n_lines = buf.line_count();
+            let end = (start_line + count).min(n_lines);
+            let lines: Vec<String> = if start_line < n_lines {
+                (start_line..end).map(|i| buf.line(i)).collect()
+            } else {
+                Vec::new()
+            };
+            let spans = self
+                .highlighter
+                .highlight_window(lines.iter().map(String::as_str), language);
+
+            self.cached_highlights = Some(CachedHighlights {
+                language,
+                generation,
+                start_line,
+                count,
+                spans,
+            });
+        }
+    }
+
+    /// Read-only access to the cached visible-window spans (if any).
+    pub fn cached_visible_spans(&self) -> Option<&CachedHighlights> {
+        self.cached_highlights.as_ref()
     }
 
     pub fn current_theme(&self) -> &Theme {

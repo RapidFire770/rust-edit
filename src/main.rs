@@ -27,6 +27,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io::stdout;
+use std::time::Duration;
 
 use crate::app::App;
 use crate::buffer::Buffer;
@@ -62,6 +63,14 @@ fn main() -> Result<()> {
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     loop {
+        // Keep each buffer's notion of the viewport height fresh so that the
+        // internal adjust_scroll (run on edits/moves) clamps against the *real*
+        // height instead of a stale default. Fixes half-screen scroll jumping.
+        let vis = app.editor_visible_lines.get().max(1);
+        for b in app.buffers.iter_mut() {
+            b.visible_lines = vis;
+        }
+
         terminal.hide_cursor().ok();
         terminal
             .draw(|f| ui(f, app))
@@ -89,355 +98,393 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             }
         }
 
-        match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    match key.code {
-                        KeyCode::Char('q') => {
-                            app.request_quit();
-                        }
-                        KeyCode::Char('s') => {
-                            app.save_current();
-                        }
-                        KeyCode::Char('o') => {
-                            app.show_file_dialog(false);
-                        }
-                        KeyCode::Char('S') => {
-                            app.show_file_dialog(true);
-                        }
-                        KeyCode::Char('n') => app.new_tab(),
-                        KeyCode::Char('w') => app.close_current_tab(),
-                        KeyCode::Char('c') => {
-                            app.copy_selection_or_line();
-                        }
-                        KeyCode::Char('v') => {
-                            app.paste();
-                        }
-                        KeyCode::Char('x') => {
-                            app.copy_selection_or_line();
-                            if app.active_buffer().selection.is_some() {
-                                app.active_buffer_mut().delete();
+        // Block for the first event, then drain anything already queued without
+        // blocking. Consecutive mouse-wheel events are collapsed into a single
+        // net scroll applied once, so a scroll burst produces one redraw instead
+        // of one per wheel notch — removing the seconds-of-lag backlog and CPU
+        // spike on large files. Key/mouse-click events are never dropped: they
+        // are applied in arrival order.
+        let first = event::read()?;
+        let mut events = vec![first];
+        while event::poll(Duration::ZERO)? {
+            events.push(event::read()?);
+        }
+        // Apply the accumulated wheel delta directly (one scroll op), then drop
+        // all wheel events so only key/click/other events remain for the dispatch.
+        let wheel_delta = events.iter().filter_map(wheel_lines).sum::<isize>();
+        if wheel_delta != 0 {
+            let visible = app.editor_visible_lines.get().max(5);
+            app.active_buffer_mut().scroll(wheel_delta);
+            app.active_buffer_mut().clamp_scroll(visible);
+        }
+        events.retain(|e| wheel_lines(e).is_none());
+
+        for event in events {
+            match event {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        match key.code {
+                            KeyCode::Char('q') => {
+                                app.request_quit();
                             }
-                        }
-                        KeyCode::Char('f') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
-                            let was_open = app.is_find_active();
-                            app.toggle_find();
-                            if !was_open {
-                                if let Some(fs) = &mut app.find_state {
-                                    fs.editing_replace = false;
+                            KeyCode::Char('s') => {
+                                app.save_current();
+                            }
+                            KeyCode::Char('o') => {
+                                app.show_file_dialog(false);
+                            }
+                            KeyCode::Char('S') => {
+                                app.show_file_dialog(true);
+                            }
+                            KeyCode::Char('n') => app.new_tab(),
+                            KeyCode::Char('w') => app.close_current_tab(),
+                            KeyCode::Char('c') => {
+                                app.copy_selection_or_line();
+                            }
+                            KeyCode::Char('v') => {
+                                app.paste();
+                            }
+                            KeyCode::Char('x') => {
+                                app.copy_selection_or_line();
+                                if app.active_buffer().selection.is_some() {
+                                    app.active_buffer_mut().delete();
                                 }
                             }
-                        }
-                        KeyCode::Char('h') => {
-                            let was_open = app.is_find_active();
-                            app.toggle_find();
-                            if !was_open {
-                                if let Some(fs) = &mut app.find_state {
-                                    fs.editing_replace = true;
+                            KeyCode::Char('f') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                                let was_open = app.is_find_active();
+                                app.toggle_find();
+                                if !was_open {
+                                    if let Some(fs) = &mut app.find_state {
+                                        fs.editing_replace = false;
+                                    }
                                 }
                             }
-                        }
-                        KeyCode::Char('a') => {
-                            if app.is_find_active() {
-                                app.replace_all();
+                            KeyCode::Char('h') => {
+                                let was_open = app.is_find_active();
+                                app.toggle_find();
+                                if !was_open {
+                                    if let Some(fs) = &mut app.find_state {
+                                        fs.editing_replace = true;
+                                    }
+                                }
                             }
-                        }
-                        KeyCode::Char('p') => {
-                            app.toggle_markdown_preview();
-                        }
-                        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                            let _ = app.format_current_document();
-                        }
-                        // horizontal scroll
-                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.active_buffer_mut().scroll_offset.1 =
-                                app.active_buffer_mut().scroll_offset.1.saturating_add(4);
-                        }
-                        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.active_buffer_mut().scroll_offset.1 =
-                                app.active_buffer_mut().scroll_offset.1.saturating_sub(4);
-                        }
-                        KeyCode::Char('z') => {
-                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            KeyCode::Char('a') => {
+                                if app.is_find_active() {
+                                    app.replace_all();
+                                }
+                            }
+                            KeyCode::Char('p') => {
+                                app.toggle_markdown_preview();
+                            }
+                            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                                let _ = app.format_current_document();
+                            }
+                            // horizontal scroll
+                            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.active_buffer_mut().scroll_offset.1 =
+                                    app.active_buffer_mut().scroll_offset.1.saturating_add(4);
+                            }
+                            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.active_buffer_mut().scroll_offset.1 =
+                                    app.active_buffer_mut().scroll_offset.1.saturating_sub(4);
+                            }
+                            KeyCode::Char('z') => {
+                                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                    app.redo();
+                                } else {
+                                    app.undo();
+                                }
+                            }
+                            KeyCode::Char('y') => {
                                 app.redo();
-                            } else {
-                                app.undo();
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    match key.code {
+                        KeyCode::Char('?') => {
+                            app.show_help = !app.show_help;
+                        }
+                        KeyCode::Char('W') => {
+                            app.compute_and_show_word_count();
+                        }
+                        // Alt+letter for menus (opens dropdown)
+                        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
+                            app.open_menu("File");
+                        }
+                        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::ALT) => {
+                            app.open_menu("Tools");
+                        }
+                        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
+                            app.open_menu("Settings");
+                        }
+                        KeyCode::Char(d)
+                            if ('1'..='9').contains(&d)
+                                && key.modifiers.contains(KeyModifiers::ALT) =>
+                        {
+                            let idx = (d as u8 - b'1') as usize;
+                            if idx < app.buffers.len() {
+                                app.active = idx;
                             }
                         }
-                        KeyCode::Char('y') => {
-                            app.redo();
+                        KeyCode::Tab if app.is_find_active() => {
+                            if let Some(fs) = &mut app.find_state {
+                                fs.editing_replace = !fs.editing_replace;
+                            }
+                        }
+                        KeyCode::F(3) if app.is_find_active() => {
+                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                app.find_prev();
+                            } else {
+                                app.find_next();
+                            }
+                        }
+                        // n/N always navigate matches when find bar open (from either box).
+                        // This prioritizes nav discoverability; note that literal 'n'/'N' cannot be typed
+                        // into the query/repl fields while the bar is active (classic tradeoff; use F3 or seed via selection).
+                        KeyCode::Char('n') if app.is_find_active() => {
+                            app.find_next();
+                        }
+                        KeyCode::Char('N') if app.is_find_active() => {
+                            app.find_prev();
+                        }
+                        KeyCode::Char('r')
+                            if app
+                                .find_state
+                                .as_ref()
+                                .is_some_and(|fs| !fs.editing_replace) =>
+                        {
+                            app.replace_current();
+                        }
+                        KeyCode::Enter if app.is_find_active() => {
+                            app.replace_current();
+                        }
+                        KeyCode::Char(ch) if app.is_find_active() => {
+                            // route typing to focused field (query or replace)
+                            app.update_find_input(Some(ch), false);
+                        }
+                        KeyCode::Backspace if app.is_find_active() => {
+                            app.update_find_input(None, true);
+                        }
+                        KeyCode::Char('c')
+                            if app
+                                .find_state
+                                .as_ref()
+                                .is_some_and(|fs| !fs.editing_replace) =>
+                        {
+                            if let Some(fs) = &mut app.find_state {
+                                fs.case_sensitive = !fs.case_sensitive;
+                                app.update_find_matches();
+                            }
+                        }
+                        KeyCode::Char('x')
+                            if app
+                                .find_state
+                                .as_ref()
+                                .is_some_and(|fs| !fs.editing_replace) =>
+                        {
+                            if let Some(fs) = &mut app.find_state {
+                                fs.use_regex = !fs.use_regex;
+                                app.update_find_matches();
+                            }
+                        }
+                        KeyCode::Char('w')
+                            if app
+                                .find_state
+                                .as_ref()
+                                .is_some_and(|fs| !fs.editing_replace) =>
+                        {
+                            if let Some(fs) = &mut app.find_state {
+                                fs.whole_word = !fs.whole_word;
+                                app.update_find_matches();
+                            }
+                        }
+                        // MD formatting toolbar (Sprint 2)
+                        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if app.active_buffer().language == crate::buffer::Language::Markdown {
+                                app.wrap_selection_or_cursor("**", "**");
+                            }
+                        }
+                        KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if app.active_buffer().language == crate::buffer::Language::Markdown {
+                                app.wrap_selection_or_cursor("*", "*");
+                            }
+                        }
+                        KeyCode::Char('`') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if app.active_buffer().language == crate::buffer::Language::Markdown {
+                                app.wrap_selection_or_cursor("`", "`");
+                            }
+                        }
+                        KeyCode::Esc if app.is_find_active() => {
+                            app.clear_find();
+                        }
+                        KeyCode::Esc if app.show_word_count => {
+                            app.close_word_count();
+                        }
+                        KeyCode::Esc if app.show_settings => {
+                            app.close_settings();
+                        }
+                        KeyCode::Esc if app.show_confirm => {
+                            app.close_confirm(false);
+                        }
+                        KeyCode::Esc if app.show_file_dialog => {
+                            app.close_file_dialog(false);
+                        }
+                        KeyCode::Char('y' | 'Y') if app.show_confirm => {
+                            let is_quit = app.confirm_action.as_deref() == Some("quit");
+                            app.close_confirm(true);
+                            if is_quit {
+                                app.should_quit = true;
+                                return Ok(());
+                            }
+                        }
+                        KeyCode::Char('n' | 'N') if app.show_confirm => {
+                            app.close_confirm(false);
+                        }
+                        KeyCode::Char(ch) if app.show_file_dialog => {
+                            app.file_dialog_input_char(ch);
+                        }
+                        KeyCode::Backspace if app.show_file_dialog => {
+                            app.file_dialog_backspace();
+                        }
+                        KeyCode::Enter if app.show_file_dialog => {
+                            app.close_file_dialog(true);
+                        }
+                        KeyCode::Enter if app.show_confirm => {
+                            app.close_confirm(true);
+                        }
+                        KeyCode::Char('j') | KeyCode::Down if app.show_settings => {
+                            let n = crate::theme::Theme::built_ins().len();
+                            app.settings_selected = (app.settings_selected + 1) % n;
+                        }
+                        KeyCode::Char('k') | KeyCode::Up if app.show_settings => {
+                            let n = crate::theme::Theme::built_ins().len();
+                            app.settings_selected = if app.settings_selected == 0 {
+                                n - 1
+                            } else {
+                                app.settings_selected - 1
+                            };
+                        }
+                        KeyCode::Enter if app.show_settings => {
+                            app.apply_settings_theme(app.settings_selected);
+                        }
+                        // Dropdown menu keyboard navigation
+                        KeyCode::Esc if app.active_menu.is_some() => {
+                            app.close_menu();
+                        }
+                        KeyCode::Char('j') | KeyCode::Down if app.active_menu.is_some() => {
+                            let len = match app.active_menu.as_deref() {
+                                Some("File") => 6,
+                                Some("Tools") => 4,
+                                Some("Settings") => 2,
+                                _ => 1,
+                            };
+                            app.menu_selected = (app.menu_selected + 1) % len;
+                        }
+                        KeyCode::Char('k') | KeyCode::Up if app.active_menu.is_some() => {
+                            let len = match app.active_menu.as_deref() {
+                                Some("File") => 6,
+                                Some("Tools") => 4,
+                                Some("Settings") => 2,
+                                _ => 1,
+                            };
+                            app.menu_selected = if app.menu_selected == 0 {
+                                len - 1
+                            } else {
+                                app.menu_selected - 1
+                            };
+                        }
+                        KeyCode::Enter if app.active_menu.is_some() => {
+                            handle_menu_action(app);
+                            app.close_menu();
+                        }
+                        KeyCode::Char(ch) => {
+                            app.active_buffer_mut().insert_char(ch);
+                        }
+                        KeyCode::Enter => {
+                            app.active_buffer_mut().newline_with_indent();
+                        }
+                        KeyCode::Backspace => {
+                            app.active_buffer_mut().backspace();
+                        }
+                        KeyCode::Delete => {
+                            app.active_buffer_mut().delete();
+                        }
+                        KeyCode::Left => {
+                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                            app.active_buffer_mut().move_cursor(-1, extend);
+                        }
+                        KeyCode::Right => {
+                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                            app.active_buffer_mut().move_cursor(1, extend);
+                        }
+                        KeyCode::Up => {
+                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                            let vis = app.editor_visible_lines.get().max(1);
+                            app.active_buffer_mut().move_lines_up(1, extend);
+                            app.active_buffer_mut().ensure_cursor_visible(vis);
+                        }
+                        KeyCode::Down => {
+                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                            let vis = app.editor_visible_lines.get().max(1);
+                            app.active_buffer_mut().move_lines_down(1, extend);
+                            app.active_buffer_mut().ensure_cursor_visible(vis);
+                        }
+                        KeyCode::Home => {
+                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                            app.active_buffer_mut().move_home(extend);
+                        }
+                        KeyCode::End => {
+                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                            app.active_buffer_mut().move_end(extend);
+                        }
+                        KeyCode::PageUp => {
+                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                            let visible = app.editor_visible_lines.get().max(1);
+                            app.active_buffer_mut().page_up(visible, extend);
+                            app.active_buffer_mut().ensure_cursor_visible(visible);
+                        }
+                        KeyCode::PageDown => {
+                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                            let visible = app.editor_visible_lines.get().max(1);
+                            app.active_buffer_mut().page_down(visible, extend);
+                            app.active_buffer_mut().ensure_cursor_visible(visible);
+                        }
+                        KeyCode::Tab => {
+                            app.active_buffer_mut().indent();
+                        }
+                        KeyCode::Esc => {
+                            app.active_buffer_mut().selection = None;
                         }
                         _ => {}
                     }
-                    continue;
                 }
-
-                match key.code {
-                    KeyCode::Char('?') => {
-                        app.show_help = !app.show_help;
-                    }
-                    KeyCode::Char('W') => {
-                        app.compute_and_show_word_count();
-                    }
-                    // Alt+letter for menus (opens dropdown)
-                    KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        app.open_menu("File");
-                    }
-                    KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        app.open_menu("Tools");
-                    }
-                    KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        app.open_menu("Settings");
-                    }
-                    KeyCode::Char(d)
-                        if ('1'..='9').contains(&d)
-                            && key.modifiers.contains(KeyModifiers::ALT) =>
-                    {
-                        let idx = (d as u8 - b'1') as usize;
-                        if idx < app.buffers.len() {
-                            app.active = idx;
-                        }
-                    }
-                    KeyCode::Tab if app.is_find_active() => {
-                        if let Some(fs) = &mut app.find_state {
-                            fs.editing_replace = !fs.editing_replace;
-                        }
-                    }
-                    KeyCode::F(3) if app.is_find_active() => {
-                        if key.modifiers.contains(KeyModifiers::SHIFT) {
-                            app.find_prev();
-                        } else {
-                            app.find_next();
-                        }
-                    }
-                    // n/N always navigate matches when find bar open (from either box).
-                    // This prioritizes nav discoverability; note that literal 'n'/'N' cannot be typed
-                    // into the query/repl fields while the bar is active (classic tradeoff; use F3 or seed via selection).
-                    KeyCode::Char('n') if app.is_find_active() => {
-                        app.find_next();
-                    }
-                    KeyCode::Char('N') if app.is_find_active() => {
-                        app.find_prev();
-                    }
-                    KeyCode::Char('r')
-                        if app
-                            .find_state
-                            .as_ref()
-                            .is_some_and(|fs| !fs.editing_replace) =>
-                    {
-                        app.replace_current();
-                    }
-                    KeyCode::Enter if app.is_find_active() => {
-                        app.replace_current();
-                    }
-                    KeyCode::Char(ch) if app.is_find_active() => {
-                        // route typing to focused field (query or replace)
-                        app.update_find_input(Some(ch), false);
-                    }
-                    KeyCode::Backspace if app.is_find_active() => {
-                        app.update_find_input(None, true);
-                    }
-                    KeyCode::Char('c')
-                        if app
-                            .find_state
-                            .as_ref()
-                            .is_some_and(|fs| !fs.editing_replace) =>
-                    {
-                        if let Some(fs) = &mut app.find_state {
-                            fs.case_sensitive = !fs.case_sensitive;
-                            app.update_find_matches();
-                        }
-                    }
-                    KeyCode::Char('x')
-                        if app
-                            .find_state
-                            .as_ref()
-                            .is_some_and(|fs| !fs.editing_replace) =>
-                    {
-                        if let Some(fs) = &mut app.find_state {
-                            fs.use_regex = !fs.use_regex;
-                            app.update_find_matches();
-                        }
-                    }
-                    KeyCode::Char('w')
-                        if app
-                            .find_state
-                            .as_ref()
-                            .is_some_and(|fs| !fs.editing_replace) =>
-                    {
-                        if let Some(fs) = &mut app.find_state {
-                            fs.whole_word = !fs.whole_word;
-                            app.update_find_matches();
-                        }
-                    }
-                    // MD formatting toolbar (Sprint 2)
-                    KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if app.active_buffer().language == crate::buffer::Language::Markdown {
-                            app.wrap_selection_or_cursor("**", "**");
-                        }
-                    }
-                    KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if app.active_buffer().language == crate::buffer::Language::Markdown {
-                            app.wrap_selection_or_cursor("*", "*");
-                        }
-                    }
-                    KeyCode::Char('`') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if app.active_buffer().language == crate::buffer::Language::Markdown {
-                            app.wrap_selection_or_cursor("`", "`");
-                        }
-                    }
-                    KeyCode::Esc if app.is_find_active() => {
-                        app.clear_find();
-                    }
-                    KeyCode::Esc if app.show_word_count => {
-                        app.close_word_count();
-                    }
-                    KeyCode::Esc if app.show_settings => {
-                        app.close_settings();
-                    }
-                    KeyCode::Esc if app.show_confirm => {
-                        app.close_confirm(false);
-                    }
-                    KeyCode::Esc if app.show_file_dialog => {
-                        app.close_file_dialog(false);
-                    }
-                    KeyCode::Char('y' | 'Y') if app.show_confirm => {
-                        let is_quit = app.confirm_action.as_deref() == Some("quit");
-                        app.close_confirm(true);
-                        if is_quit {
-                            app.should_quit = true;
-                            return Ok(());
-                        }
-                    }
-                    KeyCode::Char('n' | 'N') if app.show_confirm => {
-                        app.close_confirm(false);
-                    }
-                    KeyCode::Char(ch) if app.show_file_dialog => {
-                        app.file_dialog_input_char(ch);
-                    }
-                    KeyCode::Backspace if app.show_file_dialog => {
-                        app.file_dialog_backspace();
-                    }
-                    KeyCode::Enter if app.show_file_dialog => {
-                        app.close_file_dialog(true);
-                    }
-                    KeyCode::Enter if app.show_confirm => {
-                        app.close_confirm(true);
-                    }
-                    KeyCode::Char('j') | KeyCode::Down if app.show_settings => {
-                        let n = crate::theme::Theme::built_ins().len();
-                        app.settings_selected = (app.settings_selected + 1) % n;
-                    }
-                    KeyCode::Char('k') | KeyCode::Up if app.show_settings => {
-                        let n = crate::theme::Theme::built_ins().len();
-                        app.settings_selected = if app.settings_selected == 0 {
-                            n - 1
-                        } else {
-                            app.settings_selected - 1
-                        };
-                    }
-                    KeyCode::Enter if app.show_settings => {
-                        app.apply_settings_theme(app.settings_selected);
-                    }
-                    // Dropdown menu keyboard navigation
-                    KeyCode::Esc if app.active_menu.is_some() => {
-                        app.close_menu();
-                    }
-                    KeyCode::Char('j') | KeyCode::Down if app.active_menu.is_some() => {
-                        let len = match app.active_menu.as_deref() {
-                            Some("File") => 6,
-                            Some("Tools") => 4,
-                            Some("Settings") => 2,
-                            _ => 1,
-                        };
-                        app.menu_selected = (app.menu_selected + 1) % len;
-                    }
-                    KeyCode::Char('k') | KeyCode::Up if app.active_menu.is_some() => {
-                        let len = match app.active_menu.as_deref() {
-                            Some("File") => 6,
-                            Some("Tools") => 4,
-                            Some("Settings") => 2,
-                            _ => 1,
-                        };
-                        app.menu_selected = if app.menu_selected == 0 {
-                            len - 1
-                        } else {
-                            app.menu_selected - 1
-                        };
-                    }
-                    KeyCode::Enter if app.active_menu.is_some() => {
-                        handle_menu_action(app);
-                        app.close_menu();
-                    }
-                    KeyCode::Char(ch) => {
-                        app.active_buffer_mut().insert_char(ch);
-                    }
-                    KeyCode::Enter => {
-                        app.active_buffer_mut().newline_with_indent();
-                    }
-                    KeyCode::Backspace => {
-                        app.active_buffer_mut().backspace();
-                    }
-                    KeyCode::Delete => {
-                        app.active_buffer_mut().delete();
-                    }
-                    KeyCode::Left => {
-                        let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                        app.active_buffer_mut().move_cursor(-1, extend);
-                    }
-                    KeyCode::Right => {
-                        let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                        app.active_buffer_mut().move_cursor(1, extend);
-                    }
-                    KeyCode::Up => {
-                        let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                        let vis = app.editor_visible_lines.get().max(1);
-                        app.active_buffer_mut().move_lines_up(1, extend);
-                        app.active_buffer_mut().ensure_cursor_visible(vis);
-                    }
-                    KeyCode::Down => {
-                        let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                        let vis = app.editor_visible_lines.get().max(1);
-                        app.active_buffer_mut().move_lines_down(1, extend);
-                        app.active_buffer_mut().ensure_cursor_visible(vis);
-                    }
-                    KeyCode::Home => {
-                        let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                        app.active_buffer_mut().move_home(extend);
-                    }
-                    KeyCode::End => {
-                        let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                        app.active_buffer_mut().move_end(extend);
-                    }
-                    KeyCode::PageUp => {
-                        let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                        let visible = app.editor_visible_lines.get().max(1);
-                        app.active_buffer_mut().page_up(visible, extend);
-                        app.active_buffer_mut().ensure_cursor_visible(visible);
-                    }
-                    KeyCode::PageDown => {
-                        let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                        let visible = app.editor_visible_lines.get().max(1);
-                        app.active_buffer_mut().page_down(visible, extend);
-                        app.active_buffer_mut().ensure_cursor_visible(visible);
-                    }
-                    KeyCode::Tab => {
-                        app.active_buffer_mut().indent();
-                    }
-                    KeyCode::Esc => {
-                        app.active_buffer_mut().selection = None;
-                    }
-                    _ => {}
-                }
+                Event::Mouse(mouse) => handle_mouse(mouse, app),
+                Event::Resize(_, _) => {}
+                _ => {}
             }
-            Event::Mouse(mouse) => handle_mouse(mouse, app),
-            Event::Resize(_, _) => {}
-            _ => {}
         }
 
         if app.should_quit {
             return Ok(());
         }
+    }
+}
+
+/// Signed scroll contribution of an event in lines (down positive), or None if
+/// it isn't a wheel event. Used to coalesce a burst of wheel events into one
+/// net delta before a single redraw.
+fn wheel_lines(event: &Event) -> Option<isize> {
+    if let Event::Mouse(m) = event {
+        match m.kind {
+            MouseEventKind::ScrollUp => Some(-3),
+            MouseEventKind::ScrollDown => Some(3),
+            _ => None,
+        }
+    } else {
+        None
     }
 }
 
@@ -548,16 +595,9 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 }
             }
         }
-        MouseEventKind::ScrollUp => {
-            let buf = app.active_buffer_mut();
-            buf.scroll(-3);
-        }
-        MouseEventKind::ScrollDown => {
-            let visible = app.editor_visible_lines.get().max(5);
-            let buf = app.active_buffer_mut();
-            buf.scroll(3);
-            buf.clamp_scroll(visible);
-        }
+        // Mouse-wheel scrolling is coalesced and applied directly in run_app
+        // (one net delta per burst → one redraw), so wheel events never reach
+        // handle_mouse. These arms are intentionally absent there.
         MouseEventKind::Drag(MouseButton::Left) => {
             // Basic drag to extend selection
             let x = mouse.column as usize;
@@ -680,7 +720,7 @@ fn handle_menu_action(app: &mut App) {
     }
 }
 
-fn ui(f: &mut Frame, app: &App) {
+fn ui(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let chunks = crate::ui::layout::main_layout(area);
 
@@ -699,6 +739,15 @@ fn ui(f: &mut Frame, app: &App) {
         vis_h.max(1)
     };
     app.editor_visible_lines.set(vis_h);
+
+    // Refresh the cached syntax spans for the visible window. This is a cheap
+    // key comparison on a steady frame and a full (single-HighlightLines) recompute
+    // only on edit / scroll / language change. Done here so editor::render can read
+    // the cache immutably. Skipped for the markdown preview path (no syntax spans).
+    if !(app.markdown_preview && app.active_buffer().language == crate::buffer::Language::Markdown)
+    {
+        app.refresh_highlight_cache(app.active_buffer().scroll_offset.0, vis_h);
+    }
 
     crate::ui::header::render(f, chunks[0], app);
 

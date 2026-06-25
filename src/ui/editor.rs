@@ -35,9 +35,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let start_line = buf.scroll_offset.0;
     let visible_lines = area.height.saturating_sub(0) as usize;
 
-    // Use rope's line model (via buf.line) to ensure line indexing matches
-    // cursor_position() and line_count(). This fixes off-by-one in gutter/status
-    // for cases involving line breaks (e.g. first Enter on empty buffer).
+    // Use the cached spans computed once per edit/scroll/language change by
+    // app.refresh_highlight_cache (AGENTS §6: "Do not re-highlight the entire
+    // buffer on every frame"). The cache covers [cache_start_line, cache_start_line
+    // + count); we index into it for the rows we actually render. If the cache is
+    // somehow missing or stale (e.g. the preview path skipped refresh), fall back
+    // to a single-window highlight so we never fail to render.
+    let cache = app.cached_visible_spans();
     let mut highlighted: Vec<Vec<Span<'static>>> = Vec::new();
     let n_lines = buf.line_count();
     for ii in 0..visible_lines.max(1) {
@@ -45,12 +49,25 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         if lidx >= n_lines {
             break;
         }
-        let ltext = buf.line(lidx);
-        let mut h = app.highlighter.highlight(&ltext, buf.language);
-        let hl = if h.is_empty() {
-            vec![Span::raw(ltext)]
+        let hl = if let Some(c) = cache {
+            if c.start_line <= lidx {
+                let rel = lidx - c.start_line;
+                if let Some(line_spans) = c.spans.get(rel) {
+                    line_spans.clone()
+                } else {
+                    vec![Span::raw(buf.line(lidx))]
+                }
+            } else {
+                vec![Span::raw(buf.line(lidx))]
+            }
         } else {
-            h.remove(0)
+            // Fallback (cache not populated): highlight just this window.
+            let h = app.highlighter.highlight(&buf.line(lidx), buf.language);
+            if h.is_empty() {
+                vec![Span::raw(buf.line(lidx))]
+            } else {
+                h.into_iter().next().unwrap_or_default()
+            }
         };
         highlighted.push(hl);
     }

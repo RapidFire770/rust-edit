@@ -12,3 +12,4 @@ Cargo.lock
 # Project
 config/
 *.log
+docs/plans

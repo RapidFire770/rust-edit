@@ -16,6 +16,32 @@ pub struct SyntaxHighlighter {
     pub theme_set: ThemeSet,
 }
 
+/// Convert one line's syntect `(Style, &str)` ranges into ratatui `Span`s.
+/// Foreground color + font modifiers only; the editor background is supplied by
+/// the Paragraph/Theme, so we deliberately drop syntect's per-range background.
+fn ranges_to_spans(ranges: Vec<(syntect::highlighting::Style, &str)>) -> Vec<Span<'static>> {
+    ranges
+        .into_iter()
+        .map(|(style, text)| {
+            let mut rat_style = Style::default().fg(Color::Rgb(
+                style.foreground.r,
+                style.foreground.g,
+                style.foreground.b,
+            ));
+            if style.font_style.contains(FontStyle::BOLD) {
+                rat_style = rat_style.add_modifier(Modifier::BOLD);
+            }
+            if style.font_style.contains(FontStyle::ITALIC) {
+                rat_style = rat_style.add_modifier(Modifier::ITALIC);
+            }
+            if style.font_style.contains(FontStyle::UNDERLINE) {
+                rat_style = rat_style.add_modifier(Modifier::UNDERLINED);
+            }
+            Span::styled(text.to_string(), rat_style)
+        })
+        .collect()
+}
+
 impl Default for SyntaxHighlighter {
     fn default() -> Self {
         Self::new()
@@ -49,62 +75,75 @@ impl SyntaxHighlighter {
     }
 
     /// Highlight a full document (or slice) into lines of styled Spans.
-    /// This is the main function used by the editor for the visible region.
+    /// Uses a single `HighlightLines` for the whole text so multi-line syntax
+    /// state (block comments, raw strings) carries across lines correctly.
     pub fn highlight(&self, text: &str, lang: Language) -> Vec<Vec<Span<'static>>> {
+        let (syntax, theme) = self.syntax_and_theme(lang);
+        let mut highlighter = HighlightLines::new(syntax, theme);
+        self.highlight_lines(text.lines(), &mut highlighter)
+    }
+
+    /// Resolve the syntect SyntaxReference + Theme for a language (shared by both
+    /// highlight paths). Falls back to plain text if the language is unknown.
+    fn syntax_and_theme(
+        &self,
+        lang: Language,
+    ) -> (
+        &syntect::parsing::SyntaxReference,
+        &syntect::highlighting::Theme,
+    ) {
         let syntax_name = self.syntax_name(lang);
         let syntax = self
             .syntax_set
             .find_syntax_by_name(syntax_name)
-            .or_else(|| Some(self.syntax_set.find_syntax_plain_text()))
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
-
-        // Use a nice dark default theme from the bundled set
         let theme = &self.theme_set.themes["base16-ocean.dark"];
+        (syntax, theme)
+    }
 
-        let mut highlighter = HighlightLines::new(syntax, theme);
+    /// Drive a single `HighlightLines` across a sequence of lines and convert the
+    /// syntect output to ratatui `Span`s. Reusing one highlighter (built once per
+    /// visible window) avoids the per-line `HighlightLines::new` cost that caused
+    /// lag on large files, and keeps multi-line constructs highlighted correctly.
+    fn highlight_lines(
+        &self,
+        lines: impl Iterator<Item = impl AsRef<str>>,
+        highlighter: &mut HighlightLines,
+    ) -> Vec<Vec<Span<'static>>> {
         let mut out = Vec::new();
-
-        for line in text.lines() {
-            // highlight_line expects trailing \n or not? docs say include for accuracy; we add \n
+        for line in lines {
+            let line = line.as_ref();
+            // highlight_line expects trailing \n for accuracy; we append one.
             let highlighted_line = format!("{}\n", line);
             let ranges = highlighter
                 .highlight_line(&highlighted_line, &self.syntax_set)
                 .unwrap_or_else(|_| vec![(syntect::highlighting::Style::default(), line)]);
 
-            let spans: Vec<Span<'static>> = ranges
-                .into_iter()
-                .map(|(style, text)| {
-                    let mut rat_style = Style::default();
-                    // foreground only (editor background is provided by the Paragraph/Theme)
-                    rat_style = rat_style.fg(Color::Rgb(
-                        style.foreground.r,
-                        style.foreground.g,
-                        style.foreground.b,
-                    ));
-                    // Do NOT apply syntect background here to avoid unwanted per-letter bg.
-                    // Only syntax colors + modifiers.
-                    // modifiers
-                    if style.font_style.contains(FontStyle::BOLD) {
-                        rat_style = rat_style.add_modifier(Modifier::BOLD);
-                    }
-                    if style.font_style.contains(FontStyle::ITALIC) {
-                        rat_style = rat_style.add_modifier(Modifier::ITALIC);
-                    }
-                    if style.font_style.contains(FontStyle::UNDERLINE) {
-                        rat_style = rat_style.add_modifier(Modifier::UNDERLINED);
-                    }
-                    Span::styled(text.to_string(), rat_style)
-                })
-                .collect();
-
-            out.push(spans);
+            out.push(ranges_to_spans(ranges));
         }
 
-        // If file was empty, ensure at least one empty line entry
+        // If input was empty, ensure at least one empty line entry.
         if out.is_empty() {
             out.push(vec![Span::raw("")]);
         }
         out
+    }
+
+    /// Highlight an ordered window of lines using ONE `HighlightLines`.
+    ///
+    /// This is the entry point the editor should use for the visible region: it
+    /// builds the parser state machine once (not once per line) and feeds lines in
+    /// order, so both performance and multi-line correctness are correct. Lines are
+    /// passed as an iterator so callers can slice a rope without allocating a joined
+    /// `String`.
+    pub fn highlight_window<'a>(
+        &self,
+        lines: impl Iterator<Item = &'a str>,
+        lang: Language,
+    ) -> Vec<Vec<Span<'static>>> {
+        let (syntax, theme) = self.syntax_and_theme(lang);
+        let mut highlighter = HighlightLines::new(syntax, theme);
+        self.highlight_lines(lines, &mut highlighter)
     }
 
     /// Convenience: highlight only a visible window of lines (0-based, count).
@@ -118,12 +157,10 @@ impl SyntaxHighlighter {
     ) -> Vec<Vec<Span<'static>>> {
         let lines: Vec<&str> = full_text.lines().collect();
         let end = (start_line + count).min(lines.len());
-        let slice = if start_line < lines.len() {
-            lines[start_line..end].join("\n")
-        } else {
-            String::new()
-        };
-        self.highlight(&slice, lang)
+        if start_line >= lines.len() {
+            return vec![vec![Span::raw("")]];
+        }
+        self.highlight_window(lines[start_line..end].iter().copied(), lang)
     }
 }
 
@@ -147,5 +184,45 @@ mod tests {
         let sh = SyntaxHighlighter::new();
         let highlighted = sh.highlight("just text", Language::Plain);
         assert_eq!(highlighted.len(), 1);
+    }
+
+    #[test]
+    fn highlight_window_uses_shared_multiline_state() {
+        // A Rust block comment spans three lines. When the window is highlighted
+        // with a single HighlightLines, the comment style must carry across lines
+        // (the continuation lines should share the same foreground as the opener,
+        // not revert to default). This guards both correctness and the single-
+        // highlighter-per-window performance path.
+        let sh = SyntaxHighlighter::new();
+        let code = [
+            "/* this is a",
+            "multiline block comment",
+            "still inside*/ fn x(){}",
+        ];
+        let highlighted = sh.highlight_window(code.into_iter(), Language::Rust);
+        assert_eq!(highlighted.len(), 3);
+
+        // Opener and the middle line must use the same (comment) foreground.
+        let first_fg = highlighted[0]
+            .first()
+            .map(|s| s.style.fg)
+            .expect("first line has a span");
+        let mid_fg = highlighted[1]
+            .first()
+            .map(|s| s.style.fg)
+            .expect("middle line has a span");
+        assert_eq!(
+            first_fg, mid_fg,
+            "block comment continuation must keep the comment color across lines"
+        );
+
+        // Compare against the buggy old approach: highlighting each line in
+        // isolation would lose the comment state on the middle line.
+        let isolated_mid = sh.highlight(code[1], Language::Rust);
+        let isolated_mid_fg = isolated_mid[0].first().map(|s| s.style.fg).unwrap_or(None);
+        assert_ne!(
+            mid_fg, isolated_mid_fg,
+            "isolated highlighting would drop block-comment state; window must not"
+        );
     }
 }

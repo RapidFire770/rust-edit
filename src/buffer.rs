@@ -62,6 +62,14 @@ pub struct Buffer {
     pub selection: Option<Range<usize>>,
     /// (row, col_offset) for viewport scrolling (rows are 0-based).
     pub scroll_offset: (usize, usize),
+    /// Last known height (in rows) of the editor viewport. Refreshed each frame
+    /// by the run loop so adjust_scroll can clamp against the *real* height
+    /// instead of a guessed constant. Fixes half-screen scroll jumping on long files.
+    pub visible_lines: usize,
+    /// Bumped on every text mutation (insert/backspace/delete/newline/indent/dedent/undo/redo).
+    /// Used as an invalidation key by the highlight cache so spans are only recomputed
+    /// on edit or scroll into new lines (see AGENTS §6 "Syntax Highlighting").
+    pub generation: u64,
 
     /// Undo stack (full state snapshots for robust undo of text + caret + view).
     #[allow(clippy::type_complexity)]
@@ -90,6 +98,8 @@ impl Buffer {
             cursor: 0,
             selection: None,
             scroll_offset: (0, 0),
+            visible_lines: 20,
+            generation: 0,
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
             max_undo: 100,
@@ -110,6 +120,8 @@ impl Buffer {
             cursor: 0,
             selection: None,
             scroll_offset: (0, 0),
+            visible_lines: 20,
+            generation: 0,
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
             max_undo: 100,
@@ -258,6 +270,7 @@ impl Buffer {
             self.selection = prev_sel;
             self.scroll_offset = prev_scroll;
             self.is_modified = !self.undo_stack.is_empty(); // rough
+            self.bump_generation();
         }
     }
 
@@ -274,6 +287,7 @@ impl Buffer {
             self.cursor = next_cur.min(self.rope.len_bytes());
             self.selection = next_sel;
             self.scroll_offset = next_scroll;
+            self.bump_generation();
         }
     }
 
@@ -294,6 +308,7 @@ impl Buffer {
             self.cursor = pos + text.len();
         }
         self.is_modified = true;
+        self.bump_generation();
         self.adjust_scroll();
     }
 
@@ -320,6 +335,7 @@ impl Buffer {
             self.cursor = remove_start;
         }
         self.is_modified = true;
+        self.bump_generation();
     }
 
     /// Delete the char after cursor (delete key).
@@ -341,6 +357,7 @@ impl Buffer {
             }
         }
         self.is_modified = true;
+        self.bump_generation();
     }
 
     /// Move cursor by char delta (clamped).
@@ -507,8 +524,6 @@ impl Buffer {
         let target_row = new_scroll + ((cur_row as isize - old_scroll).max(0) as usize);
         let target_row = target_row.min(self.line_count().saturating_sub(1));
         self.move_to_line(target_row, col, extend_selection);
-        // Re-force the page scroll amount in case move_to_line's internal adjust overrode it.
-        self.scroll_offset.0 = new_scroll;
     }
 
     /// Scroll view and cursor down by roughly a page (visible_lines - 1).
@@ -524,20 +539,33 @@ impl Buffer {
         let target_row = new_scroll + ((cur_row as isize - old_scroll).max(0) as usize);
         let target_row = target_row.min(self.line_count().saturating_sub(1));
         self.move_to_line(target_row, col, extend_selection);
-        // Re-force the page scroll amount in case move_to_line's internal adjust overrode it.
-        self.scroll_offset.0 = new_scroll;
     }
 
+    /// Mark the buffer's text as changed so the highlight cache invalidates.
+    /// Called from every mutation. Pure view/navigation ops must NOT call this.
+    fn bump_generation(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Auto-scroll to keep the cursor visible, using the *real* viewport height.
+    ///
+    /// Scrolls ONLY when the cursor crosses the true top or bottom edge of the
+    /// viewport; mid-window movement leaves the view untouched. This replaces an
+    /// earlier version that used a hardcoded `20`/`10` guess, which caused the
+    /// view to start scrolling ~halfway down the screen and to jump on every
+    /// keystroke in long files. The logic mirrors `ensure_cursor_visible`.
     pub fn adjust_scroll(&mut self) {
+        let v = self.visible_lines.max(1);
         let (row, _) = self.cursor_position();
-        let (scroll_row, _) = self.scroll_offset;
-        // simple auto-scroll: keep cursor row roughly in view (detailed later in editor)
-        if row < scroll_row {
+        let s = self.scroll_offset.0;
+        if row < s {
+            // Cursor moved above the top edge → bring it to the top line.
             self.scroll_offset.0 = row;
-        } else if row > scroll_row + 20 {
-            // rough visible size
-            self.scroll_offset.0 = row.saturating_sub(10);
+        } else if row >= s + v {
+            // Cursor moved below the bottom edge → recenter so it sits near the bottom.
+            self.scroll_offset.0 = row.saturating_sub(v.saturating_sub(2));
         }
+        // else: cursor inside viewport → do nothing (no half-screen jumping).
     }
 
     /// Ensure the cursor is at least minimally visible within the given viewport height.
@@ -589,6 +617,7 @@ impl Buffer {
             self.cursor = pos + insert_text.len();
         }
         self.is_modified = true;
+        self.bump_generation();
     }
 
     /// Indent current line or selection by one level (4 spaces).
@@ -613,6 +642,7 @@ impl Buffer {
         // Adjust cursor/selection roughly
         self.cursor += 4;
         self.is_modified = true;
+        self.bump_generation();
     }
 
     /// Dedent current line or selection (remove up to 4 leading spaces).
@@ -638,6 +668,7 @@ impl Buffer {
             }
         }
         self.is_modified = true;
+        self.bump_generation();
     }
 
     /// Return full content as String (for save).
@@ -788,5 +819,117 @@ mod tests {
         b.undo();
         assert_eq!(b.text(), snap);
         assert!(b.can_redo());
+    }
+
+    // --- adjust_scroll edge clamping (Fix 1 & 2) ---
+    // Cursor movement *inside* the viewport must NOT move the view; scrolling
+    // only happens at the true top/bottom edges, using the real viewport height.
+    fn make_long_buffer(n: usize) -> Buffer {
+        let text = (0..n)
+            .map(|i| format!("line{}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Buffer::from_str(&text, None)
+    }
+
+    #[test]
+    fn adjust_scroll_only_at_edges() {
+        let mut b = make_long_buffer(200);
+        b.visible_lines = 20; // viewport rows 0..19
+        b.scroll_offset = (40, 0); // view spans rows 40..59
+
+        // Cursor in the middle of the viewport → no scroll.
+        b.cursor = b.rope.line_to_byte(50); // row 50
+        b.adjust_scroll();
+        assert_eq!(
+            b.scroll_offset.0, 40,
+            "mid-window cursor must not scroll the view"
+        );
+
+        // Cursor on the last visible row (row 59 = 40+20-1) → still in view, no scroll.
+        b.cursor = b.rope.line_to_byte(59);
+        b.adjust_scroll();
+        assert_eq!(
+            b.scroll_offset.0, 40,
+            "cursor on bottom edge row must not scroll"
+        );
+
+        // Cursor one row past the bottom edge → recenter so cursor sits near bottom.
+        b.cursor = b.rope.line_to_byte(60);
+        b.adjust_scroll();
+        assert_eq!(
+            b.scroll_offset.0,
+            60usize.saturating_sub(18),
+            "cursor past bottom should recenter to row - (v-2)"
+        );
+
+        // Cursor above the top edge → bring to top.
+        b.cursor = b.rope.line_to_byte(5);
+        b.adjust_scroll();
+        assert_eq!(b.scroll_offset.0, 5, "cursor above top should snap to top");
+    }
+
+    #[test]
+    fn insert_on_blank_line_when_scrolled_keeps_view_and_row() {
+        // Reproduces Bug 2: typing on a blank line in a scrolled long file must
+        // land on that line, without the viewport (and thus perceived cursor)
+        // jumping. The buffer content was always correct; the bug was the view.
+        let mut b = Buffer::from_str("a\n\nb\n\nc\n\nd\n\ne", None);
+        b.visible_lines = 3; // tiny viewport to force scrolling quickly
+        b.scroll_offset = (6, 0);
+        // Place cursor like a mouse click on the blank line at row 7 (which is row 6+1 in view).
+        b.set_cursor_from_visual(7, 0);
+        assert_eq!(b.cursor_position(), (7, 0));
+        let scroll_before = b.scroll_offset.0;
+        b.insert_char('X');
+        assert_eq!(
+            b.cursor_position().0,
+            7,
+            "row must stay 7 after typing on blank line"
+        );
+        assert_eq!(
+            b.scroll_offset.0, scroll_before,
+            "view must not jump when typing inside the viewport"
+        );
+        assert!(b.text().contains("X"), "character was actually inserted");
+    }
+
+    // --- generation invalidation key (Fix 3c) ---
+    #[test]
+    fn generation_bumps_on_edit_not_on_nav() {
+        let mut b = Buffer::from_str("hello", None);
+        let g0 = b.generation;
+
+        // Navigation must NOT bump generation (no spurious cache invalidation).
+        b.move_cursor(1, false);
+        b.move_home(false);
+        b.move_end(false);
+        assert_eq!(b.generation, g0, "navigation must not bump generation");
+
+        // Every text mutation bumps exactly once.
+        b.insert_char('!');
+        assert_eq!(b.generation, g0 + 1, "insert bumps generation");
+        b.backspace();
+        assert_eq!(b.generation, g0 + 2, "backspace bumps generation");
+        b.newline_with_indent();
+        assert_eq!(b.generation, g0 + 3, "newline bumps generation");
+        b.indent();
+        assert_eq!(b.generation, g0 + 4, "indent bumps generation");
+        b.dedent();
+        assert_eq!(b.generation, g0 + 5, "dedent bumps generation");
+
+        // delete bumps only when it actually removes something.
+        b.cursor = 0;
+        let before = b.generation;
+        b.delete();
+        assert_eq!(b.generation, before + 1, "delete bumps generation");
+
+        // undo/redo are mutations of content → bump.
+        let before = b.generation;
+        b.undo();
+        assert_eq!(b.generation, before + 1, "undo bumps generation");
+        let before = b.generation;
+        b.redo();
+        assert_eq!(b.generation, before + 1, "redo bumps generation");
     }
 }

@@ -61,14 +61,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     }
     header_spans.push(Span::styled(" [+] ", theme.header_style()));
 
-    // Pad the rest of the line with header background so the color spans the entire top row
-    let used_width: u16 = header_spans.iter().map(|s| s.content.len() as u16).sum();
-    if used_width < area.width {
-        let padding = " ".repeat((area.width - used_width) as usize);
-        header_spans.push(Span::styled(padding, theme.header_style()));
-    }
-
-    let header = Paragraph::new(Line::from(header_spans));
+    // The header background must span the entire top row. We give the Paragraph the
+    // header style as its base: Ratatui fills trailing cells (and any cells not
+    // covered by a span) with the base style, so the color reaches the right edge
+    // regardless of span content. (The previous approach computed padding from
+    // `s.content.len()` in BYTES, which under-counted columns for the non-ASCII
+    // modified marker `•` and non-ASCII filenames, leaving a gap at the right.)
+    let header = Paragraph::new(Line::from(header_spans)).style(theme.header_style());
     f.render_widget(header, area);
 }
 
