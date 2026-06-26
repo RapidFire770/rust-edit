@@ -42,6 +42,9 @@ pub struct App {
     pub word_count_text: String,
     /// Active tab in the help popup.
     pub help_tab: crate::ui::popups::help::HelpTab,
+    /// Scroll offset (row, col) for the help popup content. Used to scroll the
+    /// shortcuts page when content exceeds the popup's inner height.
+    pub help_content_scroll: (u16, u16),
     /// Currently open menu for dropdown ("File", "Tools", "Settings")
     pub active_menu: Option<String>,
     pub show_settings: bool,
@@ -106,6 +109,7 @@ impl App {
             show_word_count: false,
             word_count_text: String::new(),
             help_tab: crate::ui::popups::help::HelpTab::default(),
+            help_content_scroll: (0, 0),
             active_menu: None,
             show_settings: false,
             settings_selected: 0,

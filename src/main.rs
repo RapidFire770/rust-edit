@@ -117,9 +117,15 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
         // all wheel events so only key/click/other events remain for the dispatch.
         let wheel_delta = events.iter().filter_map(wheel_lines).sum::<isize>();
         if wheel_delta != 0 {
-            let visible = app.editor_visible_lines.get().max(5);
-            app.active_buffer_mut().scroll(wheel_delta);
-            app.active_buffer_mut().clamp_scroll(visible);
+            if app.show_help {
+                // Route wheel to help popup content scroll instead of buffer.
+                let new_row = (app.help_content_scroll.0 as isize + wheel_delta).max(0) as u16;
+                app.help_content_scroll.0 = new_row;
+            } else {
+                let visible = app.editor_visible_lines.get().max(5);
+                app.active_buffer_mut().scroll(wheel_delta);
+                app.active_buffer_mut().clamp_scroll(visible);
+            }
         }
         events.retain(|e| wheel_lines(e).is_none());
 
@@ -668,19 +674,48 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 }
             }
 
-            // Close other non-interactive popups on outside click
-            if !skip_editor && (app.show_help || app.show_word_count) {
-                // Close on any click below the header.
-                let header_rows = crate::ui::layout::HEADER_ROWS as usize;
-                if y >= header_rows {
-                    if app.show_help {
-                        app.show_help = false;
+            // === Help popup: clickable tabs + inside-click ignore + outside-click close ===
+            if app.show_help && !skip_editor {
+                let (h_tw, h_th) = crossterm::terminal::size().unwrap_or((80, 24));
+                let term_area = Rect::new(0, 0, h_tw, h_th);
+                let popup = popups::help::help_rect(term_area);
+                if x >= popup.x as usize
+                    && x < (popup.x + popup.width) as usize
+                    && y >= popup.y as usize
+                    && y < (popup.y + popup.height) as usize
+                {
+                    // Tab strip sits at inner row y = popup.y + 1.
+                    let tab_row = (popup.y + 1) as usize;
+                    if y == tab_row {
+                        let tabs = popups::help::help_tab_rects();
+                        for (_label, tab, x_start, x_end) in tabs {
+                            let sx = (popup.x + *x_start) as usize;
+                            let ex = (popup.x + *x_end) as usize;
+                            if x >= sx && x < ex {
+                                app.help_tab = *tab;
+                                skip_editor = true;
+                                break;
+                            }
+                        }
+                        if !skip_editor {
+                            // clicked inside popup but not on a tab -> ignore
+                            skip_editor = true;
+                        }
+                    } else {
+                        // clicked inside popup body -> ignore (don't close)
+                        skip_editor = true;
                     }
-                    if app.show_word_count {
-                        app.show_word_count = false;
-                    }
-                    skip_editor = false; // allow the click to still place cursor
+                } else {
+                    // clicked outside help popup -> close
+                    app.show_help = false;
+                    skip_editor = true;
                 }
+            }
+
+            // Close other non-interactive popups on outside click
+            if !skip_editor && app.show_word_count {
+                app.show_word_count = false;
+                skip_editor = false; // allow the click to still place cursor
             }
 
             if !skip_editor {
@@ -882,7 +917,13 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 
     if app.show_help {
-        popups::help::render(f, area, app.current_theme(), app.help_tab);
+        popups::help::render(
+            f,
+            area,
+            app.current_theme(),
+            app.help_tab,
+            app.help_content_scroll,
+        );
     }
     if app.show_word_count {
         popups::word_count::render(f, area, app.current_theme(), &app.word_count_text);

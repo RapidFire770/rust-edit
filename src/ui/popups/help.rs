@@ -87,7 +87,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
         (
             "View & Tools",
             vec![
-                ("? / F1", "Toggle this help"),
+                ("F1", "Toggle this help"),
                 ("Shift+W", "Word count"),
                 ("Ctrl+Shift+F", "Format document (rustfmt/black/prettier)"),
                 ("1 / 2 / 3", "Help tab: Shortcuts / Languages / About"),
@@ -123,12 +123,28 @@ fn languages_rows() -> Vec<Row<'static>> {
     ]
 }
 
-pub fn render(f: &mut Frame, area: Rect, theme: &Theme, tab: HelpTab) {
+/// Compute the centered popup rect for the help window, mirroring `render`.
+/// Exposed so the mouse handler can hit-test against the same geometry.
+pub fn help_rect(area: Rect) -> Rect {
     let w = (area.width * 9 / 10).clamp(60, 96);
     let h = (area.height * 9 / 10).min(34);
     let x = (area.width.saturating_sub(w)) / 2;
     let y = (area.height.saturating_sub(h)) / 2;
-    let popup = Rect::new(x, y, w.min(area.width), h.min(area.height));
+    Rect::new(x, y, w.min(area.width), h.min(area.height))
+}
+
+/// Tab button hit-rects in popup-local coordinates (0 = left border).
+/// Each entry: (label, tab, x_start, x_end). The tab strip sits at inner row y=1.
+pub fn help_tab_rects() -> &'static [(&'static str, HelpTab, u16, u16)] {
+    &[
+        ("1 Shortcuts", HelpTab::Shortcuts, 1, 12),
+        ("2 Languages", HelpTab::Languages, 15, 26),
+        ("3 About", HelpTab::About, 29, 36),
+    ]
+}
+
+pub fn render(f: &mut Frame, area: Rect, theme: &Theme, tab: HelpTab, scroll: (u16, u16)) {
+    let popup = help_rect(area);
 
     let accent = Style::default()
         .fg(Color::from(&theme.accent))
@@ -169,9 +185,9 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, tab: HelpTab) {
                 lines.push(Line::from(Span::styled(category, accent)));
                 for (k, d) in rows {
                     let mut row = vec![Span::raw("  "), Span::styled(k, key_style)];
-                    // pad key column to align descriptions
-                    let pad = 22usize.saturating_sub(k.chars().count());
-                    row.push(Span::raw(" ".repeat(pad)));
+                    // pad key column to align descriptions; extra 2-space gap for readability
+                    let pad = 28usize.saturating_sub(k.chars().count());
+                    row.push(Span::raw(" ".repeat(pad + 2)));
                     row.push(Span::styled(d, dim));
                     lines.push(Line::from(row));
                 }
@@ -217,13 +233,14 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, tab: HelpTab) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Press ? or Esc to close. Tab or 1/2/3 to switch sections.",
+        "Press F1 or Esc to close. Tab or 1/2/3 to switch sections.",
         dim,
     )));
 
     let para = Paragraph::new(lines)
         .block(block)
-        .style(Style::default().fg(Color::from(&theme.editor_fg)));
+        .style(Style::default().fg(Color::from(&theme.editor_fg)))
+        .scroll(scroll);
 
     f.render_widget(Clear, popup);
     f.render_widget(para, popup);
