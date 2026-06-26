@@ -5,14 +5,18 @@
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
+/// Total rows occupied by the header (menu bar only — no separator rule).
+/// Mouse hit-testing and hardware-cursor Y math add this as an offset.
+pub const HEADER_ROWS: u16 = 1;
+
 /// Returns the main three areas: header (1), editor (flex), status (1).
 pub fn main_layout(area: Rect) -> Vec<Rect> {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // header
-            Constraint::Min(1),    // editor
-            Constraint::Length(1), // status
+            Constraint::Length(HEADER_ROWS), // header
+            Constraint::Min(1),              // editor
+            Constraint::Length(1),           // status
         ])
         .split(area)
         .to_vec()
@@ -39,13 +43,4 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         popup_width.min(area.width),
         popup_height.min(area.height),
     )
-}
-
-/// Split editor area for MD source | preview.
-pub fn md_split_preview(area: Rect) -> (Rect, Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
-    (chunks[0], chunks[1])
 }

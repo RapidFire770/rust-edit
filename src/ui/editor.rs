@@ -11,26 +11,11 @@ use ratatui::widgets::{
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::buffer::Language;
 use crate::theme::Theme;
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let buf = app.active_buffer();
     let theme = app.current_theme();
-
-    if app.markdown_preview && buf.language == Language::Markdown {
-        // Rendered preview using pulldown-cmark + theme
-        let md_lines = crate::ui::markdown::render_preview(&buf.text(), theme);
-        let mut lines: Vec<Line> = md_lines.into_iter().take(area.height as usize).collect();
-        while lines.len() < area.height as usize {
-            lines.push(Line::from(""));
-        }
-        let editor = Paragraph::new(lines)
-            .style(theme.editor_bg_style())
-            .block(Block::default().borders(Borders::NONE));
-        f.render_widget(editor, area);
-        return;
-    }
 
     let start_line = buf.scroll_offset.0;
     let visible_lines = area.height.saturating_sub(0) as usize;

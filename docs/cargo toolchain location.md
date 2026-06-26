@@ -1,0 +1,1 @@
+CARGO=/home/josh/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo

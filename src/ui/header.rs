@@ -15,58 +15,68 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let theme = app.current_theme();
     let active_menu = app.active_menu.as_deref();
 
-    // Build menu part with possible highlight for open dropdown
+    // Menu buttons with a consistent single-space pad on each side and a thin
+    // `│` separator between them, so each label reads as its own clickable button.
     let menu_base_style = theme.header_style();
     let menu_highlight = Style::default()
         .bg(Color::from(&theme.accent))
         .fg(Color::from(&theme.header_fg))
         .add_modifier(Modifier::BOLD);
+    let sep_style = Style::default()
+        .bg(Color::from(&theme.header_bg))
+        .fg(Color::from(&theme.header_fg));
 
-    let mut menu_spans = vec![];
-    let menu_parts = [
-        ("File", " File  "),
-        ("Tools", " Tools  "),
-        ("Settings", " Settings  "),
+    let mut header_spans: Vec<Span> = Vec::new();
+    let menus = [
+        ("File", " File "),
+        ("Tools", " Tools "),
+        ("Settings", " Settings "),
     ];
-    for (name, label) in menu_parts {
-        let style = if active_menu == Some(name) {
+    for (i, (name, label)) in menus.iter().enumerate() {
+        if i > 0 {
+            header_spans.push(Span::styled("│", sep_style));
+        }
+        let style = if active_menu == Some(*name) {
             menu_highlight
         } else {
             menu_base_style
         };
-        menu_spans.push(Span::styled(label, style));
+        header_spans.push(Span::styled(*label, style));
     }
-    let mut header_spans = menu_spans;
+    // A slightly wider gap between the menu block and the file tabs.
+    header_spans.push(Span::styled("  ", menu_base_style));
 
+    // File tabs — all bracketed for consistency with [untitled] / [+]. The active
+    // tab uses the accent background so the current buffer is unmistakable.
+    let active_tab_style = Style::default()
+        .bg(Color::from(&theme.accent))
+        .fg(Color::from(&theme.header_fg))
+        .add_modifier(Modifier::BOLD);
+    let inactive_tab_style = menu_base_style;
     for (i, buf) in app.buffers.iter().enumerate() {
         let mut name = buf
             .path
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
-            .unwrap_or("[untitled]")
+            .unwrap_or("untitled")
             .to_string();
         if buf.is_modified {
             name.push('•');
         }
         let is_active = i == app.active;
         let style = if is_active {
-            theme.header_style()
+            active_tab_style
         } else {
-            Style::default()
-                .bg(Color::from(&theme.header_bg))
-                .fg(Color::from(&theme.header_fg))
+            inactive_tab_style
         };
-        header_spans.push(Span::styled(format!(" {} ", name), style));
+        header_spans.push(Span::styled(format!("[ {name} ]"), style));
+        header_spans.push(Span::styled(" ", menu_base_style));
     }
-    header_spans.push(Span::styled(" [+] ", theme.header_style()));
+    header_spans.push(Span::styled("[+]", menu_base_style));
 
-    // The header background must span the entire top row. We give the Paragraph the
-    // header style as its base: Ratatui fills trailing cells (and any cells not
-    // covered by a span) with the base style, so the color reaches the right edge
-    // regardless of span content. (The previous approach computed padding from
-    // `s.content.len()` in BYTES, which under-counted columns for the non-ASCII
-    // modified marker `•` and non-ASCII filenames, leaving a gap at the right.)
+    // Base style fills trailing cells to the right edge regardless of content
+    // (the old byte-length padding under-counted on non-ASCII chars).
     let header = Paragraph::new(Line::from(header_spans)).style(theme.header_style());
     f.render_widget(header, area);
 }
@@ -103,11 +113,13 @@ pub fn render_dropdown(
     ];
     let settings_items = vec!["Settings...", "Themes"];
 
+    // x offset where each dropdown should appear, matching the header layout:
+    // " File "│" Tools "│" Settings "  → File starts col 0, Tools col 7, Settings col 15.
     let (item_strs, menu_x) = match menu {
-        "File" => (file_items, 1u16),
-        "Tools" => (tools_items, 8u16),
+        "File" => (file_items, 0u16),
+        "Tools" => (tools_items, 7u16),
         "Settings" => (settings_items, 15u16),
-        _ => (vec!["..."], 1u16),
+        _ => (vec!["..."], 0u16),
     };
 
     // Compute width to fit longest item + padding + borders
@@ -134,9 +146,9 @@ pub fn render_dropdown(
 
     let dropdown_area = Rect::new(
         menu_x,
-        1, // below header
+        crate::ui::layout::HEADER_ROWS, // below header (menu row + separator rule)
         width.min(area.width),
-        height.min(area.height.saturating_sub(1)),
+        height.min(area.height.saturating_sub(crate::ui::layout::HEADER_ROWS)),
     );
 
     let block = Block::default()

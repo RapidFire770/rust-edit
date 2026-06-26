@@ -23,7 +23,6 @@ use crossterm::{
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::Rect,
-    widgets::Clear,
     Frame, Terminal,
 };
 use std::io::stdout;
@@ -31,6 +30,7 @@ use std::time::Duration;
 
 use crate::app::App;
 use crate::buffer::Buffer;
+use crate::ui::find::FindFocus;
 use crate::ui::popups;
 
 fn main() -> Result<()> {
@@ -63,12 +63,15 @@ fn main() -> Result<()> {
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     loop {
-        // Keep each buffer's notion of the viewport height fresh so that the
-        // internal adjust_scroll (run on edits/moves) clamps against the *real*
-        // height instead of a stale default. Fixes half-screen scroll jumping.
+        // Keep each buffer's notion of the viewport fresh so that the internal
+        // adjust_scroll (run on edits/moves) clamps against the *real* height and
+        // width instead of stale defaults. Fixes half-screen scroll jumping and
+        // adds horizontal auto-scroll that follows the cursor on long lines.
         let vis = app.editor_visible_lines.get().max(1);
+        let hwidth = app.editor_visible_width.get().max(1);
         for b in app.buffers.iter_mut() {
             b.visible_lines = vis;
+            b.visible_width = hwidth;
         }
 
         terminal.hide_cursor().ok();
@@ -87,8 +90,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             let hscroll = buf.scroll_offset.1;
             if cur_row >= scroll_row {
                 let view_row = cur_row - scroll_row;
-                let screen_y = 1u16 + view_row as u16; // after header
-                                                       // Hardware cursor must compensate hscroll: the drawn content starts at logical hscroll.
+                // Header now occupies HEADER_ROWS (menu + separator rule).
+                let screen_y = crate::ui::layout::HEADER_ROWS + view_row as u16;
+                // Hardware cursor must compensate hscroll: the drawn content starts at logical hscroll.
                 let content_col = cur_col.saturating_sub(hscroll);
                 let screen_x = Buffer::GUTTER_WIDTH as u16 + content_col as u16;
                 terminal.set_cursor_position((screen_x, screen_y)).ok();
@@ -151,20 +155,14 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 }
                             }
                             KeyCode::Char('f') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                                // Single Find/Replace shortcut (Ctrl+F). The bar has
+                                // separate Query/Replace fields reachable via Tab, so a
+                                // second Ctrl+H shortcut is no longer needed.
                                 let was_open = app.is_find_active();
                                 app.toggle_find();
                                 if !was_open {
                                     if let Some(fs) = &mut app.find_state {
-                                        fs.editing_replace = false;
-                                    }
-                                }
-                            }
-                            KeyCode::Char('h') => {
-                                let was_open = app.is_find_active();
-                                app.toggle_find();
-                                if !was_open {
-                                    if let Some(fs) = &mut app.find_state {
-                                        fs.editing_replace = true;
+                                        fs.focus = FindFocus::Query;
                                     }
                                 }
                             }
@@ -173,20 +171,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                     app.replace_all();
                                 }
                             }
-                            KeyCode::Char('p') => {
-                                app.toggle_markdown_preview();
-                            }
                             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::SHIFT) => {
                                 let _ = app.format_current_document();
-                            }
-                            // horizontal scroll
-                            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                app.active_buffer_mut().scroll_offset.1 =
-                                    app.active_buffer_mut().scroll_offset.1.saturating_add(4);
-                            }
-                            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                app.active_buffer_mut().scroll_offset.1 =
-                                    app.active_buffer_mut().scroll_offset.1.saturating_sub(4);
                             }
                             KeyCode::Char('z') => {
                                 if key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -204,7 +190,72 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                     }
 
                     match key.code {
+                        // Modal popups take focus precedence over everything else
+                        // (find nav, editor typing). When a confirm or file dialog is
+                        // open, ONLY its keys are accepted — this fixes the bug where
+                        // the find bar's n/N/Y intercepted the confirm dialog.
+                        KeyCode::Char('y' | 'Y') if app.show_confirm => {
+                            let is_quit = app.confirm_action.as_deref() == Some("quit");
+                            app.close_confirm(true);
+                            if is_quit {
+                                app.should_quit = true;
+                                return Ok(());
+                            }
+                            continue;
+                        }
+                        KeyCode::Char('n' | 'N') if app.show_confirm => {
+                            app.close_confirm(false);
+                            continue;
+                        }
+                        KeyCode::Enter if app.show_confirm => {
+                            app.close_confirm(true);
+                            continue;
+                        }
+                        KeyCode::Esc if app.show_confirm => {
+                            app.close_confirm(false);
+                            continue;
+                        }
+                        KeyCode::Char(ch) if app.show_file_dialog => {
+                            app.file_dialog_input_char(ch);
+                            continue;
+                        }
+                        KeyCode::Backspace if app.show_file_dialog => {
+                            app.file_dialog_backspace();
+                            continue;
+                        }
+                        KeyCode::Enter if app.show_file_dialog => {
+                            app.close_file_dialog(true);
+                            continue;
+                        }
+                        KeyCode::Esc if app.show_file_dialog => {
+                            app.close_file_dialog(false);
+                            continue;
+                        }
+                        // Help popup: when open, Esc closes and 1/2/3/Tab switch tabs.
+                        KeyCode::Esc if app.show_help => {
+                            app.show_help = false;
+                            continue;
+                        }
+                        KeyCode::Tab if app.show_help => {
+                            app.help_tab = app.help_tab.next();
+                            continue;
+                        }
+                        KeyCode::Char('1') if app.show_help => {
+                            app.help_tab = popups::help::HelpTab::Shortcuts;
+                            continue;
+                        }
+                        KeyCode::Char('2') if app.show_help => {
+                            app.help_tab = popups::help::HelpTab::Languages;
+                            continue;
+                        }
+                        KeyCode::Char('3') if app.show_help => {
+                            app.help_tab = popups::help::HelpTab::About;
+                            continue;
+                        }
                         KeyCode::Char('?') => {
+                            app.show_help = !app.show_help;
+                        }
+                        KeyCode::F(1) => {
                             app.show_help = !app.show_help;
                         }
                         KeyCode::Char('W') => {
@@ -220,6 +271,17 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
                             app.open_menu("Settings");
                         }
+                        // Horizontal scroll: Alt+H left, Alt+L right (mnemonic; Ctrl+H
+                        // and Ctrl+L were taken/conflicting). Auto-hscroll also follows
+                        // the cursor, but these give manual control over long lines.
+                        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::ALT) => {
+                            app.active_buffer_mut().scroll_offset.1 =
+                                app.active_buffer_mut().scroll_offset.1.saturating_sub(4);
+                        }
+                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => {
+                            app.active_buffer_mut().scroll_offset.1 =
+                                app.active_buffer_mut().scroll_offset.1.saturating_add(4);
+                        }
                         KeyCode::Char(d)
                             if ('1'..='9').contains(&d)
                                 && key.modifiers.contains(KeyModifiers::ALT) =>
@@ -230,49 +292,62 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             }
                         }
                         KeyCode::Tab if app.is_find_active() => {
+                            // Tab cycles focus: Query → Replace → Command → Query.
+                            // This is how the user leaves the text boxes so the
+                            // navigation/replace keys (n/N/r/Enter/c/x/w) become live
+                            // and n/N can be typed into the boxes again.
                             if let Some(fs) = &mut app.find_state {
-                                fs.editing_replace = !fs.editing_replace;
+                                fs.focus = fs.focus.next();
                             }
                         }
-                        KeyCode::F(3) if app.is_find_active() => {
-                            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                                app.find_prev();
-                            } else {
-                                app.find_next();
-                            }
+                        // While a text box has focus, every printable char (including
+                        // n/N/r/c/x/w) edits that field; Backspace deletes from it.
+                        KeyCode::Char(ch)
+                            if app.is_find_active()
+                                && app.find_state.as_ref().is_some_and(|fs| fs.editing_text()) =>
+                        {
+                            app.update_find_input(Some(ch), false);
                         }
-                        // n/N always navigate matches when find bar open (from either box).
-                        // This prioritizes nav discoverability; note that literal 'n'/'N' cannot be typed
-                        // into the query/repl fields while the bar is active (classic tradeoff; use F3 or seed via selection).
-                        KeyCode::Char('n') if app.is_find_active() => {
+                        KeyCode::Backspace
+                            if app.is_find_active()
+                                && app.find_state.as_ref().is_some_and(|fs| fs.editing_text()) =>
+                        {
+                            app.update_find_input(None, true);
+                        }
+                        // Command mode: navigation, replace, and option toggles.
+                        // Other keys are ignored (editor stays blocked while bar open).
+                        KeyCode::Char('n')
+                            if app
+                                .find_state
+                                .as_ref()
+                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
+                        {
                             app.find_next();
                         }
-                        KeyCode::Char('N') if app.is_find_active() => {
+                        KeyCode::Char('N')
+                            if app
+                                .find_state
+                                .as_ref()
+                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
+                        {
                             app.find_prev();
                         }
                         KeyCode::Char('r')
                             if app
                                 .find_state
                                 .as_ref()
-                                .is_some_and(|fs| !fs.editing_replace) =>
+                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
                         {
                             app.replace_current();
                         }
                         KeyCode::Enter if app.is_find_active() => {
                             app.replace_current();
                         }
-                        KeyCode::Char(ch) if app.is_find_active() => {
-                            // route typing to focused field (query or replace)
-                            app.update_find_input(Some(ch), false);
-                        }
-                        KeyCode::Backspace if app.is_find_active() => {
-                            app.update_find_input(None, true);
-                        }
                         KeyCode::Char('c')
                             if app
                                 .find_state
                                 .as_ref()
-                                .is_some_and(|fs| !fs.editing_replace) =>
+                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
                         {
                             if let Some(fs) = &mut app.find_state {
                                 fs.case_sensitive = !fs.case_sensitive;
@@ -283,7 +358,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             if app
                                 .find_state
                                 .as_ref()
-                                .is_some_and(|fs| !fs.editing_replace) =>
+                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
                         {
                             if let Some(fs) = &mut app.find_state {
                                 fs.use_regex = !fs.use_regex;
@@ -294,7 +369,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             if app
                                 .find_state
                                 .as_ref()
-                                .is_some_and(|fs| !fs.editing_replace) =>
+                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
                         {
                             if let Some(fs) = &mut app.find_state {
                                 fs.whole_word = !fs.whole_word;
@@ -325,35 +400,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         }
                         KeyCode::Esc if app.show_settings => {
                             app.close_settings();
-                        }
-                        KeyCode::Esc if app.show_confirm => {
-                            app.close_confirm(false);
-                        }
-                        KeyCode::Esc if app.show_file_dialog => {
-                            app.close_file_dialog(false);
-                        }
-                        KeyCode::Char('y' | 'Y') if app.show_confirm => {
-                            let is_quit = app.confirm_action.as_deref() == Some("quit");
-                            app.close_confirm(true);
-                            if is_quit {
-                                app.should_quit = true;
-                                return Ok(());
-                            }
-                        }
-                        KeyCode::Char('n' | 'N') if app.show_confirm => {
-                            app.close_confirm(false);
-                        }
-                        KeyCode::Char(ch) if app.show_file_dialog => {
-                            app.file_dialog_input_char(ch);
-                        }
-                        KeyCode::Backspace if app.show_file_dialog => {
-                            app.file_dialog_backspace();
-                        }
-                        KeyCode::Enter if app.show_file_dialog => {
-                            app.close_file_dialog(true);
-                        }
-                        KeyCode::Enter if app.show_confirm => {
-                            app.close_confirm(true);
                         }
                         KeyCode::Char('j') | KeyCode::Down if app.show_settings => {
                             let n = crate::theme::Theme::built_ins().len();
@@ -499,12 +545,12 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             // === Dropdown menu clicks ===
             if let Some(ref menu_name) = app.active_menu {
                 let (menu_x, num_items) = match menu_name.as_str() {
-                    "File" => (1usize, 6),
-                    "Tools" => (8, 4),
+                    "File" => (0usize, 6),
+                    "Tools" => (7, 4),
                     "Settings" => (15, 2),
                     _ => (0, 0),
                 };
-                let dy = 1usize;
+                let dy = crate::ui::layout::HEADER_ROWS as usize; // below header + rule
                 let dropdown_h = num_items + 2;
                 let in_dropdown_y = y >= dy && y < dy + dropdown_h;
                 let in_dropdown_x = x >= menu_x && x < menu_x + 30;
@@ -526,19 +572,89 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 }
             }
 
+            // === Confirm popup: clickable [Y]/[N] buttons + outside-click cancel ===
+            if app.show_confirm && !skip_editor {
+                let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+                let term_area = Rect::new(0, 0, tw, th);
+                let msg = app.confirm_message.clone();
+                let popup = popups::confirm::confirm_rect(term_area, &msg);
+                if x >= popup.x as usize
+                    && x < (popup.x + popup.width) as usize
+                    && y >= popup.y as usize
+                    && y < (popup.y + popup.height) as usize
+                {
+                    // Buttons sit on the last inner row (popup.y + height - 2).
+                    let btn_y = (popup.y + popup.height - 2) as usize;
+                    if y == btn_y {
+                        // [ Y ] Confirm starts at inner col 2 (after "  "); [ N ] Cancel after it.
+                        let y_btn_start = (popup.x + 2) as usize;
+                        let y_btn_end = y_btn_start + "[ Y ] Confirm".chars().count();
+                        let n_btn_start = y_btn_end + 3;
+                        let n_btn_end = n_btn_start + "[ N ] Cancel".chars().count();
+                        if x >= y_btn_start && x < y_btn_end {
+                            let is_quit = app.confirm_action.as_deref() == Some("quit");
+                            app.close_confirm(true);
+                            if is_quit {
+                                app.should_quit = true;
+                            }
+                        } else if x >= n_btn_start && x < n_btn_end {
+                            app.close_confirm(false);
+                        }
+                    }
+                    skip_editor = true;
+                } else {
+                    app.close_confirm(false);
+                    skip_editor = true;
+                }
+            }
+
+            // === File dialog: clickable Open/Save & Cancel buttons + outside close ===
+            if app.show_file_dialog && !skip_editor {
+                let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+                let term_area = Rect::new(0, 0, tw, th);
+                let popup = popups::file_dialog::file_dialog_rect(term_area);
+                if x >= popup.x as usize
+                    && x < (popup.x + popup.width) as usize
+                    && y >= popup.y as usize
+                    && y < (popup.y + popup.height) as usize
+                {
+                    let btn_y = (popup.y + popup.height - 2) as usize;
+                    if y == btn_y {
+                        let confirm_label = if app.file_dialog_is_save {
+                            "[ Save ]"
+                        } else {
+                            "[ Open ]"
+                        };
+                        let c_start = (popup.x + 2) as usize;
+                        let c_end = c_start + confirm_label.chars().count();
+                        let n_start = c_end + 3;
+                        let n_end = n_start + "[ Cancel ]".chars().count();
+                        if x >= c_start && x < c_end {
+                            app.close_file_dialog(true);
+                        } else if x >= n_start && x < n_end {
+                            app.close_file_dialog(false);
+                        }
+                    }
+                    skip_editor = true;
+                } else {
+                    app.close_file_dialog(false);
+                    skip_editor = true;
+                }
+            }
+
             // === Interactive popup clicks (e.g. Settings themes) + outside close for popups ===
             if app.show_settings && !skip_editor {
-                // Duplicate rect calc (same as render_settings_popup)
+                // Compute the rect from the REAL terminal size (was hardcoded 120x20).
+                let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
                 let w = 45u16;
                 let h = 14u16;
-                let term_w = 120u16; // reasonable default
-                let px = (term_w.saturating_sub(w)) / 2;
-                let py = (20u16.saturating_sub(h)) / 2; // rough center
+                let px = (tw.saturating_sub(w)) / 2;
+                let py = (th.saturating_sub(h)) / 2;
                 let in_popup = (y as u16 >= py && (y as u16) < py + h)
                     && (x as u16 >= px && (x as u16) < px + w);
                 if in_popup {
                     let rel_y = (y as u16 - py) as usize;
-                    // themes at approx rel_y 3,4,5
+                    // theme rows are at approx inner rel_y 3,4,5
                     if (3..6).contains(&rel_y) {
                         let idx = rel_y - 3;
                         app.settings_selected = idx;
@@ -555,8 +671,9 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
 
             // Close other non-interactive popups on outside click
             if !skip_editor && (app.show_help || app.show_word_count) {
-                // simple: any click not in editor? but to avoid complexity close on any click outside header
-                if y > 0 {
+                // Close on any click below the header.
+                let header_rows = crate::ui::layout::HEADER_ROWS as usize;
+                if y >= header_rows {
                     if app.show_help {
                         app.show_help = false;
                     }
@@ -568,12 +685,13 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             }
 
             if !skip_editor {
-                if y == 0 {
-                    // Header row: tabs, menus or [+]
+                let header_rows = crate::ui::layout::HEADER_ROWS as usize;
+                if y < header_rows {
+                    // Header rows (menu/tabs + separator rule): tabs, menus or [+]
                     handle_header_click(x, app);
                 } else {
-                    // Editor area (header takes y=0)
-                    let editor_start_y = 1usize; // after header
+                    // Editor area starts below the header + separator.
+                    let editor_start_y = header_rows;
                     if y >= editor_start_y {
                         let editor_y = y - editor_start_y;
                         let vis = app.editor_visible_lines.get().max(1);
@@ -599,56 +717,60 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
         // (one net delta per burst → one redraw), so wheel events never reach
         // handle_mouse. These arms are intentionally absent there.
         MouseEventKind::Drag(MouseButton::Left) => {
-            // Basic drag to extend selection
+            // Extend selection from a fixed anchor (set on the first drag move),
+            // so dragging works in BOTH directions. The click handler seeds the
+            // anchor by clearing it; extend_selection_to then captures the cursor
+            // as the anchor on first use. visual_col must include hscroll to match
+            // the click handler's column mapping.
             let x = mouse.column as usize;
             let y = mouse.row as usize;
-            if y > 0 {
-                let editor_y = y - 1;
+            let header_rows = crate::ui::layout::HEADER_ROWS as usize;
+            if y >= header_rows {
+                let editor_y = y - header_rows;
                 let gutter = Buffer::GUTTER_WIDTH;
                 if x >= gutter {
-                    let visual_col = x - gutter;
+                    let hscroll = app.active_buffer().scroll_offset.1;
+                    let visual_col = (x - gutter) + hscroll;
                     let visual_line = app.active_buffer().scroll_offset.0 + editor_y;
                     let buf = app.active_buffer_mut();
-                    // compute target pos and extend selection from current or start
                     let target_byte = buf.byte_at_visual(visual_line, visual_col);
-                    if let Some(sel) = &mut buf.selection {
-                        if buf.cursor < sel.start {
-                            sel.start = target_byte;
-                        } else {
-                            sel.end = target_byte;
-                        }
-                    } else {
-                        let start = buf.cursor.min(target_byte);
-                        let end = buf.cursor.max(target_byte);
-                        buf.selection = Some(start..end);
-                    }
-                    buf.cursor = target_byte;
+                    buf.mouse_extend_to(target_byte);
                 }
             }
+        }
+        // Horizontal mouse-wheel (Shift+wheel on most terminals) scrolls the
+        // view sideways. Vertical wheel is coalesced in run_app, but horizontal
+        // events pass through here since wheel_lines ignores them.
+        MouseEventKind::ScrollLeft => {
+            app.active_buffer_mut().scroll_offset.1 =
+                app.active_buffer_mut().scroll_offset.1.saturating_sub(4);
+        }
+        MouseEventKind::ScrollRight => {
+            app.active_buffer_mut().scroll_offset.1 =
+                app.active_buffer_mut().scroll_offset.1.saturating_add(4);
         }
         _ => {}
     }
 }
 
 fn handle_header_click(x: usize, app: &mut App) {
-    // Menus: " File  Tools  Settings  "
-    // Approximate char positions for click detection
-    let menus = [("File", 0, 6), ("Tools", 7, 13), ("Settings", 14, 23)];
-
+    // Menu button hit-ranges must mirror header.rs render exactly:
+    //   " File "(0-5) │(6) " Tools "(7-13) │(14) " Settings "(15-24)  (gap 25-26)
+    let menus = [("File", 0, 6), ("Tools", 7, 14), ("Settings", 15, 25)];
     for (name, start, end) in menus {
         if x >= start && x < end {
             app.open_menu(name);
             return;
         }
     }
-
-    // If a menu is open and click outside menus, close it (but still check tabs)
     if app.active_menu.is_some() {
         app.close_menu();
     }
 
-    // Tabs start roughly after menus
-    let mut pos = 24usize; // after "Settings  "
+    // File tabs start after the menu block + a 2-col gap. Each tab renders as
+    // "[ name• ] " — width in COLUMNS (chars().count(), not bytes) is name + 6
+    // (brackets, two inner spaces, one trailing space). [+] is 3 cols.
+    let mut pos = 27usize;
     for i in 0..app.buffers.len() {
         let buf = &app.buffers[i];
         let mut name = buf
@@ -656,12 +778,12 @@ fn handle_header_click(x: usize, app: &mut App) {
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
-            .unwrap_or("[untitled]")
+            .unwrap_or("untitled")
             .to_string();
         if buf.is_modified {
             name.push('•');
         }
-        let tab_width = name.len() + 2; // " name "
+        let tab_width = name.chars().count() + 6; // "[ " + name + " ] "
         if x >= pos && x < pos + tab_width {
             app.active = i;
             app.close_menu();
@@ -670,8 +792,8 @@ fn handle_header_click(x: usize, app: &mut App) {
         pos += tab_width;
     }
 
-    // [+] button
-    if x >= pos && x < pos + 5 {
+    // [+] button (new tab)
+    if x >= pos && x < pos + 3 {
         app.new_tab();
         app.close_menu();
     }
@@ -698,16 +820,16 @@ fn handle_menu_action(app: &mut App) {
                 app.toggle_find();
             }
             if let Some(fs) = &mut app.find_state {
-                fs.editing_replace = false;
+                fs.focus = FindFocus::Query;
             }
         }
         ("Tools", 1) => {
-            // Replace (focus replace field)
+            // Find & Replace (focus replace field)
             if app.find_state.is_none() {
                 app.toggle_find();
             }
             if let Some(fs) = &mut app.find_state {
-                fs.editing_replace = true;
+                fs.focus = FindFocus::Replace;
             }
         }
         ("Tools", 2) => app.compute_and_show_word_count(),
@@ -724,66 +846,36 @@ fn ui(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let chunks = crate::ui::layout::main_layout(area);
 
-    // Update editor viewport height for PgUp/PgDn (subtract find bar when present; approx for md split).
+    // Update editor viewport height for PgUp/PgDn (subtract find bar when present).
     let base_h = chunks[1].height as usize;
     let vis_h = if app.is_find_active() {
         base_h.saturating_sub(1)
     } else {
         base_h
     };
-    let vis_h = if app.markdown_preview
-        && app.active_buffer().language == crate::buffer::Language::Markdown
-    {
-        (vis_h / 2).max(1)
-    } else {
-        vis_h.max(1)
-    };
+    let vis_h = vis_h.max(1);
     app.editor_visible_lines.set(vis_h);
+    // Text-area width = editor area minus line-number gutter (6) minus scrollbar (1).
+    let content_w = (chunks[1].width as usize)
+        .saturating_sub(Buffer::GUTTER_WIDTH + 1)
+        .max(1);
+    app.editor_visible_width.set(content_w);
 
     // Refresh the cached syntax spans for the visible window. This is a cheap
     // key comparison on a steady frame and a full (single-HighlightLines) recompute
     // only on edit / scroll / language change. Done here so editor::render can read
-    // the cache immutably. Skipped for the markdown preview path (no syntax spans).
-    if !(app.markdown_preview && app.active_buffer().language == crate::buffer::Language::Markdown)
-    {
-        app.refresh_highlight_cache(app.active_buffer().scroll_offset.0, vis_h);
-    }
+    // the cache immutably.
+    app.refresh_highlight_cache(app.active_buffer().scroll_offset.0, vis_h);
 
     crate::ui::header::render(f, chunks[0], app);
 
     let edit_chunk = chunks[1];
     if app.is_find_active() {
         let (edit_area, find_area) = crate::ui::layout::editor_with_find_layout(edit_chunk);
-        if app.markdown_preview && app.active_buffer().language == crate::buffer::Language::Markdown
-        {
-            let (src, prev) = crate::ui::layout::md_split_preview(edit_area);
-            // render source in left, preview in right (simplified, no gutter on preview)
-            crate::ui::editor::render(f, src, app);
-            // simple preview render on right (re-use preview logic)
-            let md_lines = crate::ui::markdown::render_preview(
-                &app.active_buffer().text(),
-                app.current_theme(),
-            );
-            let para = ratatui::widgets::Paragraph::new(md_lines)
-                .style(app.current_theme().editor_bg_style());
-            f.render_widget(para, prev);
-        } else {
-            crate::ui::editor::render(f, edit_area, app);
-        }
+        crate::ui::editor::render(f, edit_area, app);
         if let Some(fs) = &app.find_state {
             crate::ui::find::render_bar(f, find_area, fs);
         }
-        crate::ui::status::render(f, chunks[2], app);
-    } else if app.markdown_preview
-        && app.active_buffer().language == crate::buffer::Language::Markdown
-    {
-        let (src, prev) = crate::ui::layout::md_split_preview(edit_chunk);
-        crate::ui::editor::render(f, src, app);
-        let md_lines =
-            crate::ui::markdown::render_preview(&app.active_buffer().text(), app.current_theme());
-        let para =
-            ratatui::widgets::Paragraph::new(md_lines).style(app.current_theme().editor_bg_style());
-        f.render_widget(para, prev);
         crate::ui::status::render(f, chunks[2], app);
     } else {
         crate::ui::editor::render(f, edit_chunk, app);
@@ -791,7 +883,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 
     if app.show_help {
-        render_help_overlay(f, area);
+        popups::help::render(f, area, app.current_theme(), app.help_tab);
     }
     if app.show_word_count {
         popups::word_count::render(f, area, app.current_theme(), &app.word_count_text);
@@ -819,46 +911,4 @@ fn ui(f: &mut Frame, app: &mut App) {
             &app.file_dialog_message,
         );
     }
-}
-
-fn render_help_overlay(f: &mut Frame, area: Rect) {
-    // TODO: move to ui/popups/help.rs once popup infra is ready
-    let help_text = vec![
-        ratatui::text::Line::from(" rust-edit — Phase 1 Help "),
-        ratatui::text::Line::from(""),
-        ratatui::text::Line::from(" Ctrl+S  Save     Ctrl+N New tab    Ctrl+W Close tab"),
-        ratatui::text::Line::from(" Ctrl+Q  Quit     Arrows + Shift select    PgUp/PgDn page"),
-        ratatui::text::Line::from(" Ctrl+Z Undo   Ctrl+Y Redo     (Shift+Z also redo)"),
-        ratatui::text::Line::from(" Enter   Smart indent     Tab / Shift+Tab  indent/dedent"),
-        ratatui::text::Line::from(" Home/End     Backspace/Delete"),
-        ratatui::text::Line::from(
-            " Ctrl+F find / Ctrl+H replace    n/N or F3/Shift+F3 nav  r/Enter rep  ^A all  Tab focus",
-        ),
-        ratatui::text::Line::from(" Ctrl+B/I/` for MD bold/italic/code"),
-        ratatui::text::Line::from(" Shift+W word count    Ctrl+Shift+F format"),
-        ratatui::text::Line::from(" Mouse: tabs / [+] / editor / dropdowns / popups / scroll"),
-        ratatui::text::Line::from(" Alt+F/T/S menus    Alt+1-9 tabs    ? help"),
-        ratatui::text::Line::from(""),
-        ratatui::text::Line::from(" (Full keybindings & mouse in later slices)"),
-        ratatui::text::Line::from(" Press ? or Esc to close"),
-    ];
-
-    let block = ratatui::widgets::Block::default()
-        .title("Help")
-        .borders(ratatui::widgets::Borders::ALL);
-    let para = ratatui::widgets::Paragraph::new(help_text).block(block);
-
-    let popup_width = 50u16;
-    let popup_height = 12u16;
-    let x = (area.width.saturating_sub(popup_width)) / 2;
-    let y = (area.height.saturating_sub(popup_height)) / 2;
-    let popup_area = Rect::new(
-        x,
-        y,
-        popup_width.min(area.width),
-        popup_height.min(area.height),
-    );
-
-    f.render_widget(Clear, popup_area);
-    f.render_widget(para, popup_area);
 }

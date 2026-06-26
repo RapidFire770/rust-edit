@@ -7,7 +7,7 @@ use crate::buffer::{Buffer, Language};
 use crate::config::Config;
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
-use crate::ui::find::FindState;
+use crate::ui::find::{FindFocus, FindState};
 use crate::utils::clipboard::ClipboardWrapper;
 use ratatui::text::Span;
 use std::path::PathBuf;
@@ -38,9 +38,10 @@ pub struct App {
     pub show_help: bool,
     pub clipboard: ClipboardWrapper,
     pub find_state: Option<FindState>,
-    pub markdown_preview: bool,
     pub show_word_count: bool,
     pub word_count_text: String,
+    /// Active tab in the help popup.
+    pub help_tab: crate::ui::popups::help::HelpTab,
     /// Currently open menu for dropdown ("File", "Tools", "Settings")
     pub active_menu: Option<String>,
     pub show_settings: bool,
@@ -59,6 +60,9 @@ pub struct App {
     pub should_quit: bool,
     /// Last known height (in lines) of the editor viewport area. Used for PgUp/PgDn and better scrolling.
     pub editor_visible_lines: std::cell::Cell<usize>,
+    /// Last known width (in columns) of the editor text area (excludes gutter +
+    /// scrollbar). Used by horizontal auto-scroll to follow the cursor.
+    pub editor_visible_width: std::cell::Cell<usize>,
     /// Cached syntax spans for the active buffer's visible window. Refreshed each
     /// frame by `refresh_highlight_cache` only when content/scroll/language changed.
     pub cached_highlights: Option<CachedHighlights>,
@@ -99,9 +103,9 @@ impl App {
             show_help: false,
             clipboard: ClipboardWrapper::new(),
             find_state: None,
-            markdown_preview: false,
             show_word_count: false,
             word_count_text: String::new(),
+            help_tab: crate::ui::popups::help::HelpTab::default(),
             active_menu: None,
             show_settings: false,
             settings_selected: 0,
@@ -115,6 +119,7 @@ impl App {
             file_dialog_message: String::new(),
             should_quit: false,
             editor_visible_lines: std::cell::Cell::new(20),
+            editor_visible_width: std::cell::Cell::new(80),
             cached_highlights: None,
         }
     }
@@ -254,7 +259,7 @@ impl App {
             self.find_state = None;
         } else {
             let mut fs = FindState::new();
-            fs.editing_replace = false;
+            fs.focus = FindFocus::Query;
             // seed with current selection or word if any (basic)
             if let Some(sel) = &self.active_buffer().selection {
                 let start = sel.start.min(self.active_buffer().rope.len_bytes());
@@ -268,7 +273,7 @@ impl App {
 
     pub fn update_find_input(&mut self, append: Option<char>, backspace: bool) {
         if let Some(fs) = &mut self.find_state {
-            let editing_replace = fs.editing_replace;
+            let editing_replace = fs.focus == FindFocus::Replace;
             let target = if editing_replace {
                 &mut fs.replace
             } else {
@@ -364,6 +369,9 @@ impl App {
         if row < b.scroll_offset.0 || row >= b.scroll_offset.0 + vis {
             b.scroll_offset.0 = row.saturating_sub(vis / 2);
         }
+        // Bring the match column into view horizontally (matches off the right
+        // edge used to land the cursor invisibly).
+        b.ensure_cursor_horizontally_visible();
     }
 
     pub fn replace_current(&mut self) {
@@ -474,12 +482,6 @@ impl App {
 
     pub fn is_find_active(&self) -> bool {
         self.find_state.is_some()
-    }
-
-    pub fn toggle_markdown_preview(&mut self) {
-        if self.active_buffer().language == crate::buffer::Language::Markdown {
-            self.markdown_preview = !self.markdown_preview;
-        }
     }
 
     pub fn compute_and_show_word_count(&mut self) {
@@ -744,47 +746,141 @@ fn find_matches_in_text(
         return vec![];
     }
     let mut matches = vec![];
+
     if use_regex {
-        if let Ok(re) = regex::Regex::new(query) {
+        // Honor the case toggle in regex mode by prefixing the inline flag.
+        // (whole-word is intentionally ignored in regex mode — the user can
+        // write \b themselves; the toggle is documented as a plain-mode option.)
+        let pattern = if case_sensitive {
+            query.to_string()
+        } else {
+            format!("(?i){}", query)
+        };
+        if let Ok(re) = regex::Regex::new(&pattern) {
             for m in re.find_iter(text) {
                 matches.push(m.start()..m.end());
             }
         }
         return matches;
     }
-    let q = if case_sensitive {
-        query.to_string()
-    } else {
-        query.to_lowercase()
-    };
-    let hay = if case_sensitive {
-        text.to_string()
-    } else {
-        text.to_lowercase()
-    };
-    let q_len = q.len();
-    let mut start = 0;
-    while let Some(pos) = hay[start..].find(&q) {
-        let abs = start + pos;
-        let m_end = abs + q_len;
-        if whole_word {
-            let before_ok = abs == 0
-                || !hay
-                    .chars()
-                    .nth(abs - 1)
-                    .is_some_and(|c| c.is_alphanumeric());
-            let after_ok = (m_end >= hay.len())
-                || !hay.chars().nth(m_end).is_some_and(|c| c.is_alphanumeric());
-            if before_ok && after_ok {
-                matches.push(abs..m_end);
-            }
+
+    // Plain substring search. To return BYTE offsets that always map back to the
+    // original text (critical for selection/replace), search the original text
+    // and compare case manually when case-insensitive. Lowercasing the haystack
+    // separately can change byte lengths for non-ASCII and corrupt offsets.
+    let q_chars: Vec<char> = query.chars().collect();
+    let hay_chars: Vec<char> = text.chars().collect();
+    let n = hay_chars.len();
+    let qlen = q_chars.len();
+    if qlen == 0 || qlen > n {
+        return vec![];
+    }
+
+    let eq = |a: char, b: char| -> bool {
+        if case_sensitive {
+            a == b
         } else {
-            matches.push(abs..m_end);
+            a.to_lowercase().eq(b.to_lowercase())
         }
-        start = abs + 1;
-        if start >= hay.len() {
-            break;
+    };
+
+    // Walk by char index, recording byte offsets alongside.
+    // Precompute the byte offset at each char boundary once.
+    let mut byte_at: Vec<usize> = Vec::with_capacity(n + 1);
+    let mut b = 0usize;
+    for c in text.chars() {
+        byte_at.push(b);
+        b += c.len_utf8();
+    }
+    byte_at.push(b); // one-past-end byte offset
+
+    let mut i = 0usize;
+    while i + qlen <= n {
+        let mut ok = true;
+        for k in 0..qlen {
+            if !eq(hay_chars[i + k], q_chars[k]) {
+                ok = false;
+                break;
+            }
         }
+        if ok {
+            let m_start = byte_at[i];
+            let m_end = byte_at[i + qlen];
+            if whole_word {
+                let before_ok = i == 0 || !hay_chars[i - 1].is_alphanumeric();
+                let after_ok = (i + qlen >= n) || !hay_chars[i + qlen].is_alphanumeric();
+                if before_ok && after_ok {
+                    matches.push(m_start..m_end);
+                }
+            } else {
+                matches.push(m_start..m_end);
+            }
+        }
+        i += 1;
     }
     matches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_case_sensitive_default() {
+        // Default (case-insensitive) matches both cases.
+        let m = find_matches_in_text("Hello hello HELLO", "hello", false, false, false);
+        assert_eq!(m.len(), 3, "case-insensitive should match all three");
+        // First match is at byte 0.
+        assert_eq!(m[0], 0..5);
+    }
+
+    #[test]
+    fn search_case_sensitive_on() {
+        let m = find_matches_in_text("Hello hello", "Hello", true, false, false);
+        assert_eq!(m.len(), 1, "case-sensitive matches only exact case");
+        assert_eq!(m[0], 0..5);
+    }
+
+    #[test]
+    fn search_whole_word_excludes_substring() {
+        // 'foo' inside 'foobar' must be excluded when whole_word is on.
+        let m = find_matches_in_text("foo foobar foo", "foo", false, false, true);
+        assert_eq!(m.len(), 2, "whole-word excludes embedded matches");
+        assert_eq!(m[0], 0..3);
+        assert_eq!(m[1], 11..14);
+    }
+
+    #[test]
+    fn search_whole_word_off_includes_substring() {
+        let m = find_matches_in_text("foobar", "foo", false, false, false);
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn search_regex_basic() {
+        let m = find_matches_in_text("a1 b2 c3", r"\d", false, true, false);
+        assert_eq!(m.len(), 3, "regex \\d matches all digits");
+    }
+
+    #[test]
+    fn search_regex_case_insensitive() {
+        // Regex mode honoring the case toggle via (?i).
+        let m = find_matches_in_text("Cat cat CAT", "cat", false, true, false);
+        assert_eq!(m.len(), 3, "case-insensitive regex matches all");
+    }
+
+    #[test]
+    fn search_byte_offsets_valid_for_multibyte() {
+        // Ensure returned byte offsets correctly index the original text even when
+        // earlier characters are multi-byte (the old lowercase-haystack bug).
+        let text = "ééHello"; // é is 2 bytes
+        let m = find_matches_in_text(text, "hello", false, false, false);
+        assert_eq!(m.len(), 1);
+        let r = &m[0];
+        assert_eq!(
+            &text[r.start..r.end],
+            "Hello",
+            "byte range must slice the original"
+        );
+    }
 }

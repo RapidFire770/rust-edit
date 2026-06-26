@@ -2,8 +2,8 @@
 
 **Project:** Rust-Edit — Feature-rich terminal text & code editor (TUI)  
 **Primary Framework:** Ratatui v0.30+  
-**Status:** Early development (MVP focus)  
-**Last Updated:** June 24, 2026
+**Status:** Phase 1 complete (June 2026). MVP + high-value additions shipped.  
+**Last Updated:** June 25, 2026
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
 
@@ -17,18 +17,31 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
    - Every feature must work well in common Linux terminal emulators (kitty, wezterm, alacritty, foot, gnome-terminal, etc.).
    - No reliance on non-portable extensions (Kitty graphics protocol for "font sizes", sixel for rich text, etc.) unless explicitly approved and feature-gated.
    - When in doubt: choose the simpler, more compatible path and document the limitation.
-2. **Keyboard-first, mouse optional**
-   - All primary actions must be fully keyboard accessible with discoverable shortcuts.
-   - Mouse is a convenience (tab switching, cursor placement, scrolling), never the only way.
+2. **Keyboard and mouse are first-class peers**
+   - Every action must be reachable both ways: full keyboard shortcuts *and* full
+     mouse interaction (click tabs, menus, cursor placement, text selection,
+     scrolling, and clickable buttons in every popup).
+   - Neither input method is "secondary" or "optional." When adding a feature,
+     wire up both the keybinding and the mouse path.
 3. **Incremental & shippable > perfect**
-   - MVP scope is deliberately limited (see Design Spec §5.1). Do not add Phase 2+ features (full LSP, split panes, git integration, plugins, session restore) without explicit approval.
+   - Phase 1 is complete. Phase 2 features (full LSP, split panes, git
+     integration, plugins, session restore — see Design Spec §5.3) require
+     explicit approval before starting.
    - Every change should leave the app in a runnable, testable state.
 4. **Explain tradeoffs**
    - When you have a choice (crate X vs Y, approach A vs B), briefly state the pros/cons in your reasoning or commit message. Cite terminal constraints, performance, complexity, or maintenance burden.
-5. **Respect the spec**
-   - Rich text = source editing + markdown formatting toolbar + styled preview (no WYSIWYG font sizes).
+5. **Respect the spec — with documented deviations**
+   - The Design Spec is the historical source of intent; this AGENTS.md reflects
+     the *current* agreed scope. Where they differ, AGENTS.md wins:
+     - **Markdown rendered preview was removed.** Markdown files keep source
+       syntax highlighting and the `Ctrl+B/I/\`` formatting inserters, but the
+       pulldown-cmark split-preview pane was deleted (the rendering was
+       incomplete and editing in the source pane was awkward). Re-adding a
+       preview requires a new design decision.
+     - **Single Find/Replace shortcut (`Ctrl+F`)** — the bar has query/replace
+       fields reachable via Tab, so a separate `Ctrl+H` was dropped.
    - LSP is Phase 2+ only.
-   - Printing is future/export-only.
+   - Printing/PDF export is future-only.
    - If the spec is unclear, ask before coding.
 
 ---
@@ -47,11 +60,12 @@ clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 directories = "5.0"
-pulldown-cmark = "0.12"
 arboard = "3.4"
 anyhow = "1.0"
 regex = "1.10"
 ```
+
+> `pulldown-cmark` was removed when the markdown preview feature was deleted.
 
 **Optional / evaluation only (do not add to Cargo.toml without approval):**
 
@@ -67,6 +81,20 @@ pretty_assertions = "1.4"
 
 Run `cargo fmt` and `cargo clippy -- -D warnings` on every change.
 
+### Toolchain / cargo path (important for agents)
+
+The system `cargo` proxy is broken in this environment (it fails with
+`error: unknown proxy name: 'zcode'`). Use the real toolchain binary instead:
+
+```bash
+CARGO="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo"
+"$CARGO" --version     # sanity check
+```
+
+Discover the path with `ls ~/.rustup/toolchains/*/bin/cargo`. It is also recorded
+in `docs/cargo toolchain location.md`. All `cargo` commands in this file assume
+you've set this `CARGO` variable (or that the proxy is fixed).
+
 ---
 
 ## 3. Recommended Project Structure
@@ -81,23 +109,24 @@ rust-edit/
 │   └── ui-design-sample-2.jpg
 ├── src/
 │   ├── main.rs
-│   ├── app.rs                 # Top-level App state, event loop, high-level commands
-│   ├── buffer.rs              # Buffer struct + Ropey wrapper + core editing ops (insert, delete, undo, indent, etc.)
+│   ├── app.rs                 # Top-level App state, event loop, high-level commands, highlight cache
+│   ├── buffer.rs              # Buffer struct + Ropey wrapper + editing ops + cursor/selection/scroll
 │   ├── config.rs              # Config loading/saving (toml + XDG)
 │   ├── theme.rs               # Theme struct + color roles + built-in themes + serde
-│   ├── syntax.rs              # Syntect wrapper, language detection, highlight cache
+│   ├── syntax.rs              # Syntect wrapper, highlight_window (one HighlightLines per window)
 │   ├── ui/
 │   │   ├── mod.rs
-│   │   ├── layout.rs          # Ratatui Layout helpers
-│   │   ├── header.rs          # Menu bar + file tabs + [+] button
-│   │   ├── editor.rs          # Main editing view, line numbers, cursor, selection, syntax spans
+│   │   ├── layout.rs          # Ratatui Layout helpers + HEADER_ROWS constant
+│   │   ├── header.rs          # Menu bar + file tabs + [+] button + separator rule + dropdown
+│   │   ├── editor.rs          # Main editing view, line numbers, cursor, selection, hscroll
 │   │   ├── status.rs          # Status bar
-│   │   ├── find.rs            # Find / Replace bar or popup logic
+│   │   ├── find.rs            # Find/Replace bar (FindState + FindFocus 3-state model)
 │   │   └── popups/
 │   │       ├── mod.rs
-│   │       ├── file_dialog.rs # Open / Save As
+│   │       ├── confirm.rs     # Unsaved changes (clickable [Y]/[N] buttons)
+│   │       ├── file_dialog.rs # Open / Save As (scalable, scrollable path input)
+│   │       ├── help.rs        # Tabbed help (Shortcuts / Languages / About)
 │   │       ├── settings.rs    # Settings form + theme switcher
-│   │       ├── confirm.rs     # Unsaved changes, etc.
 │   │       └── word_count.rs
 │   └── utils/
 │       └── clipboard.rs       # arboard thin wrapper
@@ -110,6 +139,21 @@ rust-edit/
 - Keep `ui/` focused on presentation only. Business logic (buffer mutations, find logic, formatting) lives in `buffer.rs`, `app.rs`, or dedicated modules.
 - One popup = one file in `popups/`.
 - No god objects. App should delegate to Buffer, Theme, SyntaxHighlighter, etc.
+
+**Key types / established patterns (read before editing these areas):**
+
+- `Buffer` fields: `cursor` (byte offset), `selection` (normalized `Range`) +
+  `selection_anchor` (fixed anchor for bidirectional extend), `scroll_offset`
+  (row, col), `visible_lines`/`visible_width` (synced each frame), `generation`
+  (invalidation key for the highlight cache). Auto-scroll lives in
+  `adjust_scroll` (vertical+horizontal edge clamping) and `ensure_cursor_*`.
+- `FindState.focus: FindFocus` — a 3-state model (Query → Replace → Command) so
+  letters like `n`/`N` type normally into the boxes and navigate only in Command mode.
+- Syntax highlighting: `app.refresh_highlight_cache()` recomputes a visible
+  window only on edit/scroll/language change; `editor.rs` reads the cache. One
+  `HighlightLines` per window (multi-line constructs stay correct).
+- Event coalescing: `run_app` drains queued events and sums consecutive
+  mouse-wheel deltas into one scroll → one redraw per burst.
 
 ---
 
@@ -248,9 +292,9 @@ Test checklist (run in at least 2 different terminals, e.g. kitty + alacritty):
 - [ ] Smart indent on Enter behaves reasonably for code.
 - [ ] Find bar opens, incremental highlight works, basic replace functions.
 - [ ] Theme switch in Settings applies immediately and looks good in both dark/light.
-- [ ] Markdown file shows formatting toolbar (when implemented); preview toggle renders headings/lists/code nicely.
-- [ ] Unsaved changes confirmation appears on close/quit.
-- [ ] Mouse works for tab switching, cursor placement, scrolling (where supported).
+- [ ] Markdown file shows syntax highlighting and `Ctrl+B/I/\`` formatting inserters.
+- [ ] Unsaved changes confirmation appears on close/quit; Y/N works via keyboard and clickable buttons.
+- [ ] Mouse works for tab switching, cursor placement, scrolling, and clicking popup buttons.
 - [ ] No obvious layout breakage on resize (small vs wide terminal).
 - [ ] Help (`?` or F1) shows accurate keybindings.
 - [ ] Large file (e.g. 50k+ lines) remains responsive (test scrolling & editing).
@@ -265,15 +309,18 @@ Document any terminal-specific quirks you discover.
 
 ---
 
-## 8. What NOT to Do (Yet)
+## 8. What NOT to Do (Phase 2 — not started; needs approval)
 
 - Do not implement full LSP client, diagnostics from rust-analyzer, completions, etc.
+- Do not add session restore, split panes, a sidebar file tree, git integration, or a plugin system.
+- Do not re-add a markdown rendered preview without a fresh design decision (the previous one was removed — see §1 "Respect the spec — with documented deviations").
 - Do not add "font size" or arbitrary rich-text WYSIWYG editing.
-- Do not add built-in printing / PDF generation unless the user explicitly moves it to Phase 1.
+- Do not add built-in printing / PDF generation unless the user explicitly moves it into scope.
 - Do not introduce heavy GUI crates (egui, iced, etc.) or webview.
 - Do not change the core data model (Rope + per-buffer state) without strong justification.
 - Do not hard-code colors or layout numbers outside the Theme / Layout system.
 - Avoid "clever" global singletons or excessive use of `Rc<RefCell<>>`. Prefer ownership and message passing where possible.
+- Do not add a feature with keyboard input but no mouse path (or vice versa) — see Core Principle 2.
 
 ---
 
@@ -289,6 +336,10 @@ Document any terminal-specific quirks you discover.
 
 ## 10. Getting Started Checklist (for a fresh clone)
 
+> The system `cargo` proxy may be broken — see §2 "Toolchain / cargo path".
+> Set `CARGO="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo"`
+> and use `"$CARGO"` in place of `cargo` below if needed.
+
 ```bash
 git clone ... && cd rust-edit
 cargo build --release
@@ -296,7 +347,8 @@ cargo build --release
 ./target/release/rust-edit src/main.rs        # open a file
 ```
 
-Then explore the code, run `cargo clippy`, and pick a small MVP task from the Design Spec roadmap.
+Then explore the code, run `cargo fmt && cargo clippy -- -D warnings && cargo test`,
+and review `docs/Todo-List.md` for open Phase 2 ideas.
 
 ---
 

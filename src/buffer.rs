@@ -60,12 +60,22 @@ pub struct Buffer {
     pub cursor: usize,
     /// Optional selection [start, end) with start <= end. When None, no selection.
     pub selection: Option<Range<usize>>,
+    /// Fixed anchor byte for selection extension. Set when a shift-extend sequence
+    /// begins (no selection yet) and kept stable across subsequent moves, so the
+    /// selection can grow/shrink in EITHER direction relative to this anchor.
+    /// Without it, the normalized `selection.start` drifts with the cursor and
+    /// leftward extension collapses to one char.
+    pub selection_anchor: Option<usize>,
     /// (row, col_offset) for viewport scrolling (rows are 0-based).
     pub scroll_offset: (usize, usize),
     /// Last known height (in rows) of the editor viewport. Refreshed each frame
     /// by the run loop so adjust_scroll can clamp against the *real* height
     /// instead of a guessed constant. Fixes half-screen scroll jumping on long files.
     pub visible_lines: usize,
+    /// Last known width (in columns) of the editor text area (excludes gutter +
+    /// scrollbar). Refreshed each frame so horizontal auto-scroll can follow the
+    /// cursor when a line is longer than the window.
+    pub visible_width: usize,
     /// Bumped on every text mutation (insert/backspace/delete/newline/indent/dedent/undo/redo).
     /// Used as an invalidation key by the highlight cache so spans are only recomputed
     /// on edit or scroll into new lines (see AGENTS §6 "Syntax Highlighting").
@@ -97,8 +107,10 @@ impl Buffer {
             is_modified: false,
             cursor: 0,
             selection: None,
+            selection_anchor: None,
             scroll_offset: (0, 0),
             visible_lines: 20,
+            visible_width: 80,
             generation: 0,
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
@@ -119,8 +131,10 @@ impl Buffer {
             is_modified: false,
             cursor: 0,
             selection: None,
+            selection_anchor: None,
             scroll_offset: (0, 0),
             visible_lines: 20,
+            visible_width: 80,
             generation: 0,
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
@@ -182,7 +196,7 @@ impl Buffer {
                 }
                 self.cursor = byte;
             }
-            self.selection = None;
+            self.clear_selection();
             return;
         }
         let line_start_byte = self.rope.line_to_byte(visual_line);
@@ -195,7 +209,7 @@ impl Buffer {
             byte += ch.len_utf8();
         }
         self.cursor = byte;
-        self.selection = None;
+        self.clear_selection();
         // Do not auto-adjust here; callers (mouse place) decide whether to ensure_visible
         // to avoid unwanted jumps when clicking inside the current viewport.
     }
@@ -294,6 +308,7 @@ impl Buffer {
     /// Insert text at cursor. Clears selection if present (replace selection behavior later).
     pub fn insert(&mut self, text: &str) {
         self.push_undo();
+        self.selection_anchor = None;
 
         if let Some(sel) = self.selection.take() {
             // Replace selection with text
@@ -320,6 +335,7 @@ impl Buffer {
     /// Delete the char before cursor (backspace), or selection if present.
     pub fn backspace(&mut self) {
         self.push_undo();
+        self.selection_anchor = None;
 
         if let Some(sel) = self.selection.take() {
             let start = sel.start.min(self.rope.len_bytes());
@@ -341,6 +357,7 @@ impl Buffer {
     /// Delete the char after cursor (delete key).
     pub fn delete(&mut self) {
         self.push_undo();
+        self.selection_anchor = None;
 
         if let Some(sel) = self.selection.take() {
             let start = sel.start.min(self.rope.len_bytes());
@@ -360,6 +377,38 @@ impl Buffer {
         self.bump_generation();
     }
 
+    /// Extend the selection to `new_cursor`, keeping a stable anchor. If there is
+    /// no anchor yet (start of a shift-extend sequence), the current cursor becomes
+    /// the anchor. The selection always spans [min(anchor,new_cursor), max(...)),
+    /// so it grows/shrinks correctly in BOTH directions — fixing the old bug where
+    /// extending leftward collapsed the selection to one character.
+    fn extend_selection_to(&mut self, new_cursor: usize) {
+        let anchor = self
+            .selection_anchor
+            .unwrap_or_else(|| self.cursor.min(self.rope.len_bytes()));
+        self.selection_anchor = Some(anchor);
+        let (s, e) = if anchor <= new_cursor {
+            (anchor, new_cursor)
+        } else {
+            (new_cursor, anchor)
+        };
+        self.selection = Some(s..e);
+    }
+
+    /// Clear the selection AND its anchor (used by non-extend moves and edits).
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+        self.selection_anchor = None;
+    }
+
+    /// Extend the selection to a target byte, anchoring at the current cursor if
+    /// no selection is in progress (mouse-drag entry point). Used by mouse drag so
+    /// it shares the same fixed-anchor semantics as keyboard shift-extend.
+    pub fn mouse_extend_to(&mut self, target_byte: usize) {
+        self.extend_selection_to(target_byte);
+        self.cursor = target_byte;
+    }
+
     /// Move cursor by char delta (clamped).
     pub fn move_cursor(&mut self, delta_chars: isize, extend_selection: bool) {
         let current_char = self.rope.byte_to_char(self.cursor);
@@ -369,20 +418,9 @@ impl Buffer {
         let new_byte = self.rope.char_to_byte(new_char);
 
         if extend_selection {
-            let start = self
-                .selection
-                .as_ref()
-                .map(|r| r.start)
-                .unwrap_or(self.cursor);
-            let end = new_byte;
-            let (s, e) = if start <= end {
-                (start, end)
-            } else {
-                (end, start)
-            };
-            self.selection = Some(s..e);
+            self.extend_selection_to(new_byte);
         } else {
-            self.selection = None;
+            self.clear_selection();
         }
         self.cursor = new_byte;
         self.adjust_scroll();
@@ -393,20 +431,9 @@ impl Buffer {
         let line = self.rope.byte_to_line(self.cursor);
         let line_start = self.rope.line_to_byte(line);
         if extend_selection {
-            // compute range similar to above
-            let start = self
-                .selection
-                .as_ref()
-                .map(|r| r.start)
-                .unwrap_or(self.cursor);
-            let (s, e) = if start <= line_start {
-                (start, line_start)
-            } else {
-                (line_start, start)
-            };
-            self.selection = Some(s..e);
+            self.extend_selection_to(line_start);
         } else {
-            self.selection = None;
+            self.clear_selection();
         }
         self.cursor = line_start;
         self.adjust_scroll();
@@ -433,19 +460,9 @@ impl Buffer {
         };
 
         if extend_selection {
-            let start = self
-                .selection
-                .as_ref()
-                .map(|r| r.start)
-                .unwrap_or(self.cursor);
-            let (s, e) = if start <= line_end {
-                (start, line_end)
-            } else {
-                (line_end, start)
-            };
-            self.selection = Some(s..e);
+            self.extend_selection_to(line_end);
         } else {
-            self.selection = None;
+            self.clear_selection();
         }
         self.cursor = line_end;
         self.adjust_scroll();
@@ -493,20 +510,9 @@ impl Buffer {
             byte_off += c.len_utf8();
         }
         if extend_selection {
-            let start = self
-                .selection
-                .as_ref()
-                .map(|r| r.start)
-                .unwrap_or(self.cursor);
-            let end = byte_off;
-            let (s, e) = if start <= end {
-                (start, end)
-            } else {
-                (end, start)
-            };
-            self.selection = Some(s..e);
+            self.extend_selection_to(byte_off);
         } else {
-            self.selection = None;
+            self.clear_selection();
         }
         self.cursor = byte_off;
         self.adjust_scroll();
@@ -556,7 +562,7 @@ impl Buffer {
     /// keystroke in long files. The logic mirrors `ensure_cursor_visible`.
     pub fn adjust_scroll(&mut self) {
         let v = self.visible_lines.max(1);
-        let (row, _) = self.cursor_position();
+        let (row, col) = self.cursor_position();
         let s = self.scroll_offset.0;
         if row < s {
             // Cursor moved above the top edge → bring it to the top line.
@@ -566,6 +572,27 @@ impl Buffer {
             self.scroll_offset.0 = row.saturating_sub(v.saturating_sub(2));
         }
         // else: cursor inside viewport → do nothing (no half-screen jumping).
+        // Keep the cursor column in view horizontally too (long lines / wide cursor moves).
+        self.ensure_cursor_horizontally_visible_with(col);
+    }
+
+    /// Recompute horizontal scroll so the cursor column stays inside the visible
+    /// text width. Recenters the window when the cursor leaves either edge.
+    pub fn ensure_cursor_horizontally_visible(&mut self) {
+        let (_, col) = self.cursor_position();
+        self.ensure_cursor_horizontally_visible_with(col);
+    }
+
+    fn ensure_cursor_horizontally_visible_with(&mut self, col: usize) {
+        let w = self.visible_width.max(1);
+        let h = self.scroll_offset.1;
+        if col < h {
+            // Cursor left of the window → snap window to the cursor.
+            self.scroll_offset.1 = col;
+        } else if col >= h + w {
+            // Cursor right of the window → recenter so the cursor sits near the right edge.
+            self.scroll_offset.1 = col.saturating_sub(w.saturating_sub(2));
+        }
     }
 
     /// Ensure the cursor is at least minimally visible within the given viewport height.
@@ -585,6 +612,7 @@ impl Buffer {
     /// Smart indent on newline: insert \n + copy leading ws from current line + extra indent if appropriate.
     pub fn newline_with_indent(&mut self) {
         self.push_undo();
+        self.selection_anchor = None;
 
         let pos = self.cursor.min(self.rope.len_bytes());
         let line_idx = self.rope.byte_to_line(pos);
@@ -931,5 +959,110 @@ mod tests {
         let before = b.generation;
         b.redo();
         assert_eq!(b.generation, before + 1, "redo bumps generation");
+    }
+
+    // --- bidirectional selection (Fix: anchor drift) ---
+    #[test]
+    fn extend_selection_leftward_grows() {
+        // Cursor at byte 5 (after "hello"). Shift+Left twice must select "llo"
+        // then "llo"-+prev → "llo" grows left, NOT collapse to 1 char.
+        let mut b = Buffer::from_str("hello world", None);
+        b.cursor = 5; // h-e-l-l-o-| space...
+        b.move_cursor(-1, true);
+        assert_eq!(
+            b.selection.as_ref().unwrap().clone(),
+            4..5,
+            "first shift-left selects one char to the left"
+        );
+        b.move_cursor(-1, true);
+        assert_eq!(
+            b.selection.as_ref().unwrap().clone(),
+            3..5,
+            "second shift-left must grow leftward (anchor held at 5)"
+        );
+        b.move_cursor(-1, true);
+        assert_eq!(
+            b.selection.as_ref().unwrap().clone(),
+            2..5,
+            "third shift-left keeps growing toward anchor"
+        );
+    }
+
+    #[test]
+    fn extend_right_then_left_shrinks_from_anchor() {
+        let mut b = Buffer::from_str("abcdefgh", None);
+        b.cursor = 3;
+        // Extend right to 6: selection 3..6
+        b.move_cursor(1, true);
+        b.move_cursor(1, true);
+        b.move_cursor(1, true);
+        assert_eq!(b.selection.as_ref().unwrap().clone(), 3..6);
+        // Now move back left: selection shrinks back toward anchor (3), not collapse.
+        b.move_cursor(-1, true);
+        assert_eq!(b.selection.as_ref().unwrap().clone(), 3..5);
+        b.move_cursor(-1, true);
+        assert_eq!(b.selection.as_ref().unwrap().clone(), 3..4);
+        // Cursor back at the anchor → selection is empty (cursor == anchor).
+        b.move_cursor(-1, true);
+        assert_eq!(
+            b.selection.as_ref().unwrap().clone(),
+            3..3,
+            "cursor at anchor yields an empty selection"
+        );
+        // One more left: cross the anchor → leftward extension.
+        b.move_cursor(-1, true);
+        assert_eq!(
+            b.selection.as_ref().unwrap().clone(),
+            2..3,
+            "crossing anchor flips to leftward extension"
+        );
+    }
+
+    #[test]
+    fn non_extend_move_clears_anchor() {
+        let mut b = Buffer::from_str("hello world", None);
+        b.cursor = 5;
+        b.move_cursor(-1, true); // selection 4..5, anchor 5
+        assert!(b.selection_anchor.is_some());
+        b.move_cursor(-1, false); // plain move clears everything
+        assert!(b.selection.is_none());
+        assert!(b.selection_anchor.is_none());
+    }
+
+    #[test]
+    fn mouse_extend_both_directions() {
+        let mut b = Buffer::from_str("hello world", None);
+        b.cursor = 5;
+        // Simulate drag to byte 8 (right of cursor)
+        b.mouse_extend_to(8);
+        assert_eq!(b.selection.as_ref().unwrap().clone(), 5..8);
+        assert_eq!(b.cursor, 8);
+        // Drag back past the anchor to byte 2 (left of anchor 5)
+        b.mouse_extend_to(2);
+        assert_eq!(b.selection.as_ref().unwrap().clone(), 2..5);
+        assert_eq!(b.cursor, 2);
+    }
+
+    // --- horizontal auto-scroll (Fix: no way to scroll to off-right text) ---
+    #[test]
+    fn hscroll_follows_cursor_right_and_left() {
+        // A long line; narrow viewport (width 10). Moving the cursor past the
+        // right edge must shift the horizontal offset; moving it back must relax it.
+        let mut b = Buffer::from_str(&"x".repeat(80), None);
+        b.visible_width = 10;
+        b.scroll_offset = (0, 0);
+        // Move cursor to col 25 (well past width 10).
+        b.cursor = 25;
+        b.ensure_cursor_horizontally_visible();
+        // Cursor should now be inside [hscroll, hscroll+10).
+        let h = b.scroll_offset.1;
+        assert!(
+            h <= 25 && 25 < h + 10,
+            "cursor col 25 must be inside window, got hscroll={h}"
+        );
+        // Move cursor back to col 0 → window snaps to 0.
+        b.cursor = 0;
+        b.ensure_cursor_horizontally_visible();
+        assert_eq!(b.scroll_offset.1, 0, "cursor at col 0 snaps hscroll to 0");
     }
 }
