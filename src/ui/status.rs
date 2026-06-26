@@ -18,7 +18,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let modified = if buf.is_modified { "•" } else { "" };
     let lang = format!("{:?}", buf.language);
     let text = format!(
-        " {}{}  |  {}  |  Ln {}, Col {}  |  {} lines  |  Ctrl+Q quit  |  ? help ",
+        " {}{}  |  {}  |  Ln {}, Col {}  |  {} lines  |  Ctrl+Q quit  |  F1 help ",
         path,
         modified,
         lang,

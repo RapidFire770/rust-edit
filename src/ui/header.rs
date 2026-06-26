@@ -101,14 +101,14 @@ pub fn render_dropdown(
         "New (Ctrl+N)",
         "Open (Ctrl+O)",
         "Save (Ctrl+S)",
-        "Save As (Ctrl+Shift+S)",
+        "Save As (Ctrl+Alt+S)",
         "Close Tab (Ctrl+W)",
         "Quit (Ctrl+Q)",
     ];
     let tools_items = vec![
         "Find (Ctrl+F)",
         "Find & Replace (Ctrl+H)",
-        "Word Count (Shift+W)",
+        "Word Count (Alt+W)",
         "Format Document",
     ];
     let settings_items = vec!["Settings...", "Themes"];

@@ -27,7 +27,7 @@ Inspired by the UI mockup in `docs/ui-design-sample-2.jpg`.
 
 ## Build & Run
 
-> **Note on the `cargo` wrapper:** in some environments the system `cargo` proxy is
+> **Note on the** `cargo` **wrapper:** in some environments the system `cargo` proxy is
 > broken. If `cargo --version` fails with `unknown proxy name`, use the real
 > toolchain binary directly:
 >

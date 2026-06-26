@@ -131,14 +131,16 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             KeyCode::Char('q') => {
                                 app.request_quit();
                             }
+                            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
+                                // Ctrl+Alt+S: Save As. Placed before plain Ctrl+S so the
+                                // ALT variant doesn't fall through to save_current().
+                                app.show_file_dialog(true);
+                            }
                             KeyCode::Char('s') => {
                                 app.save_current();
                             }
                             KeyCode::Char('o') => {
                                 app.show_file_dialog(false);
-                            }
-                            KeyCode::Char('S') => {
-                                app.show_file_dialog(true);
                             }
                             KeyCode::Char('n') => app.new_tab(),
                             KeyCode::Char('w') => app.close_current_tab(),
@@ -252,13 +254,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             app.help_tab = popups::help::HelpTab::About;
                             continue;
                         }
-                        KeyCode::Char('?') => {
-                            app.show_help = !app.show_help;
-                        }
                         KeyCode::F(1) => {
                             app.show_help = !app.show_help;
                         }
-                        KeyCode::Char('W') => {
+                        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::ALT) => {
                             app.compute_and_show_word_count();
                         }
                         // Alt+letter for menus (opens dropdown)
