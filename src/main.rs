@@ -572,7 +572,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
 
     if app.show_file_dialog {
         let popup = popups::file_dialog::file_dialog_rect(term_area);
-        let btn_y = (popup.y + popup.height - 2) as usize;
+        let btn_y = popups::file_dialog::file_dialog_button_row(popup) as usize;
 
         if y as usize == btn_y {
             let btn_x_start = popup.x + 2;
@@ -598,7 +598,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
     if app.show_confirm {
         let msg = app.confirm_message.clone();
         let popup = popups::confirm::confirm_rect(term_area, &msg);
-        let btn_y = (popup.y + popup.height - 2) as usize;
+        let btn_y = popups::confirm::confirm_button_row(popup) as usize;
 
         if y as usize == btn_y {
             let btn_x_start = popup.x + 2;
@@ -712,7 +712,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                     && y >= popup.y as usize
                     && y < (popup.y + popup.height) as usize
                 {
-                    let btn_y = (popup.y + popup.height - 2) as usize;
+                    let btn_y = popups::confirm::confirm_button_row(popup) as usize;
                     if y == btn_y {
                         if let Some(hovered) = app.confirm_button_hover {
                             let confirmed = hovered == 0;
@@ -740,7 +740,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                     && y >= popup.y as usize
                     && y < (popup.y + popup.height) as usize
                 {
-                    let btn_y = (popup.y + popup.height - 2) as usize;
+                    let btn_y = popups::file_dialog::file_dialog_button_row(popup) as usize;
                     if y == btn_y {
                         if let Some(hovered) = app.file_dialog_button_hover {
                             app.close_file_dialog(hovered == 0);
