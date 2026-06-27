@@ -62,6 +62,12 @@ pub struct App {
     /// Keyboard selection state for buttons
     pub file_dialog_selected: usize,  // 0 = Save/Open, 1 = Cancel
     pub confirm_selected: usize,     // 0 = Confirm, 1 = Cancel
+    /// Button hover states (per popup)
+    pub file_dialog_button_hover: Option<usize>,  // 0 = Save/Open, 1 = Cancel
+    pub confirm_button_hover: Option<usize>,       // 0 = Confirm, 1 = Cancel
+    pub settings_theme_hover: Option<usize>,       // Which theme row hovered
+    /// Mouse position tracking
+    pub last_mouse_pos: Option<(u16, u16)>,
     /// Set to true to exit the main loop cleanly (used by menu Quit etc.)
     pub should_quit: bool,
     /// Last known height (in lines) of the editor viewport area. Used for PgUp/PgDn and better scrolling.
@@ -126,6 +132,10 @@ impl App {
             file_dialog_message: String::new(),
             file_dialog_selected: 0,
             confirm_selected: 0,
+            file_dialog_button_hover: None,
+            confirm_button_hover: None,
+            settings_theme_hover: None,
+            last_mouse_pos: None,
             should_quit: false,
             editor_visible_lines: std::cell::Cell::new(20),
             editor_visible_width: std::cell::Cell::new(80),

@@ -82,8 +82,9 @@ pretty_assertions = "1.4"
 Run `cargo fmt` and `cargo clippy -- -D warnings` on every change.
 
 ### Toolchain / cargo path (important for agents)
+**For use in most environments** : Cargo is located at `/usr/bin/cargo`.
 
-The system `cargo` proxy is broken in this environment (it fails with
+**For use in Zcode Appimage** : The system `cargo` proxy is broken in this environment (it fails with
 `error: unknown proxy name: 'zcode'`). Use the real toolchain binary instead:
 
 ```bash
@@ -92,7 +93,7 @@ CARGO="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo"
 ```
 
 Discover the path with `ls ~/.rustup/toolchains/*/bin/cargo`. It is also recorded
-in `docs/cargo toolchain location.md`. All `cargo` commands in this file assume
+in `docs/zcode cargo toolchain location.md`. All `cargo` commands in this file assume
 you've set this `CARGO` variable (or that the proxy is fixed).
 
 ---
