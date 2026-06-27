@@ -3,12 +3,11 @@
 #![allow(dead_code)]
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::theme::Theme;
+use crate::ui::button::ButtonGroup;
 
 /// Popup width scales with the terminal: wide enough to be useful, never
 /// overflowing. Kept in one place so the render and the mouse handler agree.
@@ -28,6 +27,7 @@ pub fn render(
     is_save: bool,
     path_input: &str,
     message: &str,
+    app: &crate::App,
 ) {
     let title = if is_save { "Save As" } else { "Open File" };
     let popup = file_dialog_rect(area);
@@ -37,49 +37,51 @@ pub fn render(
         .borders(Borders::ALL)
         .style(theme.editor_bg_style());
 
-    // The path field shows a window of the input that keeps the editing cursor
-    // (always at the end here) in view, so long paths no longer overflow off the
-    // right edge. Inner text width = popup width minus 2 borders minus "> " prefix.
     let field_w = (popup.width.saturating_sub(4)) as usize;
     let path_chars: Vec<char> = path_input.chars().collect();
     let visible_path: String = if path_chars.len() <= field_w {
         path_input.to_string()
     } else {
-        // Keep the right end (where the cursor is); prefix an ellipsis.
         let take = field_w.saturating_sub(1);
         let mut s: String = path_chars[path_chars.len() - take..].iter().collect();
         s.insert(0, '…');
         s
     };
 
-    let accent = Style::default()
-        .bg(Color::from(&theme.accent))
-        .fg(Color::from(&theme.header_fg))
-        .add_modifier(Modifier::BOLD);
-    let dim = Style::default().fg(Color::from(&theme.editor_fg));
+    let labels = if is_save {
+        ["[ Save ]", "[ Cancel ]"]
+    } else {
+        ["[ Open ]", "[ Cancel ]"]
+    };
+    let is_primary = [true, false];
 
-    // Clickable confirm/cancel buttons on the last inner row.
-    let confirm_label = if is_save { "[ Save ]" } else { "[ Open ]" };
-    let btn_line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(confirm_label, accent),
-        Span::raw("   "),
-        Span::styled("[ Cancel ]", dim),
-    ]);
+    let mut btn_group = ButtonGroup::new(labels, is_primary);
+
+    if app.file_dialog_selected == 0 {
+        btn_group.left();
+    } else {
+        btn_group.right();
+    }
+
+    if let Some(hover_idx) = app.file_dialog_button_hover {
+        btn_group.set_hover(Some(hover_idx));
+    }
+
+    let btn_line = btn_group.render(theme);
 
     let lines = vec![
-        Line::from("Path:"),
-        Line::from(format!("> {}", visible_path)),
-        Line::from(""),
-        Line::from(message),
-        Line::from(""),
-        Line::from(""),
+        ratatui::text::Line::from("Path:"),
+        ratatui::text::Line::from(format!("> {}", visible_path)),
+        ratatui::text::Line::from(""),
+        ratatui::text::Line::from(message),
+        ratatui::text::Line::from(""),
+        ratatui::text::Line::from(""),
         btn_line,
     ];
 
     let para = Paragraph::new(lines)
         .block(block)
-        .style(Style::default().fg(Color::from(&theme.editor_fg)));
+        .style(ratatui::style::Style::default().fg(ratatui::style::Color::from(&theme.editor_fg)));
 
     f.render_widget(ratatui::widgets::Clear, popup);
     f.render_widget(para, popup);

@@ -60,12 +60,12 @@ pub struct App {
     pub file_path_input: String,
     pub file_dialog_message: String,
     /// Keyboard selection state for buttons
-    pub file_dialog_selected: usize,  // 0 = Save/Open, 1 = Cancel
-    pub confirm_selected: usize,     // 0 = Confirm, 1 = Cancel
+    pub file_dialog_selected: usize, // 0 = Save/Open, 1 = Cancel
+    pub confirm_selected: usize, // 0 = Confirm, 1 = Cancel
     /// Button hover states (per popup)
-    pub file_dialog_button_hover: Option<usize>,  // 0 = Save/Open, 1 = Cancel
-    pub confirm_button_hover: Option<usize>,       // 0 = Confirm, 1 = Cancel
-    pub settings_theme_hover: Option<usize>,       // Which theme row hovered
+    pub file_dialog_button_hover: Option<usize>, // 0 = Save/Open, 1 = Cancel
+    pub confirm_button_hover: Option<usize>, // 0 = Confirm, 1 = Cancel
+    pub settings_theme_hover: Option<usize>, // Which theme row hovered
     /// Mouse position tracking
     pub last_mouse_pos: Option<(u16, u16)>,
     /// Set to true to exit the main loop cleanly (used by menu Quit etc.)

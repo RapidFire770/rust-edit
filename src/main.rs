@@ -236,7 +236,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             continue;
                         }
                         KeyCode::Enter if app.show_confirm => {
-                            let confirmed = app.confirm_selected == 0;  // 0 = Confirm
+                            let confirmed = app.confirm_selected == 0; // 0 = Confirm
                             let is_quit = app.confirm_action.as_deref() == Some("quit");
                             app.close_confirm(confirmed);
                             if confirmed && is_quit {
@@ -257,7 +257,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             continue;
                         }
                         KeyCode::Enter if app.show_file_dialog => {
-                            let confirmed = app.file_dialog_selected == 0;  // 0 = Save/Open
+                            let confirmed = app.file_dialog_selected == 0; // 0 = Save/Open
                             app.close_file_dialog(confirmed);
                             continue;
                         }
@@ -565,9 +565,107 @@ fn wheel_lines(event: &Event) -> Option<isize> {
     }
 }
 
+/// Update hover states for all active popups based on mouse position
+fn update_hover_states(x: u16, y: u16, app: &mut App) {
+    let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+    let term_area = Rect::new(0, 0, tw, th);
+
+    if app.show_file_dialog {
+        let popup = popups::file_dialog::file_dialog_rect(term_area);
+        let btn_y = (popup.y + popup.height - 2) as usize;
+
+        if y as usize == btn_y {
+            let btn_x_start = popup.x + 2;
+            let confirm_label = if app.file_dialog_is_save {
+                "[ Save ]"
+            } else {
+                "[ Open ]"
+            };
+            let confirm_len = confirm_label.chars().count() as u16;
+
+            if x >= btn_x_start && x < btn_x_start + confirm_len {
+                app.file_dialog_button_hover = Some(0);
+            } else if x >= btn_x_start + confirm_len + 3 && x < btn_x_start + confirm_len + 3 + 11 {
+                app.file_dialog_button_hover = Some(1);
+            } else {
+                app.file_dialog_button_hover = None;
+            }
+        } else {
+            app.file_dialog_button_hover = None;
+        }
+    }
+
+    if app.show_confirm {
+        let msg = app.confirm_message.clone();
+        let popup = popups::confirm::confirm_rect(term_area, &msg);
+        let btn_y = (popup.y + popup.height - 2) as usize;
+
+        if y as usize == btn_y {
+            let btn_x_start = popup.x + 2;
+            let confirm_len = "[ Y ] Confirm".chars().count() as u16;
+
+            if x >= btn_x_start && x < btn_x_start + confirm_len {
+                app.confirm_button_hover = Some(0);
+            } else if x >= btn_x_start + confirm_len + 3 && x < btn_x_start + confirm_len + 3 + 12 {
+                app.confirm_button_hover = Some(1);
+            } else {
+                app.confirm_button_hover = None;
+            }
+        } else {
+            app.confirm_button_hover = None;
+        }
+    }
+
+    if app.show_settings {
+        let w = 45u16;
+        let h = 14u16;
+        let px = (tw.saturating_sub(w)) / 2;
+        let py = (th.saturating_sub(h)) / 2;
+
+        if y >= py && y < py + h && x >= px && x < px + w {
+            let rel_y = (y - py) as usize;
+            if (3..6).contains(&rel_y) {
+                app.settings_theme_hover = Some(rel_y - 3);
+            } else {
+                app.settings_theme_hover = None;
+            }
+        } else {
+            app.settings_theme_hover = None;
+        }
+    }
+
+    if let Some(menu_name) = app.active_menu.as_deref() {
+        let dropdown = crate::ui::header::dropdown_rect(term_area, menu_name);
+
+        if x >= dropdown.x
+            && x < dropdown.x + dropdown.width
+            && y >= dropdown.y
+            && y < dropdown.y + dropdown.height
+        {
+            let inner_y = y - dropdown.y;
+            let item_idx = (inner_y as usize).saturating_sub(1);
+
+            let item_count = match menu_name {
+                "File" => 6,
+                "Tools" => 4,
+                "Settings" => 2,
+                _ => 0,
+            };
+
+            if item_idx < item_count {
+                app.menu_selected = item_idx;
+            }
+        }
+    }
+}
+
 fn handle_mouse(mouse: MouseEvent, app: &mut App) {
+    let (x, y) = (mouse.column, mouse.row);
+    app.last_mouse_pos = Some((x, y));
+
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
+            update_hover_states(x, y, app);
             let x = mouse.column as usize;
             let y = mouse.row as usize;
 
@@ -614,22 +712,15 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                     && y >= popup.y as usize
                     && y < (popup.y + popup.height) as usize
                 {
-                    // Buttons sit on the last inner row (popup.y + height - 2).
                     let btn_y = (popup.y + popup.height - 2) as usize;
                     if y == btn_y {
-                        // [ Y ] Confirm starts at inner col 2 (after "  "); [ N ] Cancel after it.
-                        let y_btn_start = (popup.x + 2) as usize;
-                        let y_btn_end = y_btn_start + "[ Y ] Confirm".chars().count();
-                        let n_btn_start = y_btn_end + 3;
-                        let n_btn_end = n_btn_start + "[ N ] Cancel".chars().count();
-                        if x >= y_btn_start && x < y_btn_end {
+                        if let Some(hovered) = app.confirm_button_hover {
+                            let confirmed = hovered == 0;
                             let is_quit = app.confirm_action.as_deref() == Some("quit");
-                            app.close_confirm(true);
-                            if is_quit {
+                            app.close_confirm(confirmed);
+                            if confirmed && is_quit {
                                 app.should_quit = true;
                             }
-                        } else if x >= n_btn_start && x < n_btn_end {
-                            app.close_confirm(false);
                         }
                     }
                     skip_editor = true;
@@ -651,19 +742,8 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 {
                     let btn_y = (popup.y + popup.height - 2) as usize;
                     if y == btn_y {
-                        let confirm_label = if app.file_dialog_is_save {
-                            "[ Save ]"
-                        } else {
-                            "[ Open ]"
-                        };
-                        let c_start = (popup.x + 2) as usize;
-                        let c_end = c_start + confirm_label.chars().count();
-                        let n_start = c_end + 3;
-                        let n_end = n_start + "[ Cancel ]".chars().count();
-                        if x >= c_start && x < c_end {
-                            app.close_file_dialog(true);
-                        } else if x >= n_start && x < n_end {
-                            app.close_file_dialog(false);
+                        if let Some(hovered) = app.file_dialog_button_hover {
+                            app.close_file_dialog(hovered == 0);
                         }
                     }
                     skip_editor = true;
@@ -776,6 +856,9 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
         // Mouse-wheel scrolling is coalesced and applied directly in run_app
         // (one net delta per burst → one redraw), so wheel events never reach
         // handle_mouse. These arms are intentionally absent there.
+        MouseEventKind::Moved => {
+            update_hover_states(x, y, app);
+        }
         MouseEventKind::Drag(MouseButton::Left) => {
             // Extend selection from a fixed anchor (set on the first drag move),
             // so dragging works in BOTH directions. The click handler seeds the
@@ -964,7 +1047,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 
     if app.show_confirm {
-        popups::confirm::render_confirm(f, area, app.current_theme(), &app.confirm_message);
+        popups::confirm::render_confirm(f, area, app.current_theme(), &app.confirm_message, app);
     }
 
     if app.show_file_dialog {
@@ -975,6 +1058,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             app.file_dialog_is_save,
             &app.file_path_input,
             &app.file_dialog_message,
+            app,
         );
     }
 }

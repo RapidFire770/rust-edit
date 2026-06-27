@@ -3,12 +3,11 @@
 #![allow(dead_code)]
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::theme::Theme;
+use crate::ui::button::ButtonGroup;
 
 /// Compute the centered popup rect for the given message, mirroring `render_confirm`.
 /// Exposed so the mouse handler can hit-test the buttons against the same geometry.
@@ -29,39 +28,41 @@ pub fn confirm_button_rects() -> &'static [(&'static str, bool); 2] {
     ]
 }
 
-pub fn render_confirm(f: &mut Frame, area: Rect, theme: &Theme, message: &str) {
+pub fn render_confirm(f: &mut Frame, area: Rect, theme: &Theme, message: &str, app: &crate::App) {
     let popup = confirm_rect(area, message);
     let block = Block::default()
         .title("Confirm")
         .borders(Borders::ALL)
         .style(theme.editor_bg_style());
 
-    let accent = Style::default()
-        .bg(Color::from(&theme.accent))
-        .fg(Color::from(&theme.header_fg))
-        .add_modifier(Modifier::BOLD);
-    let dim = Style::default().fg(Color::from(&theme.editor_fg));
+    let labels = ["[ Y ] Confirm", "[ N ] Cancel"];
+    let is_primary = [true, false];
 
-    // Center the two clickable buttons on the last inner row.
-    let btns = confirm_button_rects();
-    let btn_line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(btns[0].0, accent),
-        Span::raw("   "),
-        Span::styled(btns[1].0, dim),
-    ]);
+    let mut btn_group = ButtonGroup::new(labels, is_primary);
+
+    if app.confirm_selected == 0 {
+        btn_group.left();
+    } else {
+        btn_group.right();
+    }
+
+    if let Some(hover_idx) = app.confirm_button_hover {
+        btn_group.set_hover(Some(hover_idx));
+    }
+
+    let btn_line = btn_group.render(theme);
 
     let lines = vec![
-        Line::from(""),
-        Line::from(message),
-        Line::from(""),
-        Line::from(""),
+        ratatui::text::Line::from(""),
+        ratatui::text::Line::from(message),
+        ratatui::text::Line::from(""),
+        ratatui::text::Line::from(""),
         btn_line,
     ];
 
     let para = Paragraph::new(lines)
         .block(block)
-        .style(Style::default().fg(Color::from(&theme.editor_fg)));
+        .style(ratatui::style::Style::default().fg(ratatui::style::Color::from(&theme.editor_fg)));
 
     f.render_widget(ratatui::widgets::Clear, popup);
     f.render_widget(para, popup);

@@ -165,3 +165,60 @@ pub fn render_dropdown(
     f.render_widget(ratatui::widgets::Clear, dropdown_area);
     f.render_widget(list, dropdown_area);
 }
+
+/// Get the dropdown popup rect for hit-testing
+pub fn dropdown_rect(area: Rect, menu_name: &str) -> Rect {
+    let header_height = 3;
+    let h = match menu_name {
+        "File" => 8,
+        "Tools" => 6,
+        "Settings" => 4,
+        _ => 4,
+    };
+    let w = 26;
+    let y = header_height;
+
+    let x = match menu_name {
+        "File" => 0,
+        "Tools" => 7,
+        "Settings" => 15,
+        _ => 0,
+    };
+
+    Rect::new(x, y, w, h.min(area.height.saturating_sub(y)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dropdown_rect_file() {
+        let area = Rect::new(0, 0, 100, 50);
+        let rect = dropdown_rect(area, "File");
+        assert_eq!(rect.x, 0);
+        assert_eq!(rect.y, 3);
+        assert_eq!(rect.width, 26);
+        assert_eq!(rect.height, 8);
+    }
+
+    #[test]
+    fn test_dropdown_rect_tools() {
+        let area = Rect::new(0, 0, 100, 50);
+        let rect = dropdown_rect(area, "Tools");
+        assert_eq!(rect.x, 7);
+        assert_eq!(rect.y, 3);
+        assert_eq!(rect.width, 26);
+        assert_eq!(rect.height, 6);
+    }
+
+    #[test]
+    fn test_dropdown_rect_settings() {
+        let area = Rect::new(0, 0, 100, 50);
+        let rect = dropdown_rect(area, "Settings");
+        assert_eq!(rect.x, 15);
+        assert_eq!(rect.y, 3);
+        assert_eq!(rect.width, 26);
+        assert_eq!(rect.height, 4);
+    }
+}
