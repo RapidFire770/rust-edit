@@ -198,6 +198,26 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                     }
 
                     match key.code {
+                        // File dialog button navigation
+                        KeyCode::Left if app.show_file_dialog => {
+                            app.file_dialog_selected = 0;
+                            continue;
+                        }
+                        KeyCode::Right if app.show_file_dialog => {
+                            app.file_dialog_selected = 1;
+                            continue;
+                        }
+
+                        // Confirm dialog button navigation
+                        KeyCode::Left if app.show_confirm => {
+                            app.confirm_selected = 0;
+                            continue;
+                        }
+                        KeyCode::Right if app.show_confirm => {
+                            app.confirm_selected = 1;
+                            continue;
+                        }
+
                         // Modal popups take focus precedence over everything else
                         // (find nav, editor typing). When a confirm or file dialog is
                         // open, ONLY its keys are accepted — this fixes the bug where
@@ -216,7 +236,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             continue;
                         }
                         KeyCode::Enter if app.show_confirm => {
-                            app.close_confirm(true);
+                            let confirmed = app.confirm_selected == 0;  // 0 = Confirm
+                            let is_quit = app.confirm_action.as_deref() == Some("quit");
+                            app.close_confirm(confirmed);
+                            if confirmed && is_quit {
+                                app.should_quit = true;
+                            }
                             continue;
                         }
                         KeyCode::Esc if app.show_confirm => {
@@ -232,7 +257,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             continue;
                         }
                         KeyCode::Enter if app.show_file_dialog => {
-                            app.close_file_dialog(true);
+                            let confirmed = app.file_dialog_selected == 0;  // 0 = Save/Open
+                            app.close_file_dialog(confirmed);
                             continue;
                         }
                         KeyCode::Esc if app.show_file_dialog => {

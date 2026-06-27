@@ -59,6 +59,9 @@ pub struct App {
     pub file_dialog_is_save: bool,
     pub file_path_input: String,
     pub file_dialog_message: String,
+    /// Keyboard selection state for buttons
+    pub file_dialog_selected: usize,  // 0 = Save/Open, 1 = Cancel
+    pub confirm_selected: usize,     // 0 = Confirm, 1 = Cancel
     /// Set to true to exit the main loop cleanly (used by menu Quit etc.)
     pub should_quit: bool,
     /// Last known height (in lines) of the editor viewport area. Used for PgUp/PgDn and better scrolling.
@@ -121,6 +124,8 @@ impl App {
             file_dialog_is_save: false,
             file_path_input: String::new(),
             file_dialog_message: String::new(),
+            file_dialog_selected: 0,
+            confirm_selected: 0,
             should_quit: false,
             editor_visible_lines: std::cell::Cell::new(20),
             editor_visible_width: std::cell::Cell::new(80),
@@ -599,6 +604,7 @@ impl App {
     // --- Sprint 2 popup helpers ---
 
     pub fn show_confirm_dialog(&mut self, message: &str, action: &str) {
+        self.confirm_selected = 0;
         self.confirm_message = message.to_string();
         self.confirm_action = Some(action.to_string());
         self.show_confirm = true;
@@ -632,6 +638,7 @@ impl App {
     }
 
     pub fn show_file_dialog(&mut self, is_save: bool) {
+        self.file_dialog_selected = 0;
         self.show_file_dialog = true;
         self.file_dialog_is_save = is_save;
         self.file_path_input.clear();
