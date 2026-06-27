@@ -22,6 +22,7 @@ pub enum ButtonState {
 pub struct Button<'a> {
     pub label: &'a str,
     pub state: ButtonState,
+    #[allow(dead_code)]
     pub is_primary: bool,
 }
 
@@ -56,39 +57,20 @@ impl<'a> ButtonGroup<'a> {
 
     /// Render the button group as a single line with styled buttons
     pub fn render(&self, theme: &Theme) -> Line<'a> {
-        let accent_bold_bg = Style::default()
-            .bg(Color::from(&theme.accent))
-            .fg(Color::from(&theme.header_fg))
-            .add_modifier(Modifier::BOLD);
-
-        let accent_fg = Style::default()
+        let accent_bold = Style::default()
             .fg(Color::from(&theme.accent))
             .add_modifier(Modifier::BOLD);
-
-        let dim_bold_fg = Style::default()
-            .fg(Color::from(&theme.editor_fg))
-            .add_modifier(Modifier::BOLD);
-
-        let dim_underline = Style::default()
-            .fg(Color::from(&theme.editor_fg))
-            .add_modifier(Modifier::UNDERLINED);
 
         let dim = Style::default().fg(Color::from(&theme.editor_fg));
 
         let btn0_style = self.button_style(
             &self.buttons[0],
-            &accent_bold_bg,
-            &accent_fg,
-            &dim_bold_fg,
-            &dim_underline,
+            &accent_bold,
             &dim,
         );
         let btn1_style = self.button_style(
             &self.buttons[1],
-            &accent_bold_bg,
-            &accent_fg,
-            &dim_bold_fg,
-            &dim_underline,
+            &accent_bold,
             &dim,
         );
 
@@ -103,19 +85,12 @@ impl<'a> ButtonGroup<'a> {
     fn button_style<'b>(
         &self,
         button: &Button<'a>,
-        accent_bold_bg: &'b Style,
-        accent_fg: &'b Style,
-        dim_bold_fg: &'b Style,
-        dim_underline: &'b Style,
+        accent_bold: &'b Style,
         dim: &'b Style,
     ) -> Style {
-        match (button.state, button.is_primary) {
-            (ButtonState::Selected, true) => *accent_bold_bg,
-            (ButtonState::Selected, false) => *dim_bold_fg,
-            (ButtonState::Hovered, true) => *accent_fg,
-            (ButtonState::Hovered, false) => *dim_underline,
-            (ButtonState::Normal, true) => *accent_fg,
-            (ButtonState::Normal, false) => *dim,
+        match button.state {
+            ButtonState::Selected | ButtonState::Hovered => *accent_bold,
+            ButtonState::Normal => *dim,
         }
     }
 
