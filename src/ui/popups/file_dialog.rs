@@ -20,6 +20,13 @@ pub fn file_dialog_rect(area: Rect) -> Rect {
     Rect::new(x, y, w.min(area.width), h.min(area.height))
 }
 
+/// Returns the screen y-coordinate of the button row in the file dialog popup.
+/// The paragraph has 7 lines (indices 0–6), button is at index 6.
+/// The Block border adds +1 to the y offset.
+pub fn file_dialog_button_row(popup: Rect) -> u16 {
+    popup.y + 1 + 6
+}
+
 pub fn render(
     f: &mut Frame,
     area: Rect,
