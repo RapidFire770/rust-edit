@@ -63,16 +63,8 @@ impl<'a> ButtonGroup<'a> {
 
         let dim = Style::default().fg(Color::from(&theme.editor_fg));
 
-        let btn0_style = self.button_style(
-            &self.buttons[0],
-            &accent_bold,
-            &dim,
-        );
-        let btn1_style = self.button_style(
-            &self.buttons[1],
-            &accent_bold,
-            &dim,
-        );
+        let btn0_style = self.button_style(&self.buttons[0], &accent_bold, &dim);
+        let btn1_style = self.button_style(&self.buttons[1], &accent_bold, &dim);
 
         Line::from(vec![
             Span::raw("  "),

@@ -20,10 +20,10 @@ pub fn confirm_rect(area: Rect, message: &str) -> Rect {
 }
 
 /// Returns the screen y-coordinate of the button row in the confirm popup.
-/// The paragraph has 6 lines (indices 0–5), button is at index 5.
+/// The paragraph has 5 lines (indices 0–4), button is at index 4.
 /// The Block border adds +1 to the y offset.
 pub fn confirm_button_row(popup: Rect) -> u16 {
-    popup.y + 1 + 5
+    popup.y + 1 + 4
 }
 
 /// The two action buttons, as (label, byte-x-start, byte-x-end) in popup-local

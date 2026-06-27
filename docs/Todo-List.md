@@ -6,8 +6,8 @@
 - [x] Help menu shortcuts page should be scrollable as right now not all content fits on the screen.
 - [x] ctrl+shift+S to open save as dialog is not working.
 - [ ] In the Save As Dialog box the Save button and Cancel button cannot be selected with either the mouse or keyboard input.
-- [ ] Popup windows like the Open File Dialog or Save Dialog for the options save/open and cancel should be selectable with the left and right arrow keys and highlight whichever option is selected. User hits enter to accept that option.
-- [ ] When hovering over any option / button with the mouse in the drop down menus or pop up windows should highlight that button to give the user more feedback. In the drop downs when selecting with the keyboard the > moves beside the option that is selected, that should move beside the option the mouse is over.
+- [x] Popup windows like the Open File Dialog or Save Dialog for the options save/open and cancel should be selectable with the left and right arrow keys and highlight whichever option is selected. User hits enter to accept that option.
+- [x] When hovering over any option / button with the mouse in the drop down menus or pop up windows should highlight that button to give the user more feedback. In the drop downs when selecting with the keyboard the > moves beside the option that is selected, that should move beside the option the mouse is over.
 
 ---
 
