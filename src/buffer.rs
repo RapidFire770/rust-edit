@@ -201,6 +201,10 @@ impl Buffer {
         }
         let line_start_byte = self.rope.line_to_byte(visual_line);
         let line_str = self.line(visual_line);
+        // Exclude the trailing `\n`/`\r` from column counting (ropey keeps it in
+        // `.line()`). Without this, a click past the last real character would
+        // place the cursor on the newline byte instead of at end-of-content.
+        let line_str = line_str.trim_end_matches(['\n', '\r']);
         let mut byte = line_start_byte;
         for (chars, ch) in line_str.chars().enumerate() {
             if chars >= visual_col {
@@ -236,7 +240,11 @@ impl Buffer {
             return self.rope.len_bytes();
         }
         let line_start_byte = self.rope.line_to_byte(visual_line);
+        // `rope.line()` includes the trailing `\n` (and a stray `\r` on CRLF
+        // files). Exclude the terminator from column counting so a click past the
+        // last real char lands at end-of-content, not on the newline byte.
         let line_str = self.line(visual_line);
+        let line_str = line_str.trim_end_matches(['\n', '\r']);
         let mut byte = line_start_byte;
         for (chars, ch) in line_str.chars().enumerate() {
             if chars >= visual_col {
@@ -305,6 +313,26 @@ impl Buffer {
         }
     }
 
+    /// Insert text at a BYTE offset. Ropey's `Rope::insert` is char-indexed, but
+    /// every position in this crate (cursor, selection, computed offsets) is a
+    /// byte offset — feeding bytes directly to `insert` lands edits at the wrong
+    /// (later) position for multi-byte UTF-8 and panics once `byte > len_chars`.
+    /// This helper bridges that. `byte_pos` is clamped to the rope's byte length.
+    pub(crate) fn insert_at_byte(&mut self, byte_pos: usize, text: &str) {
+        let p = byte_pos.min(self.rope.len_bytes());
+        self.rope.insert(self.rope.byte_to_char(p), text);
+    }
+
+    /// Remove the byte range `[byte_start, byte_end)`. Bridges the byte→char
+    /// mismatch with `Rope::remove` (which is char-indexed). Inputs clamped.
+    pub(crate) fn remove_byte_range(&mut self, byte_start: usize, byte_end: usize) {
+        let len = self.rope.len_bytes();
+        let s = byte_start.min(len);
+        let e = byte_end.min(len);
+        self.rope
+            .remove(self.rope.byte_to_char(s)..self.rope.byte_to_char(e));
+    }
+
     /// Insert text at cursor. Clears selection if present (replace selection behavior later).
     pub fn insert(&mut self, text: &str) {
         self.push_undo();
@@ -314,12 +342,12 @@ impl Buffer {
             // Replace selection with text
             let start = sel.start.min(self.rope.len_bytes());
             let end = sel.end.min(self.rope.len_bytes());
-            self.rope.remove(start..end);
-            self.rope.insert(start, text);
+            self.remove_byte_range(start, end);
+            self.insert_at_byte(start, text);
             self.cursor = start + text.len();
         } else {
             let pos = self.cursor.min(self.rope.len_bytes());
-            self.rope.insert(pos, text);
+            self.insert_at_byte(pos, text);
             self.cursor = pos + text.len();
         }
         self.is_modified = true;
@@ -340,18 +368,19 @@ impl Buffer {
         if let Some(sel) = self.selection.take() {
             let start = sel.start.min(self.rope.len_bytes());
             let end = sel.end.min(self.rope.len_bytes());
-            self.rope.remove(start..end);
+            self.remove_byte_range(start, end);
             self.cursor = start;
         } else if self.cursor > 0 {
             let pos = self.cursor;
             // Delete previous char (handle multi-byte)
             let prev_char_idx = self.rope.byte_to_char(pos) - 1;
             let remove_start = self.rope.char_to_byte(prev_char_idx);
-            self.rope.remove(remove_start..pos);
+            self.remove_byte_range(remove_start, pos);
             self.cursor = remove_start;
         }
         self.is_modified = true;
         self.bump_generation();
+        self.adjust_scroll();
     }
 
     /// Delete the char after cursor (delete key).
@@ -362,7 +391,7 @@ impl Buffer {
         if let Some(sel) = self.selection.take() {
             let start = sel.start.min(self.rope.len_bytes());
             let end = sel.end.min(self.rope.len_bytes());
-            self.rope.remove(start..end);
+            self.remove_byte_range(start, end);
             self.cursor = start;
         } else if self.cursor < self.rope.len_bytes() {
             let pos = self.cursor;
@@ -370,11 +399,12 @@ impl Buffer {
             let ch_idx = self.rope.byte_to_char(pos);
             if ch_idx < self.rope.len_chars() {
                 let next_byte = self.rope.char_to_byte(ch_idx + 1);
-                self.rope.remove(pos..next_byte);
+                self.remove_byte_range(pos, next_byte);
             }
         }
         self.is_modified = true;
         self.bump_generation();
+        self.adjust_scroll();
     }
 
     /// Extend the selection to `new_cursor`, keeping a stable anchor. If there is
@@ -501,6 +531,10 @@ impl Buffer {
         }
         let line_start_byte = self.rope.line_to_byte(target_row);
         let line_str = self.line(target_row);
+        // Exclude the trailing `\n`/`\r` (kept by ropey's `.line()`) from the
+        // column clamp. Otherwise a preferred column >= real width would clamp to
+        // the newline's position and land the cursor ON the terminator byte.
+        let line_str = line_str.trim_end_matches(['\n', '\r']);
         let target_col = preferred_col.min(line_str.chars().count());
         let mut byte_off = line_start_byte;
         for (i, c) in line_str.chars().enumerate() {
@@ -637,54 +671,80 @@ impl Buffer {
         if let Some(sel) = self.selection.take() {
             let start = sel.start.min(self.rope.len_bytes());
             let end = sel.end.min(self.rope.len_bytes());
-            self.rope.remove(start..end);
-            self.rope.insert(start, &insert_text);
+            self.remove_byte_range(start, end);
+            self.insert_at_byte(start, &insert_text);
             self.cursor = start + insert_text.len();
         } else {
-            self.rope.insert(pos, &insert_text);
+            self.insert_at_byte(pos, &insert_text);
             self.cursor = pos + insert_text.len();
         }
         self.is_modified = true;
         self.bump_generation();
+        self.adjust_scroll();
     }
 
     /// Indent current line or selection by one level (4 spaces).
     pub fn indent(&mut self) {
         self.push_undo();
         // Simplified: indent whole lines touched by selection or cursor line
+        let cursor_line = if let Some(sel) = &self.selection {
+            self.rope.byte_to_line(sel.start)
+        } else {
+            self.rope.byte_to_line(self.cursor)
+        };
         let (start_line, end_line) = if let Some(sel) = &self.selection {
             (
                 self.rope.byte_to_line(sel.start),
                 self.rope.byte_to_line(sel.end.saturating_sub(1)),
             )
         } else {
-            let l = self.rope.byte_to_line(self.cursor);
-            (l, l)
+            (cursor_line, cursor_line)
         };
+
+        let cursor_byte = self.cursor;
+        let cursor_line_start = self.rope.line_to_byte(cursor_line);
 
         for l in (start_line..=end_line).rev() {
             let line_start = self.rope.line_to_byte(l);
-            self.rope.insert(line_start, "    ");
+            self.insert_at_byte(line_start, "    ");
         }
 
-        // Adjust cursor/selection roughly
-        self.cursor += 4;
+        // Adjust cursor position: only move if cursor is on an indented line and after the insertion point
+        if cursor_line >= start_line && cursor_line <= end_line {
+            if cursor_byte > cursor_line_start {
+                // Cursor is after the line start, so it moved right by 4 chars per indented line
+                let num_indented = (end_line - start_line + 1) as isize;
+                self.cursor = cursor_byte + (4 * num_indented) as usize;
+            } else {
+                // Cursor is at or before line start (e.g., at beginning of line)
+                // It should stay at the new line start position
+                let num_indented = (end_line - start_line + 1) as isize;
+                self.cursor = cursor_line_start + (4 * num_indented) as usize;
+            }
+        }
         self.is_modified = true;
         self.bump_generation();
+        self.adjust_scroll();
     }
 
     /// Dedent current line or selection (remove up to 4 leading spaces).
     pub fn dedent(&mut self) {
         self.push_undo();
+        let cursor_line = if let Some(sel) = &self.selection {
+            self.rope.byte_to_line(sel.start)
+        } else {
+            self.rope.byte_to_line(self.cursor)
+        };
         let (start_line, end_line) = if let Some(sel) = &self.selection {
             (
                 self.rope.byte_to_line(sel.start),
                 self.rope.byte_to_line(sel.end.saturating_sub(1)),
             )
         } else {
-            let l = self.rope.byte_to_line(self.cursor);
-            (l, l)
+            (cursor_line, cursor_line)
         };
+
+        let cursor_byte = self.cursor;
 
         for l in (start_line..=end_line).rev() {
             let line_start = self.rope.line_to_byte(l);
@@ -692,11 +752,21 @@ impl Buffer {
             let leading = line_text.chars().take_while(|c| *c == ' ').count().min(4);
             if leading > 0 {
                 let remove_end = line_start + leading;
-                self.rope.remove(line_start..remove_end);
+                self.remove_byte_range(line_start, remove_end);
+                // Adjust cursor if it's on this line and after the removed spaces
+                if cursor_line == l && cursor_byte > line_start {
+                    if cursor_byte >= remove_end {
+                        self.cursor = cursor_byte - leading;
+                    } else {
+                        // Cursor is in the middle of the spaces being removed
+                        self.cursor = line_start;
+                    }
+                }
             }
         }
         self.is_modified = true;
         self.bump_generation();
+        self.adjust_scroll();
     }
 
     /// Return full content as String (for save).
@@ -749,6 +819,140 @@ mod tests {
         b.cursor = 1; // between b|c
         b.delete();
         assert_eq!(b.text(), "b");
+    }
+
+    /// Regression (root cause of the loaded-file cursor desync + paste panic):
+    /// ropey's `Rope::insert`/`remove`/`slice` are CHAR-indexed, but this crate
+    /// stores `cursor`/`selection` as BYTE offsets. For multi-byte UTF-8 the byte
+    /// offset exceeds the char index, so the edit lands at the wrong (later)
+    /// position or panics (`char range out of bounds`). These tests hold the
+    /// byte→char bridging honest. Content uses '—' (U+2014, 3 bytes) and '€'
+    /// (U+20AC, 3 bytes).
+    #[test]
+    fn insert_after_multibyte_lands_at_cursor() {
+        // bytes: a(1) —(3) b(1) = 5 bytes, 3 chars. cursor between '—' and 'b'.
+        let mut b = Buffer::from_str("a—b", None);
+        b.cursor = 4; // byte offset right after '—' (a=0, —=1..4, b=4)
+        b.insert("X");
+        assert_eq!(b.text(), "a—Xb");
+        // cursor should be just after the inserted X (byte 5)
+        assert_eq!(b.cursor, 5);
+        assert_eq!(b.cursor_position(), (0, 3));
+    }
+
+    #[test]
+    fn backspace_after_multibyte_deletes_the_multibyte_char() {
+        let mut b = Buffer::from_str("a—b", None);
+        b.cursor = 4; // between '—' and 'b'
+        b.backspace();
+        // backspace must delete the '—' (the char before the cursor), NOT 'b'.
+        assert_eq!(b.text(), "ab");
+        assert_eq!(b.cursor, 1);
+    }
+
+    #[test]
+    fn delete_before_multibyte_deletes_the_multibyte_char() {
+        let mut b = Buffer::from_str("a—b", None);
+        b.cursor = 1; // right after 'a', before '—'
+        b.delete();
+        // delete must remove the '—' (char after cursor), not 'b' or part of it.
+        assert_eq!(b.text(), "ab");
+        assert_eq!(b.cursor, 1);
+    }
+
+    #[test]
+    fn insert_selection_replace_across_multibyte() {
+        // Select the '—' (bytes 1..4) and replace with "==". Exercises
+        // remove(byte_range)+insert on multi-byte (the panic-prone path).
+        let mut b = Buffer::from_str("a—b", None);
+        b.selection = Some(1..4);
+        b.cursor = 4;
+        b.insert("==");
+        assert_eq!(b.text(), "a==b");
+        assert_eq!(b.cursor, 3); // 1 + "==" (2 bytes)
+    }
+
+    #[test]
+    fn paste_large_multibyte_no_panic() {
+        // Reproduces the user's crash: a byte offset that exceeds len_chars().
+        // Build content where byte_len > char_len by a lot, then insert at EOF
+        // (byte offset == len_bytes > len_chars) and at a valid mid-buffer
+        // boundary. Must not panic and must preserve content.
+        let unit = "a—b€c\n"; // 3 multi-byte chars per line
+        let big: String = std::iter::repeat_n(unit, 500).collect();
+        let mut b = Buffer::from_str(&big, None);
+        let eof = b.rope.len_bytes();
+        b.cursor = eof;
+        b.insert("TAIL—€");
+        assert!(b.text().ends_with("TAIL—€"));
+
+        // Insert mid-buffer at a byte offset that is past len_chars() but on a
+        // valid char boundary: byte 1 = start of the first '—' (a=0, —=1..4).
+        b.cursor = 1;
+        b.insert("Z");
+        let txt = b.text();
+        assert!(
+            txt.starts_with("aZ—b€c\n"),
+            "got: {}",
+            &txt[..txt.len().min(40)]
+        );
+    }
+
+    #[test]
+    fn byte_slice_selection_extracts_correct_multibyte_substring() {
+        // rope.slice() is char-indexed; selecting by byte range must use
+        // byte_slice or the wrong substring is returned for multi-byte text.
+        let b = Buffer::from_str("a—b€c", None);
+        // Select bytes 1..4 which is exactly the '—'
+        let sub = b.rope.byte_slice(1..4).to_string();
+        assert_eq!(sub, "—");
+        // Select bytes 4..7 which is exactly the '€' (b is 1 byte at 4? no: a=0,—=1..4,b=4,€=5..8)
+        // recompute: a(0) —(1..4) b(4) €(5..8) c(8)
+        let sub2 = b.rope.byte_slice(5..8).to_string();
+        assert_eq!(sub2, "€");
+    }
+
+    /// Regression: on a multi-line buffer (the case that reproduces the reported
+    /// editing desync), `cursor_position()` must report exactly the visual
+    /// (row,col) for every interesting offset, and `byte_at_visual` must round-trip
+    /// it. Guards against off-by-one at line starts, on the `\n`, and at EOF.
+    #[test]
+    fn cursor_position_roundtrip_multiline() {
+        // "abc\ndef\n" -> bytes: 0..4 line0 (abc + \n@3), 4..8 line1 (def + \n@7)
+        let mut b = Buffer::from_str("abc\ndef\n", None);
+        let n = b.rope.len_bytes();
+
+        // Start of line 0.
+        b.cursor = 0;
+        assert_eq!(b.cursor_position(), (0, 0));
+
+        // End of line 0 content (just before its newline).
+        b.cursor = 3;
+        assert_eq!(b.cursor_position(), (0, 3));
+
+        // On the newline of line 0 -> still reported as end of line 0.
+        b.cursor = b.rope.line_to_byte(1);
+        // line_to_byte(1) points AT the first byte of line 1, not the newline.
+        assert_eq!(b.cursor_position(), (1, 0));
+
+        // Round-trip via byte_at_visual for clicks at row1 col0 and col2.
+        assert_eq!(b.byte_at_visual(1, 0), b.rope.line_to_byte(1));
+        assert_eq!(b.byte_at_visual(1, 2), b.rope.line_to_byte(1) + 2);
+
+        // EOF.
+        b.cursor = n;
+        let (r, _c) = b.cursor_position();
+        assert!(
+            r == 2 || r == 1,
+            "EOF row should not overflow past the rendered line range, got {r}"
+        );
+
+        // move_to_line must land on the start of the requested line, not past it.
+        b.cursor = 0;
+        b.move_lines_down(1, false);
+        assert_eq!(b.cursor_position().0, 1);
+        // Column preserved at 0.
+        assert_eq!(b.cursor_position().1, 0);
     }
 
     #[test]

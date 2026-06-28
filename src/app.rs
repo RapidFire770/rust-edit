@@ -256,7 +256,7 @@ impl App {
         let text = if let Some(sel) = &buf.selection {
             let start = sel.start.min(buf.rope.len_bytes());
             let end = sel.end.min(buf.rope.len_bytes());
-            buf.rope.slice(start..end).to_string()
+            buf.rope.byte_slice(start..end).to_string()
         } else {
             // copy current line as convenience
             let (row, _) = buf.cursor_position();
@@ -283,7 +283,7 @@ impl App {
             if let Some(sel) = &self.active_buffer().selection {
                 let start = sel.start.min(self.active_buffer().rope.len_bytes());
                 let end = sel.end.min(self.active_buffer().rope.len_bytes());
-                fs.query = self.active_buffer().rope.slice(start..end).to_string();
+                fs.query = self.active_buffer().rope.byte_slice(start..end).to_string();
             }
             self.find_state = Some(fs);
             self.update_find_matches();
@@ -513,7 +513,7 @@ impl App {
         if let Some(sel) = &buf.selection {
             let s = sel.start.min(buf.rope.len_bytes());
             let e = sel.end.min(buf.rope.len_bytes());
-            let sub = buf.rope.slice(s..e).to_string();
+            let sub = buf.rope.byte_slice(s..e).to_string();
             let sw = sub.split_whitespace().count();
             let sc = sub.chars().count();
             info.push_str(&format!(
@@ -713,16 +713,16 @@ impl App {
         if let Some(sel) = &buf.selection {
             let start = sel.start.min(buf.rope.len_bytes());
             let end = sel.end.min(buf.rope.len_bytes());
-            let selected = buf.rope.slice(start..end).to_string();
+            let selected = buf.rope.byte_slice(start..end).to_string();
             let wrapped = format!("{}{}{}", before, selected, after);
-            buf.rope.remove(start..end);
-            buf.rope.insert(start, &wrapped);
+            buf.remove_byte_range(start, end);
+            buf.insert_at_byte(start, &wrapped);
             buf.cursor = start + wrapped.len();
             buf.selection = Some(start..start + wrapped.len());
             buf.is_modified = true;
         } else {
-            buf.rope.insert(buf.cursor, before);
-            buf.rope.insert(buf.cursor + before.len(), after);
+            buf.insert_at_byte(buf.cursor, before);
+            buf.insert_at_byte(buf.cursor + before.len(), after);
             buf.cursor += before.len();
             buf.is_modified = true;
         }

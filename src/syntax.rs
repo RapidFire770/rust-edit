@@ -19,8 +19,13 @@ pub struct SyntaxHighlighter {
 /// Convert one line's syntect `(Style, &str)` ranges into ratatui `Span`s.
 /// Foreground color + font modifiers only; the editor background is supplied by
 /// the Paragraph/Theme, so we deliberately drop syntect's per-range background.
+///
+/// Defense in depth: we also strip any trailing `\n`/`\r` off the final emitted
+/// span. The highlighter normalizes its input, but if a future caller ever feeds
+/// syntect text that ends in a newline we must not let that leak into the render
+/// loop (it desyncs the visible cursor from the logical buffer cursor).
 fn ranges_to_spans(ranges: Vec<(syntect::highlighting::Style, &str)>) -> Vec<Span<'static>> {
-    ranges
+    let mut spans: Vec<Span<'static>> = ranges
         .into_iter()
         .map(|(style, text)| {
             let mut rat_style = Style::default().fg(Color::Rgb(
@@ -39,7 +44,17 @@ fn ranges_to_spans(ranges: Vec<(syntect::highlighting::Style, &str)>) -> Vec<Spa
             }
             Span::styled(text.to_string(), rat_style)
         })
-        .collect()
+        .collect();
+
+    // Trim trailing newlines off the last span only (they can only appear at the
+    // end of the line's text). `Span::content` is a `Cow<'static, str>`.
+    if let Some(last) = spans.last_mut() {
+        let trimmed = last.content.trim_end_matches(['\n', '\r']);
+        if trimmed.len() != last.content.len() {
+            last.content = trimmed.to_string().into();
+        }
+    }
+    spans
 }
 
 impl Default for SyntaxHighlighter {
@@ -112,12 +127,19 @@ impl SyntaxHighlighter {
     ) -> Vec<Vec<Span<'static>>> {
         let mut out = Vec::new();
         for line in lines {
-            let line = line.as_ref();
-            // highlight_line expects trailing \n for accuracy; we append one.
-            let highlighted_line = format!("{}\n", line);
+            // ropey's `.line(idx)` INCLUDES the trailing terminator (`\n`, and on
+            // CRLF files a stray `\r` precedes it). Callers (the cache path) feed
+            // us those raw lines. We must normalize to the bare content first,
+            // then append exactly one `\n`, so (a) syntect keeps getting the
+            // terminator it expects for correct multi-line state, and (b) the
+            // spans we emit never carry a newline into the editor render loop —
+            // which previously desynced the visible cursor from the logical one
+            // on multi-line/highlighted buffers.
+            let stripped = line.as_ref().trim_end_matches(['\n', '\r']);
+            let highlighted_line = format!("{}\n", stripped);
             let ranges = highlighter
                 .highlight_line(&highlighted_line, &self.syntax_set)
-                .unwrap_or_else(|_| vec![(syntect::highlighting::Style::default(), line)]);
+                .unwrap_or_else(|_| vec![(syntect::highlighting::Style::default(), stripped)]);
 
             out.push(ranges_to_spans(ranges));
         }
@@ -224,5 +246,30 @@ mod tests {
             mid_fg, isolated_mid_fg,
             "isolated highlighting would drop block-comment state; window must not"
         );
+    }
+
+    /// Regression: rendered spans must NEVER contain `\n` or `\r`. The highlight
+    /// pipeline historically fed syntect a line that already carried a trailing
+    /// newline (ropey `.line()` includes it) and then appended another, leaking
+    /// newline bytes into the emitted `Span` text. That shifted rendered content
+    /// relative to the logical cursor on multi-line files (backspace deleting the
+    /// wrong character, typing landing ahead of the cursor, blank-line spill-over).
+    #[test]
+    fn rendered_spans_contain_no_newlines() {
+        let sh = SyntaxHighlighter::new();
+        // Simulate the cache path: lines already include trailing newlines (as
+        // `buf.line(i)` / `rope.line(i).to_string()` does for non-final lines).
+        let lines = ["fn main() {\n", "    let x = 1;\n", "}\n"];
+        let highlighted = sh.highlight_window(lines.into_iter(), Language::Rust);
+        assert_eq!(highlighted.len(), 3);
+        for (i, line_spans) in highlighted.iter().enumerate() {
+            let joined: String = line_spans.iter().map(|s| &s.content[..]).collect();
+            assert!(
+                !joined.contains('\n') && !joined.contains('\r'),
+                "line {} spans contain a newline/CRLF: {:?}",
+                i,
+                joined
+            );
+        }
     }
 }

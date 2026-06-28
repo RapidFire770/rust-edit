@@ -62,7 +62,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let hscroll = buf.scroll_offset.1;
     for (i, hline) in highlighted.iter().enumerate() {
         let line_idx = start_line + i;
-        let gutter = format!("{:>4}│ ", line_idx + 1);
+        // Gutter MUST be pure ASCII: `│` (U+2502) is East-Asian-Width Ambiguous
+        // and renders as 2 cells in some terminals/fonts, which shifts content
+        // right by 1 vs GUTTER_WIDTH and desyncs the hardware cursor. AGENTS §1.
+        let gutter = format!("{:>4}| ", line_idx + 1);
         let mut spans = vec![Span::styled(gutter, theme.line_number_style())];
 
         let line_start_byte = buf.rope.line_to_byte(line_idx);
@@ -146,7 +149,8 @@ pub fn render_with_highlights(
     let mut lines: Vec<Line> = Vec::new();
     for (i, hline) in highlighted.iter().enumerate() {
         let line_idx = start_line + i;
-        let gutter = format!("{:>4}│ ", line_idx + 1);
+        // ASCII gutter — see note above (U+2502 width ambiguity shifts cursor).
+        let gutter = format!("{:>4}| ", line_idx + 1);
         let mut spans = vec![Span::styled(gutter, theme.line_number_style())];
         let is_cursor = line_idx == cursor_line;
         let mut char_count = 0usize;
