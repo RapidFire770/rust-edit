@@ -5,23 +5,23 @@ edition = "2021"
 description = "Feature-rich terminal text & code editor (TUI)"
 authors = ["josh"]
 license = "MIT"
-repository = "https://github.com/example/rust-edit"
+repository = "https://github.com/RapidFire770/rust-edit"
 readme = "README.md"
 keywords = ["tui", "editor", "terminal", "ratatui", "text-editor"]
 categories = ["command-line-utilities", "text-editors"]
 
 [dependencies]
 ratatui = "0.30.2"
-crossterm = "0.28"
+crossterm = "0.29"
 ropey = "1.6.1"
 syntect = "5.3.0"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
-directories = "5.0"
-arboard = "3.4"
+toml = "1.1.2"
+directories = "6.0.0"
+arboard = "3.6.1"
 anyhow = "1.0"
-regex = "1.10"
+regex = "1.12.4"
 
 [dev-dependencies]
 pretty_assertions = "1.4"
