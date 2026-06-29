@@ -222,7 +222,12 @@ impl Buffer {
     pub fn scroll(&mut self, delta: isize) {
         let current = self.scroll_offset.0 as isize;
         let new_scroll = (current + delta).max(0) as usize;
-        let max_scroll = self.line_count().saturating_sub(1);
+        // Clamp to the last position where content still fills the viewport.
+        // Using `visible_lines` (synced each frame in run_app) keeps this
+        // consistent with `clamp_scroll`; the previous `line_count - 1` clamp
+        // let the wheel push content entirely off-screen, leaving blank rows
+        // and desyncing the scrollbar thumb from the real content range.
+        let max_scroll = self.line_count().saturating_sub(self.visible_lines.max(1));
         self.scroll_offset.0 = new_scroll.min(max_scroll);
     }
 

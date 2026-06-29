@@ -122,10 +122,24 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         .block(Block::default().borders(Borders::NONE));
     f.render_widget(editor, content_area);
 
-    // Render scrollbar (vertical)
+    // Render scrollbar (vertical).
+    //
+    // Calibration: ratatui treats `position` as ranging `[0, content_length-1]`,
+    // but the editor's real max scroll offset is `line_count - visible_lines`.
+    // Passing `content_length = line_count` therefore leaves the thumb stranded
+    // in the middle of the track when the last content line reaches the viewport
+    // bottom. We instead derive `content_length` so that `content_length - 1`
+    // equals our max scroll offset, making the thumb span the full track over
+    // the genuine scrollable range, and set `viewport_content_length` explicitly
+    // so the thumb size reflects the viewport/content ratio (rather than relying
+    // on the widget-area-height fallback, which is fragile).
     let total_lines = buf.line_count();
+    let vis = (scrollbar_area.height as usize).max(1);
     let scroll_pos = buf.scroll_offset.0;
-    let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll_pos);
+    let content_length = total_lines.saturating_sub(vis).saturating_add(1);
+    let mut scrollbar_state = ScrollbarState::new(content_length)
+        .position(scroll_pos)
+        .viewport_content_length(vis);
     let scrollbar = Scrollbar::default()
         .orientation(ScrollbarOrientation::VerticalRight)
         .begin_symbol(Some("↑"))
