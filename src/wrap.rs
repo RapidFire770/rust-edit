@@ -98,6 +98,117 @@ fn wrap_one_line(
     breaks
 }
 
+/// Screen row (relative to the layout window's first row, 0-indexed) containing
+/// `byte`. `byte` is rope-relative (absolute). Clamps to
+/// `[0, total_screen_rows - 1]` when out of range.
+pub fn screen_row_of_byte(
+    layout: &WrapLayout,
+    rope: &Rope,
+    start_line: usize,
+    byte: usize,
+) -> usize {
+    if layout.total_screen_rows == 0 {
+        return 0;
+    }
+    let mut row = 0usize;
+    for (i, line_breaks) in layout.breaks.iter().enumerate() {
+        let lidx = start_line + i;
+        if lidx >= rope.len_lines() {
+            break;
+        }
+        let line_end = if lidx + 1 < rope.len_lines() {
+            rope.line_to_byte(lidx + 1)
+        } else {
+            rope.len_bytes()
+        };
+
+        if byte < line_end {
+            // Byte is within this logical line. Find its sub-row.
+            let mut sub = 0usize;
+            for &brk in line_breaks.iter() {
+                if byte < brk {
+                    break;
+                }
+                sub += 1;
+            }
+            return row + sub;
+        }
+        // Byte is past this line — advance by this line's row count.
+        row += line_breaks.len() + 1;
+    }
+    // Byte is past the window end.
+    layout.total_screen_rows.saturating_sub(1)
+}
+
+/// Byte offset of the cursor placed at (`screen_row`, `col`) within the layout's
+/// window. `screen_row` is relative to window start; `col` is display columns
+/// from the start of that sub-row (already gutter-adjusted; wrap has no hscroll).
+/// Clamps `col` to the sub-row's actual width.
+pub fn byte_of_screen_row(
+    layout: &WrapLayout,
+    rope: &Rope,
+    start_line: usize,
+    screen_row: usize,
+    col: usize,
+) -> usize {
+    let mut row_remaining = screen_row.min(layout.total_screen_rows.saturating_sub(1));
+    for (i, line_breaks) in layout.breaks.iter().enumerate() {
+        let lidx = start_line + i;
+        if lidx >= rope.len_lines() {
+            return rope.len_bytes();
+        }
+        let rows_in_line = line_breaks.len() + 1;
+        if row_remaining >= rows_in_line {
+            row_remaining -= rows_in_line;
+            continue;
+        }
+        let line_start = rope.line_to_byte(lidx);
+        let line_end = if lidx + 1 < rope.len_lines() {
+            rope.line_to_byte(lidx + 1)
+        } else {
+            rope.len_bytes()
+        };
+        // Per Task 1's convention: a break byte is the first byte of the NEW
+        // sub-row, so the previous break IS the start of this sub-row.
+        let sub_row_start_byte = if row_remaining == 0 {
+            line_start
+        } else {
+            line_breaks[row_remaining - 1]
+        };
+        let sub_row_end_byte = if row_remaining < line_breaks.len() {
+            line_breaks[row_remaining]
+        } else {
+            line_end
+        };
+        return walk_sub_row_to_col(rope, sub_row_start_byte, sub_row_end_byte, col);
+    }
+    rope.len_bytes()
+}
+
+/// Walk the sub-row `[start_byte, end_byte)`, advancing one display column per
+/// non-newline char (mirrors `wrap_one_line`'s column accounting) until `col`
+/// columns have been consumed. Returns the byte offset at that column, clamped
+/// to the sub-row's end (i.e. the byte offset just past the last visible char).
+fn walk_sub_row_to_col(rope: &Rope, start_byte: usize, end_byte: usize, col: usize) -> usize {
+    if start_byte >= end_byte {
+        return start_byte;
+    }
+    let slice = rope.byte_slice(start_byte..end_byte);
+    let mut byte = start_byte;
+    for (cur_col, ch) in slice.chars().enumerate() {
+        if cur_col >= col {
+            break;
+        }
+        // Newlines/CR do not occupy a display column in a wrapped row (see
+        // `wrap_one_line`); they terminate the visible content of the sub-row.
+        if ch == '\n' || ch == '\r' {
+            break;
+        }
+        byte += ch.len_utf8();
+    }
+    byte
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +383,56 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn screen_row_of_byte_basic() {
+        // "abcdef\n" width 3 → breaks [3]. byte 0,1,2 → row 0; byte 3,4,5 → row 1.
+        let rope = Rope::from_str("abcdef\n");
+        let l = compute_layout(&rope, 0, 1, 3, 4);
+        assert_eq!(screen_row_of_byte(&l, &rope, 0, 0), 0);
+        assert_eq!(screen_row_of_byte(&l, &rope, 0, 2), 0);
+        assert_eq!(screen_row_of_byte(&l, &rope, 0, 3), 1);
+        assert_eq!(screen_row_of_byte(&l, &rope, 0, 5), 1);
+    }
+
+    #[test]
+    fn screen_row_of_byte_multi_line_window() {
+        // "aaaa\nbbbbbb\n" width 3, count 2.
+        // Per Task 1's corrected `multiple_logical_lines_window` test, each
+        // logical line yields exactly ONE break (the trailing-row break does
+        // NOT fire because no char tries to overflow after the last sub-row is
+        // filled). So line 0 = [3] (2 rows), line 1 = [8] (2 rows); total 4.
+        // The brief's original "line 1 = [8, 11]/3 rows" assumption was stale.
+        let rope = Rope::from_str("aaaa\nbbbbbb\n");
+        let l = compute_layout(&rope, 0, 2, 3, 4);
+        // line 0 spans bytes 0..5; breaks[0] = [3]. byte 0..3 → row 0; byte 3..5 (incl.
+        // '\n' at 4) → row 1. line 1 spans bytes 5..12; breaks[1] = [8]. Within line 1:
+        // bytes 5..8 → row 2, bytes 8..12 (incl. '\n' at 11) → row 3.
+        assert_eq!(screen_row_of_byte(&l, &rope, 0, 4), 1); // '\n' of line 0, still row 1
+        assert_eq!(screen_row_of_byte(&l, &rope, 0, 5), 2);
+        assert_eq!(screen_row_of_byte(&l, &rope, 0, 7), 2);
+        assert_eq!(screen_row_of_byte(&l, &rope, 0, 8), 3);
+        assert_eq!(screen_row_of_byte(&l, &rope, 0, 10), 3);
+        // Past the window: clamp to last screen row.
+        assert_eq!(screen_row_of_byte(&l, &rope, 0, 999), 3);
+    }
+
+    #[test]
+    fn byte_of_screen_row_round_trip() {
+        // "alpha beta gamma\n" width 11. The space after "beta" is byte 10;
+        // Task 1 word-break pushes the break byte to 10 + 1 = 11, so row 0 =
+        // "alpha beta " (bytes 0..11) and row 1 = "gamma" (bytes 11..16).
+        let rope = Rope::from_str("alpha beta gamma\n");
+        let l = compute_layout(&rope, 0, 1, 11, 4);
+        // Click row 0, col 6 → byte 6 ('e' in "beta").
+        assert_eq!(byte_of_screen_row(&l, &rope, 0, 0, 6), 6);
+        // Click row 1, col 0 → byte 11 ('g').
+        assert_eq!(byte_of_screen_row(&l, &rope, 0, 1, 0), 11);
+        // Click row 1, col 4 → byte 15 ('a', last char of "gamma").
+        assert_eq!(byte_of_screen_row(&l, &rope, 0, 1, 4), 15);
+        // Click past end of row 1 → clamp to line end (byte 16, the position of
+        // '\n' — cursor sits before the newline).
+        assert_eq!(byte_of_screen_row(&l, &rope, 0, 1, 99), 16);
     }
 }
