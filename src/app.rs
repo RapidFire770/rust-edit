@@ -300,6 +300,31 @@ impl App {
         }
     }
 
+    /// Toggle word wrap on/off, persist the setting, and re-sync every buffer's
+    /// viewport (reset hscroll, re-clamp scroll to the new range, ensure the
+    /// cursor is visible). Called by both the Alt+Z shortcut and the Tools menu
+    /// item so keyboard and mouse paths stay behaviorally identical
+    /// (AGENTS Core Principle 2).
+    pub fn toggle_word_wrap(&mut self) {
+        let on = !self.config.word_wrap;
+        self.config.set_word_wrap(on);
+        let w = self.editor_visible_width.get().max(1);
+        let vis = self.editor_visible_lines.get().max(1);
+        let tab = self.config.tab_size;
+        for b in self.buffers.iter_mut() {
+            b.visible_width = w;
+            if on {
+                b.scroll_offset.1 = 0;
+                let total = crate::wrap::total_screen_rows(&b.rope, b.visible_width, tab);
+                let max = total.saturating_sub(vis);
+                if b.scroll_offset.0 > max {
+                    b.scroll_offset.0 = max;
+                }
+            }
+            b.ensure_cursor_visible(vis);
+        }
+    }
+
     pub fn update_find_input(&mut self, append: Option<char>, backspace: bool) {
         if let Some(fs) = &mut self.find_state {
             let editing_replace = fs.focus == FindFocus::Replace;

@@ -333,33 +333,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             app.show_help = !app.show_help;
                         }
                         KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::ALT) => {
-                            let on = !app.config.word_wrap;
-                            app.config.set_word_wrap(on);
-                            // Re-sync viewport so the wrap layout sees the current width.
-                            let w = app.editor_visible_width.get().max(1);
-                            for b in app.buffers.iter_mut() {
-                                b.visible_width = w;
-                                // Reset horizontal scroll (meaningless under wrap).
-                                if on {
-                                    b.scroll_offset.1 = 0;
-                                }
-                            }
-                            // Re-clamp vertical scroll to the new (screen-row) range.
-                            if on {
-                                let vis = app.editor_visible_lines.get().max(1);
-                                for b in app.buffers.iter_mut() {
-                                    let total = crate::wrap::total_screen_rows(
-                                        &b.rope,
-                                        b.visible_width,
-                                        app.config.tab_size,
-                                    );
-                                    let max = total.saturating_sub(vis);
-                                    if b.scroll_offset.0 > max {
-                                        b.scroll_offset.0 = max;
-                                    }
-                                    b.ensure_cursor_visible(vis);
-                                }
-                            }
+                            app.toggle_word_wrap();
                         }
                         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::ALT) => {
                             app.compute_and_show_word_count();
@@ -1176,29 +1150,7 @@ fn handle_menu_action(app: &mut App) {
         ("Tools", 3) => {
             let _ = app.format_current_document();
         }
-        ("Tools", 4) => {
-            let on = !app.config.word_wrap;
-            app.config.set_word_wrap(on);
-            // Mirror the Alt+Z re-sync logic.
-            let w = app.editor_visible_width.get().max(1);
-            let vis = app.editor_visible_lines.get().max(1);
-            for b in app.buffers.iter_mut() {
-                b.visible_width = w;
-                if on {
-                    b.scroll_offset.1 = 0;
-                    let total = crate::wrap::total_screen_rows(
-                        &b.rope,
-                        b.visible_width,
-                        app.config.tab_size,
-                    );
-                    let max = total.saturating_sub(vis);
-                    if b.scroll_offset.0 > max {
-                        b.scroll_offset.0 = max;
-                    }
-                }
-                b.ensure_cursor_visible(vis);
-            }
-        }
+        ("Tools", 4) => app.toggle_word_wrap(),
         ("Settings", 0) => app.open_settings(),
         ("Settings", 1) => app.open_settings(), // themes
         _ => {}
