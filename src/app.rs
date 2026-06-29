@@ -72,6 +72,10 @@ pub struct App {
     /// an initial click (used to drive drag selection + edge auto-scroll).
     /// Cleared on MouseUp, on popup open, and when switching input mode.
     pub mouse_drag_active: bool,
+    /// True while the left mouse button is held down over the editor scrollbar
+    /// (click-to-jump / drag-to-scrub). Mutually exclusive with
+    /// `mouse_drag_active`: a scrollbar press never starts a text selection.
+    pub scrollbar_drag_active: bool,
     /// Set to true to exit the main loop cleanly (used by menu Quit etc.)
     pub should_quit: bool,
     /// Last known height (in lines) of the editor viewport area. Used for PgUp/PgDn and better scrolling.
@@ -141,6 +145,7 @@ impl App {
             settings_theme_hover: None,
             last_mouse_pos: None,
             mouse_drag_active: false,
+            scrollbar_drag_active: false,
             should_quit: false,
             editor_visible_lines: std::cell::Cell::new(20),
             editor_visible_width: std::cell::Cell::new(80),

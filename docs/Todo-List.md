@@ -1,6 +1,7 @@
 ### Fixes & Bugs:
 - [ ] Smart indentation does not function as intended. Right now when hitting enter to move down to a new line the cusor can jump down multiple lines at once or push the next line down while keeping the fist letter of the text that was on that line in place while pushing the rest of the text down where it should be.
 - [x] Scroll bar does not match the size of the content in the editor.
+- [x] User should be able to click on the scroll bar to jump to a specific location in the editor or click and drag the bar to scroll.
 
 ---
 

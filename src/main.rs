@@ -117,6 +117,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
         // stays at zero).
         if any_modal_open(app) {
             app.mouse_drag_active = false;
+            app.scrollbar_drag_active = false;
         }
         let edge = if app.mouse_drag_active {
             drag_edge_delta(app)
@@ -867,7 +868,22 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
 
             if !skip_editor {
                 let header_rows = crate::ui::layout::HEADER_ROWS as usize;
-                if y < header_rows {
+                // Scrollbar lives in the rightmost column of the editor render
+                // area. Handle click-to-jump / drag-to-scrub here, ahead of
+                // header/editor handling, so a scrollbar press never places the
+                // cursor or starts a text selection. (find-bar row is excluded
+                // by `scrollbar_target_for_row`'s vis-bounded y range.)
+                let (tw, _th) = crossterm::terminal::size().unwrap_or((80, 24));
+                if x + 1 == tw as usize {
+                    if let Some(target) = scrollbar_target_for_row(app, y) {
+                        let vis = app.editor_visible_lines.get().max(1);
+                        let buf = app.active_buffer_mut();
+                        buf.scroll_offset.0 = target;
+                        buf.clamp_scroll(vis);
+                        app.scrollbar_drag_active = true;
+                        app.mouse_drag_active = false;
+                    }
+                } else if y < header_rows {
                     // Header rows (menu/tabs + separator rule): tabs, menus or [+]
                     handle_header_click(x, app);
                 } else {
@@ -904,12 +920,21 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             update_hover_states(x, y, app);
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            // Extend selection from a fixed anchor (set on the first drag move),
-            // so dragging works in BOTH directions. The click handler seeds the
-            // anchor by clearing it; extend_selection_to then captures the cursor
-            // as the anchor on first use. visual_col must include hscroll to match
-            // the click handler's column mapping.
-            if app.mouse_drag_active {
+            // Two drag modes (mutually exclusive): scrollbar scrub vs text
+            // selection. The flag is set on MouseDown; route accordingly.
+            if app.scrollbar_drag_active {
+                if let Some(target) = scrollbar_target_for_row(app, y as usize) {
+                    let vis = app.editor_visible_lines.get().max(1);
+                    let buf = app.active_buffer_mut();
+                    buf.scroll_offset.0 = target;
+                    buf.clamp_scroll(vis);
+                }
+            } else if app.mouse_drag_active {
+                // Extend selection from a fixed anchor (set on the first drag move),
+                // so dragging works in BOTH directions. The click handler seeds the
+                // anchor by clearing it; extend_selection_to then captures the cursor
+                // as the anchor on first use. visual_col must include hscroll to match
+                // the click handler's column mapping.
                 extend_drag_to_mouse(app);
             }
         }
@@ -917,6 +942,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             // End any in-progress drag selection session. Edge auto-scroll keys
             // off this flag, so it must be cleared as soon as the button releases.
             app.mouse_drag_active = false;
+            app.scrollbar_drag_active = false;
         }
         // Horizontal mouse-wheel (Shift+wheel on most terminals) scrolls the
         // view sideways. Vertical wheel is coalesced in run_app, but horizontal
@@ -931,6 +957,36 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
         }
         _ => {}
     }
+}
+
+/// Map a screen row `y` to a target top-line scroll offset for the editor
+/// scrollbar (proportional click-to-jump / drag-to-scrub). Returns `None` when
+/// a modal is open or `y` is outside the scrollbar's vertical extent (which
+/// excludes the find-bar row when the find bar is open). The mapping skips the
+/// rendered `↑`/`↓` end cells and mirrors the `max = line_count - vis` clamp
+/// used by `Buffer::scroll` / `clamp_scroll`, keeping it in sync with the thumb
+/// calibration in `ui::editor::render`.
+fn scrollbar_target_for_row(app: &App, y: usize) -> Option<usize> {
+    if any_modal_open(app) {
+        return None;
+    }
+    let header = crate::ui::layout::HEADER_ROWS as usize;
+    let vis = app.editor_visible_lines.get().max(1);
+    let sb_top = header;
+    let sb_bottom = header + vis; // exclusive
+    if !(sb_top..sb_bottom).contains(&y) {
+        return None;
+    }
+    let total = app.active_buffer().line_count();
+    let max = total.saturating_sub(vis);
+    if max == 0 {
+        return Some(0); // content fits viewport — no scroll range
+    }
+    // Exclude the ↑/↓ end cells so the clickable track matches the rendered one.
+    let track = vis.saturating_sub(2).max(1);
+    let rel = y.saturating_sub(sb_top + 1).min(track); // skip top ↑ cell
+    let frac = rel as f64 / track as f64;
+    Some((frac * max as f64).round() as usize)
 }
 
 /// Map `app.last_mouse_pos` to a target byte and extend the active drag
