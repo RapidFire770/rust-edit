@@ -173,8 +173,9 @@ fn render_wrapped(
     let tab = app.config.tab_size;
     let scroll_screen_row = buf.scroll_offset.0; // under wrap, this is a SCREEN ROW
 
-    // Compute the full-buffer layout. For MVP this is O(visible bytes) which is
-    // fine up to ~50k lines; a windowed compute is deferred (see plan Task 9).
+    // NOTE: full-buffer layout = O(buffer bytes) per frame. Acceptable for normal
+    // editing; a 50k+ line file with many long lines may stutter. Future: window
+    // the compute to the visible logical-line range (spec §9 Approach C).
     let full_layout = crate::wrap::compute_layout(&buf.rope, 0, n_lines, width, tab);
     if full_layout.total_screen_rows == 0 {
         return Vec::new();
@@ -183,9 +184,10 @@ fn render_wrapped(
     // Prefix sum: prefix[lidx] = first global screen row of logical line `lidx`.
     let mut prefix: Vec<usize> = Vec::with_capacity(full_layout.breaks.len() + 1);
     prefix.push(0);
+    let mut prev = 0usize;
     for line_breaks in &full_layout.breaks {
-        let prev = *prefix.last().unwrap();
-        prefix.push(prev + line_breaks.len() + 1);
+        prev += line_breaks.len() + 1;
+        prefix.push(prev);
     }
 
     // Find the first logical line whose screen-row range contains scroll_screen_row.
@@ -276,6 +278,17 @@ fn render_wrapped(
                         spans.push(Span::styled(ch.to_string(), ch_style));
                     }
                     byte_in_line += ch.len_utf8();
+                }
+            }
+            // If an empty line is covered by selection, push a styled space so
+            // the selection background is visible. Mirrors `render_unwrapped`,
+            // minus the hscroll check (wrap has no hscroll). Only the first
+            // sub-row needs it (an empty line has a single sub-row).
+            if hline.is_empty() && sub == 0 {
+                if let Some(sel) = &buf.selection {
+                    if sel.start <= line_start_byte && sel.end > line_start_byte {
+                        spans.push(Span::styled(" ", theme.selection_style()));
+                    }
                 }
             }
             lines.push(Line::from(spans));
