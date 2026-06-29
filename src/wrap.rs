@@ -58,6 +58,7 @@ fn wrap_one_line(
     let mut breaks: Vec<usize> = Vec::new();
     let mut col = 0usize; // display column since the start of the current row
     let mut last_space_byte: Option<usize> = None; // byte of the most recent space in THIS row
+    let mut col_after_last_space: usize = 0; // display col value after the most recent space's advance was added
     let mut byte_in_line = 0usize; // bytes consumed so far in this line
 
     for ch in line.chars() {
@@ -72,8 +73,11 @@ fn wrap_one_line(
             if let Some(space_byte) = last_space_byte {
                 // Word break: end row at the byte after the space (exclusive).
                 breaks.push(space_byte + 1);
-                // Resume on the current char; reset col & last_space.
-                col = advance;
+                // Resume on the current char; the new row's width is the width of
+                // the chars from (space+1) to current_char inclusive.
+                // col - col_after_last_space = width of (space, current_char) exclusive;
+                // adding advance (current char) gives the new row's col.
+                col = (col - col_after_last_space) + advance;
                 last_space_byte = None;
             } else {
                 // Char fallback: break right before this char.
@@ -85,6 +89,7 @@ fn wrap_one_line(
             col += advance;
             if ch == ' ' || ch == '\t' {
                 last_space_byte = Some(abs_byte);
+                col_after_last_space = col;
             }
         }
         byte_in_line += ch.len_utf8();
@@ -174,7 +179,11 @@ mod tests {
             l.breaks[0][0], 3,
             "first break must be at the space after 'ab '"
         );
-        assert!(l.total_screen_rows >= 5);
+        assert_eq!(l.total_screen_rows, 6);
+        // Full breaks: word-break at byte 3 (after "ab "), then char-fallback
+        // breaks inside the long word at bytes 9, 15, 21, then a final
+        // word-break at byte 26 (after the space between the word and "cd").
+        assert_eq!(l.breaks[0], vec![3, 9, 15, 21, 26]);
     }
 
     #[test]
@@ -222,5 +231,46 @@ mod tests {
         let l = layout("\thello\n", 0, 1, 8, 4);
         assert_eq!(l.total_screen_rows, 2);
         assert_eq!(l.breaks[0].len(), 1);
+    }
+
+    #[test]
+    fn wrapped_rows_never_exceed_width() {
+        let cases = [
+            ("ab verylongwordnotfitting cd\n", 6),
+            ("alpha beta gamma delta epsilon zeta\n", 11),
+            ("short\n", 80),
+            ("abcdefghijklmnopqrstuvwxyz\n", 5),
+            ("one two three four five six seven eight nine ten\n", 10),
+        ];
+        for (text, width) in cases {
+            let rope = Rope::from_str(text);
+            let l = compute_layout(&rope, 0, rope.len_lines(), width, 4);
+            for (i, line_breaks) in l.breaks.iter().enumerate() {
+                let line_start = rope.line_to_byte(i);
+                let line_end = if i + 1 < rope.len_lines() {
+                    rope.line_to_byte(i + 1)
+                } else {
+                    rope.len_bytes()
+                };
+                let mut boundaries = line_breaks.clone();
+                boundaries.push(line_end);
+                let mut prev = line_start;
+                for &brk in &boundaries {
+                    let slice = rope.byte_slice(prev..brk);
+                    let mut cols = 0usize;
+                    for ch in slice.chars() {
+                        if ch == '\n' || ch == '\r' {
+                            continue;
+                        }
+                        cols += if ch == '\t' { 4 - (cols % 4) } else { 1 };
+                    }
+                    assert!(
+                        cols <= width,
+                        "row in line {i} (bytes {prev}..{brk}) is {cols} cols wide, exceeds width {width}; breaks={line_breaks:?}"
+                    );
+                    prev = brk;
+                }
+            }
+        }
     }
 }
