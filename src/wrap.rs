@@ -9,6 +9,10 @@ pub struct WrapLayout {
     /// Empty vec => the line fits on one screen row.
     pub breaks: Vec<Vec<usize>>,
     pub total_screen_rows: usize,
+    /// Tab width (in display columns) used when this layout was computed.
+    /// `byte_of_screen_row` reads this so its column→byte walk matches the
+    /// wrap algorithm's tab accounting exactly.
+    pub tab_size: u8,
 }
 
 /// Compute the wrap layout for `count` logical lines starting at `start_line`.
@@ -44,6 +48,7 @@ pub fn compute_layout(
     WrapLayout {
         breaks,
         total_screen_rows,
+        tab_size: tab_size.max(1),
     }
 }
 
@@ -180,7 +185,13 @@ pub fn byte_of_screen_row(
         } else {
             line_end
         };
-        return walk_sub_row_to_col(rope, sub_row_start_byte, sub_row_end_byte, col);
+        return walk_sub_row_to_col(
+            rope,
+            sub_row_start_byte,
+            sub_row_end_byte,
+            col,
+            layout.tab_size as usize,
+        );
     }
     rope.len_bytes()
 }
@@ -189,13 +200,24 @@ pub fn byte_of_screen_row(
 /// non-newline char (mirrors `wrap_one_line`'s column accounting) until `col`
 /// columns have been consumed. Returns the byte offset at that column, clamped
 /// to the sub-row's end (i.e. the byte offset just past the last visible char).
-fn walk_sub_row_to_col(rope: &Rope, start_byte: usize, end_byte: usize, col: usize) -> usize {
+///
+/// `tab` must match the `tab_size` used to compute the layout: a tab advances
+/// to the next multiple of `tab` columns, so a `col` that lands inside a tab
+/// maps to the tab's start byte (the cursor does not split a tab).
+fn walk_sub_row_to_col(
+    rope: &Rope,
+    start_byte: usize,
+    end_byte: usize,
+    col: usize,
+    tab: usize,
+) -> usize {
     if start_byte >= end_byte {
         return start_byte;
     }
     let slice = rope.byte_slice(start_byte..end_byte);
     let mut byte = start_byte;
-    for (cur_col, ch) in slice.chars().enumerate() {
+    let mut cur_col = 0usize;
+    for ch in slice.chars() {
         if cur_col >= col {
             break;
         }
@@ -204,6 +226,14 @@ fn walk_sub_row_to_col(rope: &Rope, start_byte: usize, end_byte: usize, col: usi
         if ch == '\n' || ch == '\r' {
             break;
         }
+        // Mirror `wrap_one_line`'s tab accounting: a tab advances to the next
+        // multiple of `tab` columns. If `col` falls inside the tab's span we
+        // stop at the tab's start byte (the cursor cannot sit mid-tab).
+        let advance = if ch == '\t' { tab - (cur_col % tab) } else { 1 };
+        if cur_col + advance > col {
+            break;
+        }
+        cur_col += advance;
         byte += ch.len_utf8();
     }
     byte
@@ -416,6 +446,28 @@ mod tests {
         assert_eq!(screen_row_of_byte(&l, &rope, 0, 10), 3);
         // Past the window: clamp to last screen row.
         assert_eq!(screen_row_of_byte(&l, &rope, 0, 999), 3);
+    }
+
+    #[test]
+    fn byte_of_screen_row_inside_tab_returns_tab_start() {
+        // Regression: walk_sub_row_to_col used to count a tab as 1 column,
+        // mismatching wrap_one_line (which counts `tab - col % tab` columns).
+        // On "\tab cd\n" width 12 tab 4 the tab occupies cols 0..4 of row 0;
+        // clicking inside that span must keep the cursor at the tab's start
+        // byte rather than advancing into the following characters.
+        let rope = Rope::from_str("\tab cd\n");
+        let l = compute_layout(&rope, 0, 1, 12, 4);
+        // Sanity: the line fits on one screen row.
+        assert_eq!(l.total_screen_rows, 1);
+        assert!(l.breaks[0].is_empty());
+        // Click col 2 (inside the tab) → byte 0 (tab start).
+        assert_eq!(byte_of_screen_row(&l, &rope, 0, 0, 2), 0);
+        // Click col 3 (still inside the tab) → byte 0.
+        assert_eq!(byte_of_screen_row(&l, &rope, 0, 0, 3), 0);
+        // Click col 4 (exactly at tab end = start of 'a') → byte 1.
+        assert_eq!(byte_of_screen_row(&l, &rope, 0, 0, 4), 1);
+        // Click col 5 → byte 2 ('b').
+        assert_eq!(byte_of_screen_row(&l, &rope, 0, 0, 5), 2);
     }
 
     #[test]
