@@ -436,6 +436,16 @@ impl Buffer {
         self.selection_anchor = None;
     }
 
+    /// Select the entire buffer. Cursor lands at EOF (so a following left-arrow
+    /// collapses to the end of the document, matching common editor behavior).
+    pub fn select_all(&mut self) {
+        let end = self.rope.len_bytes();
+        self.selection = Some(0..end);
+        self.selection_anchor = Some(0);
+        self.cursor = end;
+        self.adjust_scroll();
+    }
+
     /// Extend the selection to a target byte, anchoring at the current cursor if
     /// no selection is in progress (mouse-drag entry point). Used by mouse drag so
     /// it shares the same fixed-anchor semantics as keyboard shift-extend.

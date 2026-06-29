@@ -108,7 +108,46 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
         // of one per wheel notch — removing the seconds-of-lag backlog and CPU
         // spike on large files. Key/mouse-click events are never dropped: they
         // are applied in arrival order.
-        let first = event::read()?;
+        //
+        // Edge auto-scroll: when a mouse-drag selection is in progress and the
+        // pointer sits at a viewport edge, crossterm emits no events while the
+        // mouse is held still, so we switch to a short bounded poll. On timeout
+        // we apply one scroll step + re-extend the selection, then loop. When
+        // not dragging-at-edge we keep the original blocking semantics (idle CPU
+        // stays at zero).
+        if any_modal_open(app) {
+            app.mouse_drag_active = false;
+        }
+        let edge = if app.mouse_drag_active {
+            drag_edge_delta(app)
+        } else {
+            None
+        };
+        let first = if let Some((drow, dcol)) = edge {
+            if event::poll(Duration::from_millis(30))? {
+                event::read()?
+            } else {
+                // Timed out: no input arrived, but we're dragging at an edge.
+                // Advance the viewport one step and re-extend the selection.
+                let vis = app.editor_visible_lines.get().max(1);
+                if drow != 0 {
+                    app.active_buffer_mut().scroll(drow);
+                    app.active_buffer_mut().clamp_scroll(vis);
+                }
+                if dcol != 0 {
+                    let cur = app.active_buffer_mut().scroll_offset.1;
+                    app.active_buffer_mut().scroll_offset.1 = if dcol < 0 {
+                        cur.saturating_sub(1)
+                    } else {
+                        cur.saturating_add(1)
+                    };
+                }
+                extend_drag_to_mouse(app);
+                continue;
+            }
+        } else {
+            event::read()?
+        };
         let mut events = vec![first];
         while event::poll(Duration::ZERO)? {
             events.push(event::read()?);
@@ -177,6 +216,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             KeyCode::Char('a') => {
                                 if app.is_find_active() {
                                     app.replace_all();
+                                } else {
+                                    app.active_buffer_mut().select_all();
                                 }
                             }
                             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -846,6 +887,9 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                                 buf.set_cursor_from_visual(visual_line, visual_col);
                                 // Do not force recenter here (ensure only if offscreen); set_visual no longer adjusts.
                                 buf.ensure_cursor_visible(vis);
+                                // Begin a mouse-drag selection session; cleared on MouseUp
+                                // or when a modal popup opens. Drives edge auto-scroll.
+                                app.mouse_drag_active = true;
                             }
                         }
                         // clicks in find bar / padded / status area are ignored for cursor placement
@@ -865,21 +909,14 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             // anchor by clearing it; extend_selection_to then captures the cursor
             // as the anchor on first use. visual_col must include hscroll to match
             // the click handler's column mapping.
-            let x = mouse.column as usize;
-            let y = mouse.row as usize;
-            let header_rows = crate::ui::layout::HEADER_ROWS as usize;
-            if y >= header_rows {
-                let editor_y = y - header_rows;
-                let gutter = Buffer::GUTTER_WIDTH;
-                if x >= gutter {
-                    let hscroll = app.active_buffer().scroll_offset.1;
-                    let visual_col = (x - gutter) + hscroll;
-                    let visual_line = app.active_buffer().scroll_offset.0 + editor_y;
-                    let buf = app.active_buffer_mut();
-                    let target_byte = buf.byte_at_visual(visual_line, visual_col);
-                    buf.mouse_extend_to(target_byte);
-                }
+            if app.mouse_drag_active {
+                extend_drag_to_mouse(app);
             }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            // End any in-progress drag selection session. Edge auto-scroll keys
+            // off this flag, so it must be cleared as soon as the button releases.
+            app.mouse_drag_active = false;
         }
         // Horizontal mouse-wheel (Shift+wheel on most terminals) scrolls the
         // view sideways. Vertical wheel is coalesced in run_app, but horizontal
@@ -894,6 +931,80 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
         }
         _ => {}
     }
+}
+
+/// Map `app.last_mouse_pos` to a target byte and extend the active drag
+/// selection to it. Shared by the `Drag` event path and the edge-auto-scroll
+/// timeout path so both produce identical selection behavior.
+fn extend_drag_to_mouse(app: &mut App) {
+    let (x, y) = match app.last_mouse_pos {
+        Some(p) => p,
+        None => return,
+    };
+    let (x, y) = (x as usize, y as usize);
+    let header_rows = crate::ui::layout::HEADER_ROWS as usize;
+    if y < header_rows {
+        return;
+    }
+    let editor_y = y - header_rows;
+    let gutter = Buffer::GUTTER_WIDTH;
+    if x < gutter {
+        return;
+    }
+    let hscroll = app.active_buffer().scroll_offset.1;
+    let visual_col = (x - gutter) + hscroll;
+    let visual_line = app.active_buffer().scroll_offset.0 + editor_y;
+    let buf = app.active_buffer_mut();
+    let target_byte = buf.byte_at_visual(visual_line, visual_col);
+    buf.mouse_extend_to(target_byte);
+}
+
+/// If a drag is in progress and the mouse currently sits at the top/bottom or
+/// left/right edge of the editor viewport, return the per-tick scroll delta
+/// (rows, cols) that should be applied to keep scrolling past the edge.
+/// Returns `None` when not at any edge.
+fn drag_edge_delta(app: &App) -> Option<(isize, isize)> {
+    let (x, y) = app.last_mouse_pos?;
+    let (x, y) = (x as usize, y as usize);
+    let header_rows = crate::ui::layout::HEADER_ROWS as usize;
+    if y < header_rows {
+        return None;
+    }
+    let editor_y = y - header_rows;
+    let vis = app.editor_visible_lines.get().max(1);
+    let visible_width = app.editor_visible_width.get().max(1);
+    let gutter = Buffer::GUTTER_WIDTH;
+
+    let mut drow: isize = 0;
+    let mut dcol: isize = 0;
+    if editor_y == 0 {
+        drow = -1;
+    } else if editor_y >= vis.saturating_sub(1) {
+        drow = 1;
+    }
+    if x <= gutter {
+        dcol = -1;
+    } else if x >= gutter + visible_width.saturating_sub(1) {
+        dcol = 1;
+    }
+
+    if drow == 0 && dcol == 0 {
+        None
+    } else {
+        Some((drow, dcol))
+    }
+}
+
+/// True when any modal/popup is open and the editor (and its drag selection)
+/// should be suspended.
+fn any_modal_open(app: &App) -> bool {
+    app.show_help
+        || app.show_word_count
+        || app.show_settings
+        || app.show_file_dialog
+        || app.show_confirm
+        || app.active_menu.is_some()
+        || app.find_state.is_some()
 }
 
 fn handle_header_click(x: usize, app: &mut App) {

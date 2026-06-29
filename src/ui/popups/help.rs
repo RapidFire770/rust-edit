@@ -55,6 +55,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Backspace / Delete", "Delete char"),
                 ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
                 ("Ctrl+X / Ctrl+C / Ctrl+V", "Cut / copy / paste"),
+                ("Ctrl+A", "Select all"),
                 ("Ctrl+B / I / `", "Markdown bold / italic / code (in .md)"),
             ],
         ),
