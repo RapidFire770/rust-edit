@@ -13,3 +13,5 @@ Cargo.lock
 config/
 *.log
 docs/plans
+
+.worktrees/
