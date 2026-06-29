@@ -15,6 +15,12 @@ pub struct WrapLayout {
     pub tab_size: u8,
 }
 
+/// Total screen rows across the entire buffer at the given width.
+pub fn total_screen_rows(rope: &Rope, width: usize, tab_size: u8) -> usize {
+    let n = rope.len_lines();
+    compute_layout(rope, 0, n, width, tab_size).total_screen_rows
+}
+
 /// Compute the wrap layout for `count` logical lines starting at `start_line`.
 /// `width` is in display columns (excludes the gutter). Tabs advance to the next
 /// multiple of `tab_size`; ASCII chars count as 1 column; all other chars count
