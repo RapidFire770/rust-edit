@@ -10,6 +10,7 @@ mod syntax;
 mod theme;
 mod ui;
 mod utils;
+mod wrap;
 
 use anyhow::Result;
 use crossterm::{
