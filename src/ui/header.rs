@@ -110,6 +110,7 @@ pub fn render_dropdown(
         "Find & Replace (Ctrl+H)",
         "Word Count (Alt+W)",
         "Format Document",
+        "Toggle Word Wrap (Alt+Z)",
     ];
     let settings_items = vec!["Settings...", "Themes"];
 
@@ -171,7 +172,7 @@ pub fn dropdown_rect(area: Rect, menu_name: &str) -> Rect {
     let header_height = crate::ui::layout::HEADER_ROWS;
     let h = match menu_name {
         "File" => 8,
-        "Tools" => 6,
+        "Tools" => 7,
         "Settings" => 4,
         _ => 4,
     };
@@ -209,7 +210,7 @@ mod tests {
         assert_eq!(rect.x, 7);
         assert_eq!(rect.y, crate::ui::layout::HEADER_ROWS);
         assert_eq!(rect.width, 26);
-        assert_eq!(rect.height, 6);
+        assert_eq!(rect.height, 7);
     }
 
     #[test]

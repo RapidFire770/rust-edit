@@ -69,4 +69,10 @@ impl Config {
         self.theme = name.to_string();
         self.save();
     }
+
+    /// Toggle word wrap and persist (live setting). Mirrors `set_theme`.
+    pub fn set_word_wrap(&mut self, on: bool) {
+        self.word_wrap = on;
+        self.save();
+    }
 }

@@ -795,6 +795,106 @@ impl Buffer {
         self.path = Some(path);
         self.is_modified = false;
     }
+
+    // ===== Word-wrap-aware scroll/cursor helpers =====
+    //
+    // These consult a WrapLayout computed by the caller (render path or main.rs
+    // event handler). When word_wrap is off, the caller must use the original
+    // (unwrapped) helpers instead.
+
+    /// Scroll by `delta` screen rows. `total_screen_rows` is the buffer's total
+    /// wrapped height at the current width.
+    pub fn scroll_wrapped(&mut self, delta: isize, total_screen_rows: usize) {
+        let current = self.scroll_offset.0 as isize;
+        let max = total_screen_rows.saturating_sub(self.visible_lines.max(1)) as isize;
+        let new = (current + delta).max(0).min(max) as usize;
+        self.scroll_offset.0 = new;
+    }
+
+    /// Clamp scroll_offset.0 to the wrapped range.
+    pub fn clamp_scroll_wrapped(&mut self, total_screen_rows: usize) {
+        let max = total_screen_rows.saturating_sub(self.visible_lines.max(1));
+        if self.scroll_offset.0 > max {
+            self.scroll_offset.0 = max;
+        }
+    }
+
+    /// Minimal visibility clamp (used by mouse placement & find jumps).
+    pub fn ensure_cursor_visible_wrapped(&mut self, layout: &crate::wrap::WrapLayout, vis: usize) {
+        let v = vis.max(1);
+        let cursor_row = crate::wrap::screen_row_of_byte(layout, &self.rope, 0, self.cursor);
+        let s = self.scroll_offset.0;
+        if cursor_row < s {
+            self.scroll_offset.0 = cursor_row;
+        } else if cursor_row >= s + v {
+            self.scroll_offset.0 = cursor_row.saturating_sub(v.saturating_sub(2));
+        }
+    }
+
+    /// Page up/down under wrap. `layout` is the buffer's full wrap layout.
+    ///
+    /// Places the cursor on the logical line whose first screen row is at or
+    /// before the new top-of-viewport screen row, preserving the preferred
+    /// column. The target byte is computed directly WITHOUT routing through
+    /// `move_to_line` (which ends with `adjust_scroll`, treating
+    /// `scroll_offset.0` as a logical-line index and corrupting the
+    /// screen-row invariant — final-review Important-2). It also resolves the
+    /// discarded-`cursor_row` Minor-4.
+    pub fn page_wrapped(
+        &mut self,
+        layout: &crate::wrap::WrapLayout,
+        down: bool,
+        vis: usize,
+        extend_selection: bool,
+    ) {
+        let page = vis.saturating_sub(1).max(1) as isize;
+        let old_scroll = self.scroll_offset.0 as isize;
+        let total = layout.total_screen_rows as isize;
+        let max = total.saturating_sub(1);
+        let new_scroll = if down {
+            (old_scroll + page).min(max)
+        } else {
+            (old_scroll - page).max(0)
+        } as usize;
+        self.scroll_offset.0 = new_scroll;
+
+        // Find the logical line whose first screen row is at or before
+        // `new_scroll` (the new top of the viewport).
+        let mut acc = 0usize;
+        let mut target_line = 0usize;
+        for (i, line_breaks) in layout.breaks.iter().enumerate() {
+            let rows = line_breaks.len() + 1;
+            if acc + rows > new_scroll {
+                target_line = i;
+                break;
+            }
+            acc += rows;
+        }
+
+        // Compute the target byte on `target_line` at the preferred column
+        // (clamped to the line's char width) and set cursor + selection
+        // directly, bypassing `move_to_line` → `adjust_scroll`.
+        let preferred_col = self.cursor_position().1;
+        let line_start_byte = self.rope.line_to_byte(target_line);
+        let line_str = self.line(target_line);
+        let line_str = line_str.trim_end_matches(['\n', '\r']);
+        let target_col = preferred_col.min(line_str.chars().count());
+        let mut byte_off = line_start_byte;
+        for (i, c) in line_str.chars().enumerate() {
+            if i >= target_col {
+                break;
+            }
+            byte_off += c.len_utf8();
+        }
+        if extend_selection {
+            self.extend_selection_to(byte_off);
+        } else {
+            self.clear_selection();
+        }
+        self.cursor = byte_off;
+        // Correct the scroll if the cursor's screen row now falls outside the view.
+        self.ensure_cursor_visible_wrapped(layout, vis);
+    }
 }
 
 #[cfg(test)]

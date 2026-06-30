@@ -10,6 +10,7 @@ mod syntax;
 mod theme;
 mod ui;
 mod utils;
+mod wrap;
 
 use anyhow::Result;
 use crossterm::{
@@ -83,6 +84,46 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
         // position, including on whitespace, spaces, and end-of-line. Hide it for popups/modals.
         if app.show_help || app.show_word_count || app.show_settings || app.active_menu.is_some() {
             terminal.hide_cursor().ok();
+        } else if app.config.word_wrap {
+            let buf = app.active_buffer();
+            let layout = crate::wrap::compute_layout(
+                &buf.rope,
+                0,
+                buf.line_count(),
+                buf.visible_width.max(1),
+                app.config.tab_size,
+            );
+            let cursor_screen_row =
+                crate::wrap::screen_row_of_byte(&layout, &buf.rope, 0, buf.cursor);
+            let scroll_row = buf.scroll_offset.0;
+            if cursor_screen_row >= scroll_row {
+                let view_row = cursor_screen_row - scroll_row;
+                let screen_y = crate::ui::layout::HEADER_ROWS + view_row as u16;
+                // Column within the sub-row: distance from the sub-row's start byte to the cursor.
+                let (line_idx, col_in_line) = buf.cursor_position();
+                let line_first_byte = buf.rope.line_to_byte(line_idx);
+                // Find the sub-row containing the cursor.
+                let line_breaks = layout.breaks.get(line_idx).cloned().unwrap_or_default();
+                let mut sub_row_start_byte = line_first_byte;
+                for &brk in &line_breaks {
+                    if buf.cursor < brk {
+                        break;
+                    }
+                    sub_row_start_byte = brk;
+                }
+                let col_offset = buf
+                    .rope
+                    .byte_slice(sub_row_start_byte..buf.cursor)
+                    .to_string()
+                    .chars()
+                    .count();
+                let _ = col_in_line;
+                let screen_x = Buffer::GUTTER_WIDTH as u16 + col_offset as u16;
+                terminal.set_cursor_position((screen_x, screen_y)).ok();
+                terminal.show_cursor().ok();
+            } else {
+                terminal.hide_cursor().ok();
+            }
         } else {
             let buf = app.active_buffer();
             let (cur_row, cur_col) = buf.cursor_position();
@@ -132,10 +173,20 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                 // Advance the viewport one step and re-extend the selection.
                 let vis = app.editor_visible_lines.get().max(1);
                 if drow != 0 {
-                    app.active_buffer_mut().scroll(drow);
-                    app.active_buffer_mut().clamp_scroll(vis);
+                    if app.config.word_wrap {
+                        let buf = app.active_buffer();
+                        let total = crate::wrap::total_screen_rows(
+                            &buf.rope,
+                            buf.visible_width,
+                            app.config.tab_size,
+                        );
+                        app.active_buffer_mut().scroll_wrapped(drow, total);
+                    } else {
+                        app.active_buffer_mut().scroll(drow);
+                        app.active_buffer_mut().clamp_scroll(vis);
+                    }
                 }
-                if dcol != 0 {
+                if dcol != 0 && !app.config.word_wrap {
                     let cur = app.active_buffer_mut().scroll_offset.1;
                     app.active_buffer_mut().scroll_offset.1 = if dcol < 0 {
                         cur.saturating_sub(1)
@@ -161,6 +212,15 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                 // Route wheel to help popup content scroll instead of buffer.
                 let new_row = (app.help_content_scroll.0 as isize + wheel_delta).max(0) as u16;
                 app.help_content_scroll.0 = new_row;
+            } else if app.config.word_wrap {
+                let buf = app.active_buffer();
+                let total = crate::wrap::total_screen_rows(
+                    &buf.rope,
+                    buf.visible_width,
+                    app.config.tab_size,
+                );
+                let b = app.active_buffer_mut();
+                b.scroll_wrapped(wheel_delta, total);
             } else {
                 let visible = app.editor_visible_lines.get().max(5);
                 app.active_buffer_mut().scroll(wheel_delta);
@@ -331,6 +391,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         KeyCode::F(1) => {
                             app.show_help = !app.show_help;
                         }
+                        KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::ALT) => {
+                            app.toggle_word_wrap();
+                        }
                         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::ALT) => {
                             app.compute_and_show_word_count();
                         }
@@ -496,7 +559,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         KeyCode::Char('j') | KeyCode::Down if app.active_menu.is_some() => {
                             let len = match app.active_menu.as_deref() {
                                 Some("File") => 6,
-                                Some("Tools") => 4,
+                                Some("Tools") => 5,
                                 Some("Settings") => 2,
                                 _ => 1,
                             };
@@ -505,7 +568,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         KeyCode::Char('k') | KeyCode::Up if app.active_menu.is_some() => {
                             let len = match app.active_menu.as_deref() {
                                 Some("File") => 6,
-                                Some("Tools") => 4,
+                                Some("Tools") => 5,
                                 Some("Settings") => 2,
                                 _ => 1,
                             };
@@ -543,13 +606,27 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             let extend = key.modifiers.contains(KeyModifiers::SHIFT);
                             let vis = app.editor_visible_lines.get().max(1);
                             app.active_buffer_mut().move_lines_up(1, extend);
-                            app.active_buffer_mut().ensure_cursor_visible(vis);
+                            if app.config.word_wrap {
+                                if let Some(layout) = active_wrap_layout(app) {
+                                    app.active_buffer_mut()
+                                        .ensure_cursor_visible_wrapped(&layout, vis);
+                                }
+                            } else {
+                                app.active_buffer_mut().ensure_cursor_visible(vis);
+                            }
                         }
                         KeyCode::Down => {
                             let extend = key.modifiers.contains(KeyModifiers::SHIFT);
                             let vis = app.editor_visible_lines.get().max(1);
                             app.active_buffer_mut().move_lines_down(1, extend);
-                            app.active_buffer_mut().ensure_cursor_visible(vis);
+                            if app.config.word_wrap {
+                                if let Some(layout) = active_wrap_layout(app) {
+                                    app.active_buffer_mut()
+                                        .ensure_cursor_visible_wrapped(&layout, vis);
+                                }
+                            } else {
+                                app.active_buffer_mut().ensure_cursor_visible(vis);
+                            }
                         }
                         KeyCode::Home => {
                             let extend = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -562,14 +639,28 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         KeyCode::PageUp => {
                             let extend = key.modifiers.contains(KeyModifiers::SHIFT);
                             let visible = app.editor_visible_lines.get().max(1);
-                            app.active_buffer_mut().page_up(visible, extend);
-                            app.active_buffer_mut().ensure_cursor_visible(visible);
+                            if app.config.word_wrap {
+                                if let Some(layout) = active_wrap_layout(app) {
+                                    app.active_buffer_mut()
+                                        .page_wrapped(&layout, false, visible, extend);
+                                }
+                            } else {
+                                app.active_buffer_mut().page_up(visible, extend);
+                                app.active_buffer_mut().ensure_cursor_visible(visible);
+                            }
                         }
                         KeyCode::PageDown => {
                             let extend = key.modifiers.contains(KeyModifiers::SHIFT);
                             let visible = app.editor_visible_lines.get().max(1);
-                            app.active_buffer_mut().page_down(visible, extend);
-                            app.active_buffer_mut().ensure_cursor_visible(visible);
+                            if app.config.word_wrap {
+                                if let Some(layout) = active_wrap_layout(app) {
+                                    app.active_buffer_mut()
+                                        .page_wrapped(&layout, true, visible, extend);
+                                }
+                            } else {
+                                app.active_buffer_mut().page_down(visible, extend);
+                                app.active_buffer_mut().ensure_cursor_visible(visible);
+                            }
                         }
                         KeyCode::Tab => {
                             app.active_buffer_mut().indent();
@@ -689,7 +780,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
 
             let item_count = match menu_name {
                 "File" => 6,
-                "Tools" => 4,
+                "Tools" => 5,
                 "Settings" => 2,
                 _ => 0,
             };
@@ -699,6 +790,23 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
             }
         }
     }
+}
+
+/// Build the wrap layout for the active buffer's current viewport, or None
+/// when word_wrap is off. Used by mouse/cursor handlers that need screen-row
+/// translation outside the render path.
+fn active_wrap_layout(app: &App) -> Option<crate::wrap::WrapLayout> {
+    if !app.config.word_wrap {
+        return None;
+    }
+    let buf = app.active_buffer();
+    Some(crate::wrap::compute_layout(
+        &buf.rope,
+        0,
+        buf.line_count(),
+        buf.visible_width.max(1),
+        app.config.tab_size,
+    ))
 }
 
 fn handle_mouse(mouse: MouseEvent, app: &mut App) {
@@ -717,7 +825,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             if let Some(ref menu_name) = app.active_menu {
                 let (menu_x, num_items) = match menu_name.as_str() {
                     "File" => (0usize, 6),
-                    "Tools" => (7, 4),
+                    "Tools" => (7, 5),
                     "Settings" => (15, 2),
                     _ => (0, 0),
                 };
@@ -877,9 +985,20 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 if x + 1 == tw as usize {
                     if let Some(target) = scrollbar_target_for_row(app, y) {
                         let vis = app.editor_visible_lines.get().max(1);
+                        let word_wrap = app.config.word_wrap;
+                        let tab_size = app.config.tab_size;
                         let buf = app.active_buffer_mut();
                         buf.scroll_offset.0 = target;
-                        buf.clamp_scroll(vis);
+                        if word_wrap {
+                            let total = crate::wrap::total_screen_rows(
+                                &buf.rope,
+                                buf.visible_width,
+                                tab_size,
+                            );
+                            buf.clamp_scroll_wrapped(total);
+                        } else {
+                            buf.clamp_scroll(vis);
+                        }
                         app.scrollbar_drag_active = true;
                         app.mouse_drag_active = false;
                     }
@@ -895,12 +1014,24 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                         if editor_y < vis {
                             let gutter = Buffer::GUTTER_WIDTH;
                             if x >= gutter {
-                                let hscroll = app.active_buffer().scroll_offset.1;
-                                // visual_col must account for hscroll: screen col 0 in content == logical hscroll
-                                let visual_col = (x - gutter) + hscroll;
-                                let visual_line = app.active_buffer().scroll_offset.0 + editor_y;
+                                let col_in_row = x - gutter;
+                                let layout = active_wrap_layout(app);
                                 let buf = app.active_buffer_mut();
-                                buf.set_cursor_from_visual(visual_line, visual_col);
+                                if let Some(layout) = layout {
+                                    // Wrap on: editor_y is a screen row offset; add scroll.
+                                    let screen_row = buf.scroll_offset.0 + editor_y;
+                                    let target_byte = crate::wrap::byte_of_screen_row(
+                                        &layout, &buf.rope, 0, screen_row, col_in_row,
+                                    );
+                                    buf.cursor = target_byte.min(buf.rope.len_bytes());
+                                    buf.clear_selection();
+                                } else {
+                                    let hscroll = buf.scroll_offset.1;
+                                    // visual_col must account for hscroll: screen col 0 in content == logical hscroll
+                                    let visual_col = col_in_row + hscroll;
+                                    let visual_line = buf.scroll_offset.0 + editor_y;
+                                    buf.set_cursor_from_visual(visual_line, visual_col);
+                                }
                                 // Do not force recenter here (ensure only if offscreen); set_visual no longer adjusts.
                                 buf.ensure_cursor_visible(vis);
                                 // Begin a mouse-drag selection session; cleared on MouseUp
@@ -925,9 +1056,17 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             if app.scrollbar_drag_active {
                 if let Some(target) = scrollbar_target_for_row(app, y as usize) {
                     let vis = app.editor_visible_lines.get().max(1);
+                    let word_wrap = app.config.word_wrap;
+                    let tab_size = app.config.tab_size;
                     let buf = app.active_buffer_mut();
                     buf.scroll_offset.0 = target;
-                    buf.clamp_scroll(vis);
+                    if word_wrap {
+                        let total =
+                            crate::wrap::total_screen_rows(&buf.rope, buf.visible_width, tab_size);
+                        buf.clamp_scroll_wrapped(total);
+                    } else {
+                        buf.clamp_scroll(vis);
+                    }
                 }
             } else if app.mouse_drag_active {
                 // Extend selection from a fixed anchor (set on the first drag move),
@@ -977,7 +1116,12 @@ fn scrollbar_target_for_row(app: &App, y: usize) -> Option<usize> {
     if !(sb_top..sb_bottom).contains(&y) {
         return None;
     }
-    let total = app.active_buffer().line_count();
+    let total = if app.config.word_wrap {
+        let buf = app.active_buffer();
+        crate::wrap::total_screen_rows(&buf.rope, buf.visible_width, app.config.tab_size)
+    } else {
+        app.active_buffer().line_count()
+    };
     let max = total.saturating_sub(vis);
     if max == 0 {
         return Some(0); // content fits viewport — no scroll range
@@ -1007,11 +1151,18 @@ fn extend_drag_to_mouse(app: &mut App) {
     if x < gutter {
         return;
     }
-    let hscroll = app.active_buffer().scroll_offset.1;
-    let visual_col = (x - gutter) + hscroll;
-    let visual_line = app.active_buffer().scroll_offset.0 + editor_y;
+    let col_in_row = x - gutter;
+    let layout = active_wrap_layout(app);
     let buf = app.active_buffer_mut();
-    let target_byte = buf.byte_at_visual(visual_line, visual_col);
+    let target_byte = if let Some(layout) = layout {
+        let screen_row = buf.scroll_offset.0 + editor_y;
+        crate::wrap::byte_of_screen_row(&layout, &buf.rope, 0, screen_row, col_in_row)
+    } else {
+        let hscroll = buf.scroll_offset.1;
+        let visual_col = col_in_row + hscroll;
+        let visual_line = buf.scroll_offset.0 + editor_y;
+        buf.byte_at_visual(visual_line, visual_col)
+    };
     buf.mouse_extend_to(target_byte);
 }
 
@@ -1028,7 +1179,6 @@ fn drag_edge_delta(app: &App) -> Option<(isize, isize)> {
     }
     let editor_y = y - header_rows;
     let vis = app.editor_visible_lines.get().max(1);
-    let visible_width = app.editor_visible_width.get().max(1);
     let gutter = Buffer::GUTTER_WIDTH;
 
     let mut drow: isize = 0;
@@ -1038,10 +1188,13 @@ fn drag_edge_delta(app: &App) -> Option<(isize, isize)> {
     } else if editor_y >= vis.saturating_sub(1) {
         drow = 1;
     }
-    if x <= gutter {
-        dcol = -1;
-    } else if x >= gutter + visible_width.saturating_sub(1) {
-        dcol = 1;
+    if !app.config.word_wrap {
+        let visible_width = app.editor_visible_width.get().max(1);
+        if x <= gutter {
+            dcol = -1;
+        } else if x >= gutter + visible_width.saturating_sub(1) {
+            dcol = 1;
+        }
     }
 
     if drow == 0 && dcol == 0 {
@@ -1146,6 +1299,7 @@ fn handle_menu_action(app: &mut App) {
         ("Tools", 3) => {
             let _ = app.format_current_document();
         }
+        ("Tools", 4) => app.toggle_word_wrap(),
         ("Settings", 0) => app.open_settings(),
         ("Settings", 1) => app.open_settings(), // themes
         _ => {}
@@ -1175,7 +1329,27 @@ fn ui(f: &mut Frame, app: &mut App) {
     // key comparison on a steady frame and a full (single-HighlightLines) recompute
     // only on edit / scroll / language change. Done here so editor::render can read
     // the cache immutably.
-    app.refresh_highlight_cache(app.active_buffer().scroll_offset.0, vis_h);
+    //
+    // Under word wrap `scroll_offset.0` is a screen row, but
+    // `refresh_highlight_cache` expects a logical-line index. Translate the
+    // visible screen-row window back to a logical-line window first
+    // (final-review Critical-1); otherwise `cache.start_line` exceeds the
+    // logical-line indices of every visible line and `render_wrapped` falls
+    // back to `Span::raw`, losing all syntax color.
+    let scroll_row = app.active_buffer().scroll_offset.0;
+    if app.config.word_wrap {
+        let buf = app.active_buffer();
+        let (start, count) = crate::wrap::visible_logical_window(
+            &buf.rope,
+            scroll_row,
+            vis_h,
+            buf.visible_width.max(1),
+            app.config.tab_size,
+        );
+        app.refresh_highlight_cache(start, count);
+    } else {
+        app.refresh_highlight_cache(scroll_row, vis_h);
+    }
 
     crate::ui::header::render(f, chunks[0], app);
 
@@ -1210,7 +1384,13 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 
     if app.show_settings {
-        popups::settings::render(f, area, app.current_theme(), app.settings_selected);
+        popups::settings::render(
+            f,
+            area,
+            app.current_theme(),
+            app.settings_selected,
+            app.config.word_wrap,
+        );
     }
 
     if app.show_confirm {

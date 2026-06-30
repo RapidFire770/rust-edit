@@ -10,7 +10,7 @@ use ratatui::Frame;
 
 use crate::theme::Theme;
 
-pub fn render(f: &mut Frame, area: Rect, theme: &Theme, selected: usize) {
+pub fn render(f: &mut Frame, area: Rect, theme: &Theme, selected: usize, word_wrap: bool) {
     let themes = Theme::built_ins();
     let names: Vec<&str> = themes.iter().map(|t| t.name.as_str()).collect();
 
@@ -34,7 +34,10 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, selected: usize) {
 
     lines.push(Line::from(""));
     lines.push(Line::from("Tab size: 4 (config)"));
-    lines.push(Line::from("Line nums: on"));
+    lines.push(Line::from(format!(
+        "Word wrap: {}",
+        if word_wrap { "on" } else { "off" }
+    )));
     lines.push(Line::from("Esc to close"));
 
     let block = Block::default()
