@@ -411,21 +411,39 @@ impl App {
             return;
         };
         let vis = self.editor_visible_lines.get().max(5);
+        let word_wrap = self.config.word_wrap;
+        let tab_size = self.config.tab_size;
         let b = self.active_buffer_mut();
         let pos = mrange.start;
         let end = mrange.end.min(b.rope.len_bytes());
         b.cursor = pos;
         b.selection = Some(pos..end);
-        // Use minimal ensure (from slice 1) so nav doesn't jump view unnecessarily.
-        b.ensure_cursor_visible(vis);
-        // If still far (e.g. initial), modest recenter with real vis.
-        let (row, _) = b.cursor_position();
-        if row < b.scroll_offset.0 || row >= b.scroll_offset.0 + vis {
-            b.scroll_offset.0 = row.saturating_sub(vis / 2);
+        if word_wrap {
+            let layout = crate::wrap::compute_layout(
+                &b.rope,
+                0,
+                b.line_count(),
+                b.visible_width.max(1),
+                tab_size,
+            );
+            b.ensure_cursor_visible_wrapped(&layout, vis);
+            let cursor_row = crate::wrap::screen_row_of_byte(&layout, &b.rope, 0, b.cursor);
+            if cursor_row < b.scroll_offset.0 || cursor_row >= b.scroll_offset.0 + vis {
+                b.scroll_offset.0 = cursor_row.saturating_sub(vis / 2);
+            }
+            // No horizontal adjust under wrap.
+        } else {
+            // Use minimal ensure (from slice 1) so nav doesn't jump view unnecessarily.
+            b.ensure_cursor_visible(vis);
+            // If still far (e.g. initial), modest recenter with real vis.
+            let (row, _) = b.cursor_position();
+            if row < b.scroll_offset.0 || row >= b.scroll_offset.0 + vis {
+                b.scroll_offset.0 = row.saturating_sub(vis / 2);
+            }
+            // Bring the match column into view horizontally (matches off the right
+            // edge used to land the cursor invisibly).
+            b.ensure_cursor_horizontally_visible();
         }
-        // Bring the match column into view horizontally (matches off the right
-        // edge used to land the cursor invisibly).
-        b.ensure_cursor_horizontally_visible();
     }
 
     pub fn replace_current(&mut self) {

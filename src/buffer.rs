@@ -795,6 +795,96 @@ impl Buffer {
         self.path = Some(path);
         self.is_modified = false;
     }
+
+    // ===== Word-wrap-aware scroll/cursor helpers =====
+    //
+    // These consult a WrapLayout computed by the caller (render path or main.rs
+    // event handler). When word_wrap is off, the caller must use the original
+    // (unwrapped) helpers instead.
+
+    /// Scroll by `delta` screen rows. `total_screen_rows` is the buffer's total
+    /// wrapped height at the current width.
+    pub fn scroll_wrapped(&mut self, delta: isize, total_screen_rows: usize) {
+        let current = self.scroll_offset.0 as isize;
+        let max = total_screen_rows.saturating_sub(self.visible_lines.max(1)) as isize;
+        let new = (current + delta).max(0).min(max) as usize;
+        self.scroll_offset.0 = new;
+    }
+
+    /// Clamp scroll_offset.0 to the wrapped range.
+    pub fn clamp_scroll_wrapped(&mut self, total_screen_rows: usize) {
+        let max = total_screen_rows.saturating_sub(self.visible_lines.max(1));
+        if self.scroll_offset.0 > max {
+            self.scroll_offset.0 = max;
+        }
+    }
+
+    /// Auto-scroll to keep the cursor visible, using screen rows.
+    pub fn adjust_scroll_wrapped(&mut self, layout: &crate::wrap::WrapLayout) {
+        let v = self.visible_lines.max(1);
+        let cursor_row = crate::wrap::screen_row_of_byte(layout, &self.rope, 0, self.cursor);
+        let s = self.scroll_offset.0;
+        if cursor_row < s {
+            self.scroll_offset.0 = cursor_row;
+        } else if cursor_row >= s + v {
+            self.scroll_offset.0 = cursor_row.saturating_sub(v.saturating_sub(2));
+        }
+        // No horizontal adjust under wrap.
+    }
+
+    /// Minimal visibility clamp (used by mouse placement & find jumps).
+    pub fn ensure_cursor_visible_wrapped(&mut self, layout: &crate::wrap::WrapLayout, vis: usize) {
+        let v = vis.max(1);
+        let cursor_row = crate::wrap::screen_row_of_byte(layout, &self.rope, 0, self.cursor);
+        let s = self.scroll_offset.0;
+        if cursor_row < s {
+            self.scroll_offset.0 = cursor_row;
+        } else if cursor_row >= s + v {
+            self.scroll_offset.0 = cursor_row.saturating_sub(v.saturating_sub(2));
+        }
+    }
+
+    /// Page up/down under wrap. `layout` is the buffer's full wrap layout.
+    pub fn page_wrapped(
+        &mut self,
+        layout: &crate::wrap::WrapLayout,
+        down: bool,
+        vis: usize,
+        extend_selection: bool,
+    ) {
+        let page = vis.saturating_sub(1).max(1) as isize;
+        let cursor_row = crate::wrap::screen_row_of_byte(layout, &self.rope, 0, self.cursor);
+        let old_scroll = self.scroll_offset.0 as isize;
+        let total = layout.total_screen_rows as isize;
+        let max = total.saturating_sub(1);
+        let new_scroll = if down {
+            (old_scroll + page).min(max)
+        } else {
+            (old_scroll - page).max(0)
+        } as usize;
+        self.scroll_offset.0 = new_scroll;
+        // Place the cursor on the same logical line it was on, at the preferred col,
+        // but at a screen row inside the new viewport. For MVP we move the cursor to
+        // the line whose first screen row == new_scroll (top of the paged view).
+        let target_screen_row = new_scroll;
+        // Find the logical line that starts at or before target_screen_row.
+        let mut acc = 0usize;
+        let mut target_line = 0usize;
+        for (i, line_breaks) in layout.breaks.iter().enumerate() {
+            let rows_in_line = line_breaks.len() + 1;
+            if acc + rows_in_line > target_screen_row {
+                target_line = i;
+                break;
+            }
+            acc += rows_in_line;
+        }
+        let (_, preferred_col) = self.cursor_position();
+        let _ = cursor_row;
+        // Reuse the existing line-move logic for col preservation + extend.
+        self.move_to_line(target_line, preferred_col, extend_selection);
+        // move_to_line calls adjust_scroll (unwrapped); override with wrapped clamp.
+        self.ensure_cursor_visible_wrapped(layout, vis);
+    }
 }
 
 #[cfg(test)]
