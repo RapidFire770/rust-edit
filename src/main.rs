@@ -1215,7 +1215,13 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 
     if app.show_settings {
-        popups::settings::render(f, area, app.current_theme(), app.settings_selected);
+        popups::settings::render(
+            f,
+            area,
+            app.current_theme(),
+            app.settings_selected,
+            app.config.word_wrap,
+        );
     }
 
     if app.show_confirm {
