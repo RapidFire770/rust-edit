@@ -705,6 +705,23 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
     }
 }
 
+/// Build the wrap layout for the active buffer's current viewport, or None
+/// when word_wrap is off. Used by mouse/cursor handlers that need screen-row
+/// translation outside the render path.
+fn active_wrap_layout(app: &App) -> Option<crate::wrap::WrapLayout> {
+    if !app.config.word_wrap {
+        return None;
+    }
+    let buf = app.active_buffer();
+    Some(crate::wrap::compute_layout(
+        &buf.rope,
+        0,
+        buf.line_count(),
+        buf.visible_width.max(1),
+        app.config.tab_size,
+    ))
+}
+
 fn handle_mouse(mouse: MouseEvent, app: &mut App) {
     let (x, y) = (mouse.column, mouse.row);
     app.last_mouse_pos = Some((x, y));
@@ -899,12 +916,24 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                         if editor_y < vis {
                             let gutter = Buffer::GUTTER_WIDTH;
                             if x >= gutter {
-                                let hscroll = app.active_buffer().scroll_offset.1;
-                                // visual_col must account for hscroll: screen col 0 in content == logical hscroll
-                                let visual_col = (x - gutter) + hscroll;
-                                let visual_line = app.active_buffer().scroll_offset.0 + editor_y;
+                                let col_in_row = x - gutter;
+                                let layout = active_wrap_layout(app);
                                 let buf = app.active_buffer_mut();
-                                buf.set_cursor_from_visual(visual_line, visual_col);
+                                if let Some(layout) = layout {
+                                    // Wrap on: editor_y is a screen row offset; add scroll.
+                                    let screen_row = buf.scroll_offset.0 + editor_y;
+                                    let target_byte = crate::wrap::byte_of_screen_row(
+                                        &layout, &buf.rope, 0, screen_row, col_in_row,
+                                    );
+                                    buf.cursor = target_byte.min(buf.rope.len_bytes());
+                                    buf.clear_selection();
+                                } else {
+                                    let hscroll = buf.scroll_offset.1;
+                                    // visual_col must account for hscroll: screen col 0 in content == logical hscroll
+                                    let visual_col = col_in_row + hscroll;
+                                    let visual_line = buf.scroll_offset.0 + editor_y;
+                                    buf.set_cursor_from_visual(visual_line, visual_col);
+                                }
                                 // Do not force recenter here (ensure only if offscreen); set_visual no longer adjusts.
                                 buf.ensure_cursor_visible(vis);
                                 // Begin a mouse-drag selection session; cleared on MouseUp
@@ -1011,11 +1040,18 @@ fn extend_drag_to_mouse(app: &mut App) {
     if x < gutter {
         return;
     }
-    let hscroll = app.active_buffer().scroll_offset.1;
-    let visual_col = (x - gutter) + hscroll;
-    let visual_line = app.active_buffer().scroll_offset.0 + editor_y;
+    let col_in_row = x - gutter;
+    let layout = active_wrap_layout(app);
     let buf = app.active_buffer_mut();
-    let target_byte = buf.byte_at_visual(visual_line, visual_col);
+    let target_byte = if let Some(layout) = layout {
+        let screen_row = buf.scroll_offset.0 + editor_y;
+        crate::wrap::byte_of_screen_row(&layout, &buf.rope, 0, screen_row, col_in_row)
+    } else {
+        let hscroll = buf.scroll_offset.1;
+        let visual_col = col_in_row + hscroll;
+        let visual_line = buf.scroll_offset.0 + editor_y;
+        buf.byte_at_visual(visual_line, visual_col)
+    };
     buf.mouse_extend_to(target_byte);
 }
 
