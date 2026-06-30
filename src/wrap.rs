@@ -15,6 +15,52 @@ pub struct WrapLayout {
     pub tab_size: u8,
 }
 
+/// Given a screen-row scroll offset and a visible screen-row count, return the
+/// `(logical_start_line, logical_count)` window that covers all visible screen
+/// rows. Used to feed `refresh_highlight_cache` correct logical-line arguments
+/// under word wrap (where `scroll_offset.0` is a screen row, not a logical
+/// line — see final-review Critical-1).
+pub fn visible_logical_window(
+    rope: &Rope,
+    scroll_screen_row: usize,
+    visible_screen_rows: usize,
+    width: usize,
+    tab_size: u8,
+) -> (usize, usize) {
+    let n = rope.len_lines();
+    let layout = compute_layout(rope, 0, n, width, tab_size);
+    // Find the logical line containing scroll_screen_row.
+    let mut prefix = 0usize;
+    let mut start_line = 0usize;
+    for (i, line_breaks) in layout.breaks.iter().enumerate() {
+        let rows = line_breaks.len() + 1;
+        if prefix + rows > scroll_screen_row {
+            start_line = i;
+            break;
+        }
+        prefix += rows;
+    }
+    // Extend the window until we've covered visible_screen_rows screen rows
+    // from scroll_screen_row.
+    let target_end_row = scroll_screen_row + visible_screen_rows;
+    let mut acc = prefix; // screen rows up to and including start_line's first row
+    let mut end_line = start_line;
+    for (i, line_breaks) in layout.breaks.iter().enumerate().skip(start_line) {
+        let rows = line_breaks.len() + 1;
+        if acc + rows >= target_end_row {
+            end_line = i + 1;
+            break;
+        }
+        acc += rows;
+        end_line = i + 1;
+    }
+    let count = end_line
+        .saturating_sub(start_line)
+        .max(1)
+        .min(n.saturating_sub(start_line).max(1));
+    (start_line, count)
+}
+
 /// Total screen rows across the entire buffer at the given width.
 pub fn total_screen_rows(rope: &Rope, width: usize, tab_size: u8) -> usize {
     let n = rope.len_lines();
@@ -492,5 +538,58 @@ mod tests {
         // Click past end of row 1 → clamp to line end (byte 16, the position of
         // '\n' — cursor sits before the newline).
         assert_eq!(byte_of_screen_row(&l, &rope, 0, 1, 99), 16);
+    }
+
+    /// Regression for Critical-1: under wrap, `ui()` must translate the
+    /// screen-row `scroll_offset.0` back to a logical-line window before
+    /// refreshing the syntax highlight cache. `visible_logical_window` is the
+    /// helper that performs this translation.
+    #[test]
+    fn visible_logical_window_no_wrap_passthrough() {
+        // Three short lines at width 80 — none wrap. Screen rows equal logical
+        // lines. A scroll of 1 with 2 visible rows should map to lines [1..3).
+        let rope = Rope::from_str("aaa\nbbb\nccc\n");
+        let (start, count) = visible_logical_window(&rope, 1, 2, 80, 4);
+        assert_eq!(start, 1);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn visible_logical_window_wrapped_mid_line() {
+        // 3 logical lines: line 0 short, line 1 long enough to wrap to 5 screen
+        // rows at width 3, line 2 short.
+        //
+        // "abcdefghijkmnop" (15 chars) at width 3 → 5 screen rows (3 chars each),
+        // i.e. 4 breaks. Screen-row layout:
+        //   line 0 "x"            -> 1 row  (row 0)
+        //   line 1 (5 rows)       -> rows 1..6
+        //   line 2 "y"            -> row 6
+        // scroll_screen_row = 3, visible = 2 → covers rows 3..5, both inside
+        // line 1. So the window must start at line 1 and include at least line 1.
+        let rope = Rope::from_str("x\nabcdefghijkmnop\ny\n");
+        // Sanity-check the wrap math: 15 chars / 3 = 5 rows => 4 breaks.
+        let layout = compute_layout(&rope, 0, rope.len_lines(), 3, 4);
+        assert_eq!(
+            layout.breaks[1].len(),
+            4,
+            "line 1 must wrap to 5 rows (4 breaks) at width 3"
+        );
+        let (start, count) = visible_logical_window(&rope, 3, 2, 3, 4);
+        assert_eq!(
+            start, 1,
+            "window must start at the logical line containing screen row 3"
+        );
+        assert!(count >= 1, "window must include at least one line");
+    }
+
+    #[test]
+    fn visible_logical_window_spans_into_next_line() {
+        // "aaaa\nbb\n" width 3. Line 0 "aaaa" wraps to 2 rows; line 1 "bb" = 1 row.
+        // scroll_screen_row = 1 (2nd row of line 0), visible = 2 → covers rows 1
+        // and 2 → lines 0 and 1.
+        let rope = Rope::from_str("aaaa\nbb\n");
+        let (start, count) = visible_logical_window(&rope, 1, 2, 3, 4);
+        assert_eq!(start, 0);
+        assert_eq!(count, 2);
     }
 }

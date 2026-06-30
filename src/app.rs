@@ -314,14 +314,27 @@ impl App {
         for b in self.buffers.iter_mut() {
             b.visible_width = w;
             if on {
+                // Turning wrap ON: `scroll_offset.0` becomes a screen row.
+                // Reset hscroll, clamp into the wrapped range, then keep the
+                // cursor visible via the wrapped (screen-row) variant. The
+                // unwrapped `ensure_cursor_visible` treats `scroll_offset.0`
+                // as a logical-line index and would overwrite it with a
+                // logical value, corrupting the screen-row invariant
+                // (final-review Important-1).
                 b.scroll_offset.1 = 0;
                 let total = crate::wrap::total_screen_rows(&b.rope, b.visible_width, tab);
                 let max = total.saturating_sub(vis);
                 if b.scroll_offset.0 > max {
                     b.scroll_offset.0 = max;
                 }
+                let layout =
+                    crate::wrap::compute_layout(&b.rope, 0, b.line_count(), b.visible_width, tab);
+                b.ensure_cursor_visible_wrapped(&layout, vis);
+            } else {
+                // Turning wrap OFF: `scroll_offset.0` reverts to a logical
+                // line index, so the unwrapped variant is correct.
+                b.ensure_cursor_visible(vis);
             }
-            b.ensure_cursor_visible(vis);
         }
     }
 

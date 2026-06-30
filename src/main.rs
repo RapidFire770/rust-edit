@@ -1329,7 +1329,27 @@ fn ui(f: &mut Frame, app: &mut App) {
     // key comparison on a steady frame and a full (single-HighlightLines) recompute
     // only on edit / scroll / language change. Done here so editor::render can read
     // the cache immutably.
-    app.refresh_highlight_cache(app.active_buffer().scroll_offset.0, vis_h);
+    //
+    // Under word wrap `scroll_offset.0` is a screen row, but
+    // `refresh_highlight_cache` expects a logical-line index. Translate the
+    // visible screen-row window back to a logical-line window first
+    // (final-review Critical-1); otherwise `cache.start_line` exceeds the
+    // logical-line indices of every visible line and `render_wrapped` falls
+    // back to `Span::raw`, losing all syntax color.
+    let scroll_row = app.active_buffer().scroll_offset.0;
+    if app.config.word_wrap {
+        let buf = app.active_buffer();
+        let (start, count) = crate::wrap::visible_logical_window(
+            &buf.rope,
+            scroll_row,
+            vis_h,
+            buf.visible_width.max(1),
+            app.config.tab_size,
+        );
+        app.refresh_highlight_cache(start, count);
+    } else {
+        app.refresh_highlight_cache(scroll_row, vis_h);
+    }
 
     crate::ui::header::render(f, chunks[0], app);
 

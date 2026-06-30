@@ -819,19 +819,6 @@ impl Buffer {
         }
     }
 
-    /// Auto-scroll to keep the cursor visible, using screen rows.
-    pub fn adjust_scroll_wrapped(&mut self, layout: &crate::wrap::WrapLayout) {
-        let v = self.visible_lines.max(1);
-        let cursor_row = crate::wrap::screen_row_of_byte(layout, &self.rope, 0, self.cursor);
-        let s = self.scroll_offset.0;
-        if cursor_row < s {
-            self.scroll_offset.0 = cursor_row;
-        } else if cursor_row >= s + v {
-            self.scroll_offset.0 = cursor_row.saturating_sub(v.saturating_sub(2));
-        }
-        // No horizontal adjust under wrap.
-    }
-
     /// Minimal visibility clamp (used by mouse placement & find jumps).
     pub fn ensure_cursor_visible_wrapped(&mut self, layout: &crate::wrap::WrapLayout, vis: usize) {
         let v = vis.max(1);
@@ -845,6 +832,14 @@ impl Buffer {
     }
 
     /// Page up/down under wrap. `layout` is the buffer's full wrap layout.
+    ///
+    /// Places the cursor on the logical line whose first screen row is at or
+    /// before the new top-of-viewport screen row, preserving the preferred
+    /// column. The target byte is computed directly WITHOUT routing through
+    /// `move_to_line` (which ends with `adjust_scroll`, treating
+    /// `scroll_offset.0` as a logical-line index and corrupting the
+    /// screen-row invariant — final-review Important-2). It also resolves the
+    /// discarded-`cursor_row` Minor-4.
     pub fn page_wrapped(
         &mut self,
         layout: &crate::wrap::WrapLayout,
@@ -853,7 +848,6 @@ impl Buffer {
         extend_selection: bool,
     ) {
         let page = vis.saturating_sub(1).max(1) as isize;
-        let cursor_row = crate::wrap::screen_row_of_byte(layout, &self.rope, 0, self.cursor);
         let old_scroll = self.scroll_offset.0 as isize;
         let total = layout.total_screen_rows as isize;
         let max = total.saturating_sub(1);
@@ -863,26 +857,42 @@ impl Buffer {
             (old_scroll - page).max(0)
         } as usize;
         self.scroll_offset.0 = new_scroll;
-        // Place the cursor on the same logical line it was on, at the preferred col,
-        // but at a screen row inside the new viewport. For MVP we move the cursor to
-        // the line whose first screen row == new_scroll (top of the paged view).
-        let target_screen_row = new_scroll;
-        // Find the logical line that starts at or before target_screen_row.
+
+        // Find the logical line whose first screen row is at or before
+        // `new_scroll` (the new top of the viewport).
         let mut acc = 0usize;
         let mut target_line = 0usize;
         for (i, line_breaks) in layout.breaks.iter().enumerate() {
-            let rows_in_line = line_breaks.len() + 1;
-            if acc + rows_in_line > target_screen_row {
+            let rows = line_breaks.len() + 1;
+            if acc + rows > new_scroll {
                 target_line = i;
                 break;
             }
-            acc += rows_in_line;
+            acc += rows;
         }
-        let (_, preferred_col) = self.cursor_position();
-        let _ = cursor_row;
-        // Reuse the existing line-move logic for col preservation + extend.
-        self.move_to_line(target_line, preferred_col, extend_selection);
-        // move_to_line calls adjust_scroll (unwrapped); override with wrapped clamp.
+
+        // Compute the target byte on `target_line` at the preferred column
+        // (clamped to the line's char width) and set cursor + selection
+        // directly, bypassing `move_to_line` → `adjust_scroll`.
+        let preferred_col = self.cursor_position().1;
+        let line_start_byte = self.rope.line_to_byte(target_line);
+        let line_str = self.line(target_line);
+        let line_str = line_str.trim_end_matches(['\n', '\r']);
+        let target_col = preferred_col.min(line_str.chars().count());
+        let mut byte_off = line_start_byte;
+        for (i, c) in line_str.chars().enumerate() {
+            if i >= target_col {
+                break;
+            }
+            byte_off += c.len_utf8();
+        }
+        if extend_selection {
+            self.extend_selection_to(byte_off);
+        } else {
+            self.clear_selection();
+        }
+        self.cursor = byte_off;
+        // Correct the scroll if the cursor's screen row now falls outside the view.
         self.ensure_cursor_visible_wrapped(layout, vis);
     }
 }
