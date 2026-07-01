@@ -164,6 +164,21 @@ pub fn list_area(popup: Rect) -> (usize, usize) {
     (start, end)
 }
 
+/// Map a screen row `y` to the entry index rendered there, or `None` if `y`
+/// falls outside the list body. Uses the same `compute_scroll` the renderer
+/// uses, so the result always matches the row the user sees. The caller is
+/// responsible for filtering the result against `browser_entries.len()` — a
+/// row inside the body but past the last entry (blank padding) returns
+/// `Some(idx)` with `idx >= len` and must be treated as "no entry".
+pub fn list_index_at(y: usize, area: (usize, usize), sel: usize) -> Option<usize> {
+    if y < area.0 || y >= area.1 {
+        return None;
+    }
+    let body_h = (area.1 - area.0).max(1);
+    let scroll = compute_scroll(sel, body_h);
+    Some((y - area.0) + scroll)
+}
+
 /// Render the browser popup. Pure presentation — all state is read from `app`.
 pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
     let popup = file_browser_rect(area);
@@ -240,7 +255,13 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
             let marker = if entry.is_dir { "/" } else { " " };
             let name = format!("{}{}", entry.name, if entry.is_dir { "/" } else { "" });
             let base = if entry.is_dir { dir_style } else { file_style };
-            let style = if i == sel && app.browser_button_selected == 4 {
+            // Hover steals the highlight: when the mouse is over a row, that
+            // row is the only one highlighted. With no hover, the keyboard
+            // selection (`browser_selected`, when the list is focused) shows.
+            let is_hover = app.browser_list_hover == Some(i);
+            let is_sel =
+                i == sel && app.browser_button_selected == 4 && app.browser_list_hover.is_none();
+            let style = if is_hover || is_sel {
                 selection_bg
             } else {
                 base
@@ -490,5 +511,32 @@ mod tests {
         assert_eq!(compute_scroll(0, 0), 0);
         assert_eq!(compute_scroll(5, 0), 5);
         assert_eq!(compute_scroll(3, 1), 3);
+    }
+
+    #[test]
+    fn list_index_at_returns_none_outside_list_area() {
+        let area = (10usize, 20usize);
+        assert_eq!(list_index_at(9, area, 0), None); // above
+        assert_eq!(list_index_at(20, area, 0), None); // at footer (exclusive end)
+        assert_eq!(list_index_at(21, area, 0), None); // below
+    }
+
+    #[test]
+    fn list_index_at_first_row_is_index_zero_when_unscrolled() {
+        let area = (10usize, 20usize);
+        // sel in the first page → scroll 0 → top row is index 0.
+        assert_eq!(list_index_at(10, area, 0), Some(0));
+        assert_eq!(list_index_at(10, area, 5), Some(0));
+        assert_eq!(list_index_at(15, area, 5), Some(5)); // middle row
+        assert_eq!(list_index_at(19, area, 5), Some(9)); // last body row
+    }
+
+    #[test]
+    fn list_index_at_accounts_for_scroll_past_first_page() {
+        let area = (10usize, 20usize); // body_h = 10
+                                       // sel 15 → compute_scroll(15,10)=10 → top row maps to index 10.
+        assert_eq!(list_index_at(10, area, 15), Some(10));
+        assert_eq!(list_index_at(15, area, 15), Some(15)); // row under sel
+        assert_eq!(list_index_at(19, area, 15), Some(19)); // last body row
     }
 }

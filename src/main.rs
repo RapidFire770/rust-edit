@@ -821,7 +821,18 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
         if y as usize == btn_y {
             let labels = popups::file_dialog::button_labels(app.file_dialog_is_save);
             let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x + 1, &labels);
-            app.file_dialog_button_hover = ranges.iter().position(|(s, e)| x >= *s && x < *e);
+            let hit = ranges.iter().position(|(s, e)| x >= *s && x < *e);
+            // `file_dialog_button_hover` is the transient hit-test used by the
+            // click handler to know a button was actually clicked.
+            app.file_dialog_button_hover = hit;
+            // Hover steals the selection: the highlighted button follows the
+            // mouse and STAYS put when the mouse leaves the button row, rather
+            // than snapping back to the last keyboard-selected button. We do
+            // NOT reset `file_dialog_selected` in the else-branch — that reset
+            // is exactly the "jump back" behavior we're removing.
+            if let Some(idx) = hit {
+                app.file_dialog_selected = idx;
+            }
         } else {
             app.file_dialog_button_hover = None;
         }
@@ -834,9 +845,30 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
         if y as usize == btn_y {
             let labels = app.browser_footer_labels();
             let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x + 1, &labels);
-            app.browser_button_hover = ranges.iter().position(|(s, e)| x >= *s && x < *e);
+            let hit = ranges.iter().position(|(s, e)| x >= *s && x < *e);
+            // Transient hit-test used by the click handler.
+            app.browser_button_hover = hit;
+            // Hover steals the footer-button selection so the highlight stays
+            // on the last-hovered button when the mouse leaves the row, rather
+            // than snapping back to the keyboard-focused button.
+            if let Some(idx) = hit {
+                app.browser_button_selected = idx;
+            }
         } else {
             app.browser_button_hover = None;
+        }
+
+        // List-row hover preview. Uses the same row->index math as the click
+        // handler so the highlighted row is always the one that would activate
+        // on a click. Entries past the last row (blank padding) yield None.
+        let area = popups::file_browser::list_area(popup);
+        let list_hit = popups::file_browser::list_index_at(y as usize, area, app.browser_selected)
+            .filter(|&i| i < app.browser_entries.len());
+        app.browser_list_hover = list_hit;
+        // Mouse owns focus: being over the list means list focus (sentinel 4),
+        // so the previously-hovered footer button doesn't stay highlighted too.
+        if list_hit.is_some() {
+            app.browser_button_selected = 4;
         }
     }
 
@@ -1016,18 +1048,15 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                             }
                         }
                     } else if y >= list_area.0 && y < list_area.1 {
-                        // List row click: select + activate (dir enters, file confirms).
-                        // Scroll is derived from the selection via the SAME
-                        // `compute_scroll` the renderer uses, so the clicked
-                        // screen row maps to exactly the entry rendered there.
-                        let rel = y - list_area.0;
+                        // List row click: select + activate (dir enters, file
+                        // confirms). Shares the row->index math with the hover
+                        // preview so the clicked row is always the highlighted one.
                         let body_h = (list_area.1 - list_area.0).max(1);
-                        let scroll =
-                            popups::file_browser::compute_scroll(app.browser_selected, body_h);
-                        let idx = rel + scroll;
-                        if idx < app.browser_entries.len() {
+                        if let Some(idx) =
+                            popups::file_browser::list_index_at(y, list_area, app.browser_selected)
+                                .filter(|&i| i < app.browser_entries.len())
+                        {
                             app.browser_select_index(idx);
-                            // Activate the clicked entry directly (single-click UX).
                             app.browser_enter_selected();
                         }
                         // Touch viewport height so subsequent PgUp/PgDn feels right.

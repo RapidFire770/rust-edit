@@ -75,6 +75,10 @@ pub struct App {
     pub browser_entries: Vec<crate::ui::popups::file_browser::BrowserEntry>,
     /// Currently highlighted row in the listing.
     pub browser_selected: usize,
+    /// Entry index currently under the mouse (live hover preview). When set,
+    /// this row steals the highlight from the keyboard selection so only one
+    /// row is highlighted at a time. Cleared when the mouse leaves the list.
+    pub browser_list_hover: Option<usize>,
     /// Whether dotfile entries are shown.
     pub browser_show_hidden: bool,
     /// Last IO/permission error from `read_directory`, shown inline. Cleared
@@ -170,6 +174,7 @@ impl App {
             browser_cwd: PathBuf::new(),
             browser_entries: Vec::new(),
             browser_selected: 0,
+            browser_list_hover: None,
             browser_show_hidden: false,
             browser_error: None,
             browser_mode: crate::ui::popups::file_browser::BrowserMode::default(),
@@ -845,6 +850,7 @@ impl App {
         self.browser_mode = crate::ui::popups::file_browser::BrowserMode::Dir;
         self.browser_show_hidden = false;
         self.browser_selected = 0;
+        self.browser_list_hover = None;
         self.browser_error = None;
         self.browser_button_selected = 4; // 4 = "list area" sentinel (see main.rs keys)
         self.browser_button_hover = None;
@@ -890,6 +896,7 @@ impl App {
             }
         }
         self.show_file_browser = false;
+        self.browser_list_hover = None;
     }
 
     /// Re-read `browser_cwd` into `browser_entries` (Dir mode only). IO errors
@@ -999,11 +1006,13 @@ impl App {
         }
         self.browser_cwd = parent;
         self.browser_selected = 0;
+        self.browser_list_hover = None;
         self.refresh_browser();
     }
 
     pub fn browser_toggle_hidden(&mut self) {
         self.browser_show_hidden = !self.browser_show_hidden;
+        self.browser_list_hover = None;
         self.refresh_browser();
     }
 
@@ -1018,6 +1027,7 @@ impl App {
             }
         };
         self.browser_selected = 0;
+        self.browser_list_hover = None;
         self.browser_error = None;
         self.refresh_browser();
     }
@@ -1025,6 +1035,7 @@ impl App {
     /// Move the row cursor by `delta`, clamping at both ends. Kept in `App`
     /// (not the pure module) because it mutates UI state. Scroll is derived
     /// from the selection at render/click time, so it needs no clamping here.
+    /// Clears the mouse hover so the keyboard selection is what shows.
     pub fn browser_move_cursor(&mut self, delta: i32) {
         if self.browser_entries.is_empty() {
             return;
@@ -1038,6 +1049,7 @@ impl App {
             next = n - 1;
         }
         self.browser_selected = next as usize;
+        self.browser_list_hover = None;
     }
 
     /// Jump the row cursor to the first/last entry.
@@ -1050,6 +1062,7 @@ impl App {
         } else {
             0
         };
+        self.browser_list_hover = None;
     }
 
     /// Page the row cursor by approximately one viewport height.
