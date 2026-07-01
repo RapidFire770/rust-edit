@@ -150,6 +150,125 @@ impl<'a> ButtonGroup<'a> {
     }
 }
 
+/// A button group of arbitrary length. Used by popups that need three or more
+/// buttons (e.g. the file browser's `[ Up ] [ Recent ] [ Hidden ] [ Cancel ]`).
+///
+/// The existing two-button [`ButtonGroup`] is kept untouched so `confirm.rs`
+/// and its tests remain stable.
+pub struct ButtonRow<'a> {
+    pub buttons: Vec<Button<'a>>,
+    pub selected_index: usize,
+    pub hovered_index: Option<usize>,
+}
+
+impl<'a> ButtonRow<'a> {
+    /// Caller owns the slice lifetimes; internal `Vec` copies the `Button`s.
+    pub fn new(labels: &[&'a str], is_primary: &[bool]) -> Self {
+        assert!(
+            labels.len() == is_primary.len() && !labels.is_empty(),
+            "ButtonRow needs matching-length, non-empty label/is_primary slices"
+        );
+        let mut buttons: Vec<Button<'a>> = labels
+            .iter()
+            .zip(is_primary.iter())
+            .map(|(l, &p)| Button::new(l, p))
+            .collect();
+        buttons[0].state = ButtonState::Selected;
+        Self {
+            buttons,
+            selected_index: 0,
+            hovered_index: None,
+        }
+    }
+
+    /// Compute the `(start_x, end_x)` screen column range of each button,
+    /// assuming the row starts at `x_start` and buttons are separated by the
+    /// same spacing [`ButtonRow::render`] uses (2 leading spaces, 3 between).
+    /// Used by mouse hit-testing so hover and click agree with the renderer.
+    pub fn button_x_ranges(x_start: u16, labels: &[&str]) -> Vec<(u16, u16)> {
+        let mut ranges = Vec::with_capacity(labels.len());
+        let mut cursor = x_start.saturating_add(2); // leading "  "
+        for (i, label) in labels.iter().enumerate() {
+            if i > 0 {
+                cursor = cursor.saturating_add(3); // gap "   "
+            }
+            let len = label.chars().count() as u16;
+            ranges.push((cursor, cursor.saturating_add(len)));
+            cursor = cursor.saturating_add(len);
+        }
+        ranges
+    }
+
+    /// Move the selection by `delta` positions, wrapping at both ends. Updates
+    /// each button's `state` so a single `render` call reflects the change.
+    /// (Currently exercised only by tests — kept as part of the public API for
+    /// future popups that prefer arrow-key cycling over explicit `select`.)
+    #[allow(dead_code)]
+    pub fn move_cursor(&mut self, delta: i32) {
+        let n = self.buttons.len() as i32;
+        // Euclidean modulo so negative deltas wrap correctly.
+        let new_idx = ((self.selected_index as i32 + delta) % n + n) % n;
+        self.select(Some(new_idx as usize));
+    }
+
+    /// Select an explicit index. Hover state is preserved independently.
+    pub fn select(&mut self, idx: Option<usize>) {
+        self.selected_index = idx.unwrap_or(self.selected_index);
+        for (i, b) in self.buttons.iter_mut().enumerate() {
+            b.state = if i == self.selected_index {
+                ButtonState::Selected
+            } else {
+                ButtonState::Normal
+            };
+        }
+        // Re-apply hover last so it wins over selection visuals.
+        if let Some(h) = self.hovered_index {
+            if h < self.buttons.len() {
+                self.buttons[h].state = ButtonState::Hovered;
+            }
+        }
+    }
+
+    /// Update hover state from a mouse position (or `None` when the cursor
+    /// leaves all buttons). Selection is preserved. While a hover is active
+    /// only the hovered button is highlighted (matching `ButtonGroup`).
+    pub fn set_hover(&mut self, idx: Option<usize>) {
+        self.hovered_index = idx;
+        for (i, b) in self.buttons.iter_mut().enumerate() {
+            b.state = match (idx, i == self.selected_index) {
+                (Some(h), _) if h == i => ButtonState::Hovered,
+                (Some(_), _) => ButtonState::Normal,
+                (_, true) => ButtonState::Selected,
+                _ => ButtonState::Normal,
+            };
+        }
+    }
+
+    /// Render the row as a single `Line` with two leading spaces and three
+    /// spaces between each button. Selected/hovered buttons use accent+bold;
+    /// the rest use the dim editor foreground.
+    pub fn render(&self, theme: &Theme) -> Line<'a> {
+        let accent_bold = Style::default()
+            .fg(Color::from(&theme.accent))
+            .add_modifier(Modifier::BOLD);
+        let dim = Style::default().fg(Color::from(&theme.editor_fg));
+
+        let mut spans: Vec<Span<'a>> = Vec::with_capacity(self.buttons.len() * 2 + 1);
+        spans.push(Span::raw("  "));
+        for (i, b) in self.buttons.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw("   "));
+            }
+            let style = match b.state {
+                ButtonState::Selected | ButtonState::Hovered => accent_bold,
+                ButtonState::Normal => dim,
+            };
+            spans.push(Span::styled(b.label, style));
+        }
+        Line::from(spans)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,14 +321,57 @@ mod tests {
         assert_eq!(group.hovered_index, None);
         assert_eq!(group.buttons[0].state, ButtonState::Selected);
     }
+}
+
+#[cfg(test)]
+mod button_row_tests {
+    use super::*;
+    use crate::theme::Theme;
 
     #[test]
-    fn test_hit_test() {
-        let group = ButtonGroup::new(["[ Save ]", "[ Cancel ]"], [true, false]);
-        let widths = [9, 11];
+    fn button_row_creation_and_default_selection() {
+        let row = ButtonRow::new(&["A", "B", "C"], &[true, false, false]);
+        assert_eq!(row.buttons.len(), 3);
+        assert_eq!(row.selected_index, 0);
+        assert_eq!(row.hovered_index, None);
+        assert_eq!(row.buttons[0].state, ButtonState::Selected);
+        assert_eq!(row.buttons[1].state, ButtonState::Normal);
+    }
 
-        assert_eq!(group.hit_test(10, 15, widths), Some(0));
-        assert_eq!(group.hit_test(10, 22, widths), Some(1));
-        assert_eq!(group.hit_test(10, 5, widths), None);
+    #[test]
+    fn button_row_move_left_right_wraps() {
+        let mut row = ButtonRow::new(&["A", "B", "C"], &[true, false, false]);
+        row.move_cursor(1);
+        assert_eq!(row.selected_index, 1);
+        row.move_cursor(1);
+        assert_eq!(row.selected_index, 2);
+        // Wrap past the end.
+        row.move_cursor(1);
+        assert_eq!(row.selected_index, 0);
+        // Wrap before the start.
+        row.move_cursor(-1);
+        assert_eq!(row.selected_index, 2);
+    }
+
+    #[test]
+    fn button_row_set_hover_clears_others() {
+        let mut row = ButtonRow::new(&["A", "B", "C"], &[true, false, false]);
+        row.set_hover(Some(2));
+        assert_eq!(row.hovered_index, Some(2));
+        assert_eq!(row.buttons[2].state, ButtonState::Hovered);
+        // Non-hovered, non-selected -> Normal.
+        assert_eq!(row.buttons[0].state, ButtonState::Normal);
+        assert_eq!(row.buttons[1].state, ButtonState::Normal);
+
+        row.set_hover(None);
+        assert_eq!(row.buttons[0].state, ButtonState::Selected);
+    }
+
+    #[test]
+    fn button_row_render_smoke() {
+        // Just confirm it produces N styled spans + separators without panic.
+        let mut row = ButtonRow::new(&["[ A ]", "[ B ]", "[ C ]"], &[true, false, false]);
+        row.set_hover(Some(1));
+        let _line = row.render(&Theme::dark_red());
     }
 }

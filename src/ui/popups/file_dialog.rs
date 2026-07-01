@@ -1,4 +1,13 @@
 // Open / Save As popup. Sprint 1+.
+//
+// The dialog is a typed-path field with three footer buttons:
+//   index 0 — Save / Open   (primary action)
+//   index 1 — Browse…       (opens the file-system browser popup)
+//   index 2 — Cancel
+//
+// Activating Browse (1) does NOT close this dialog — `App::close_file_dialog`
+// instead opens the browser on top of it, and confirming in the browser
+// populates `file_path_input` here.
 
 #![allow(dead_code)]
 
@@ -7,7 +16,14 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::theme::Theme;
-use crate::ui::button::ButtonGroup;
+use crate::ui::button::ButtonRow;
+
+/// Footer button labels in display order. Used by both the renderer and the
+/// mouse hit-test so they always agree.
+pub fn button_labels(is_save: bool) -> [&'static str; 3] {
+    let action = if is_save { "[ Save ]" } else { "[ Open ]" };
+    [action, "[ Browse… ]", "[ Cancel ]"]
+}
 
 /// Popup width scales with the terminal: wide enough to be useful, never
 /// overflowing. Kept in one place so the render and the mouse handler agree.
@@ -55,26 +71,18 @@ pub fn render(
         s
     };
 
-    let labels = if is_save {
-        ["[ Save ]", "[ Cancel ]"]
-    } else {
-        ["[ Open ]", "[ Cancel ]"]
-    };
-    let is_primary = [true, false];
+    let labels = button_labels(is_save);
+    let is_primary = [true, false, false];
 
-    let mut btn_group = ButtonGroup::new(labels, is_primary);
+    let mut btn_row = ButtonRow::new(&labels, &is_primary);
 
-    if app.file_dialog_selected == 0 {
-        btn_group.left();
-    } else {
-        btn_group.right();
-    }
-
+    // `file_dialog_selected` is 0..=2; map directly onto the row.
+    btn_row.select(Some(app.file_dialog_selected.min(2)));
     if let Some(hover_idx) = app.file_dialog_button_hover {
-        btn_group.set_hover(Some(hover_idx));
+        btn_row.set_hover(Some(hover_idx));
     }
 
-    let btn_line = btn_group.render(theme);
+    let btn_line = btn_row.render(theme);
 
     let lines = vec![
         ratatui::text::Line::from("Path:"),

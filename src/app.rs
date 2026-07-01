@@ -66,6 +66,29 @@ pub struct App {
     pub file_dialog_button_hover: Option<usize>, // 0 = Save/Open, 1 = Cancel
     pub confirm_button_hover: Option<usize>, // 0 = Confirm, 1 = Cancel
     pub settings_theme_hover: Option<usize>, // Which theme row hovered
+    // ----- File browser popup state -----
+    /// True while the directory-listing popup is open over the file dialog.
+    pub show_file_browser: bool,
+    /// Directory currently being listed.
+    pub browser_cwd: std::path::PathBuf,
+    /// Cached listing of `browser_cwd` (refreshed on dir change / hidden toggle).
+    pub browser_entries: Vec<crate::ui::popups::file_browser::BrowserEntry>,
+    /// Currently highlighted row in the listing.
+    pub browser_selected: usize,
+    /// Whether dotfile entries are shown.
+    pub browser_show_hidden: bool,
+    /// Last IO/permission error from `read_directory`, shown inline. Cleared
+    /// on a successful refresh.
+    pub browser_error: Option<String>,
+    /// Which view the browser is showing: the live directory or the persisted
+    /// recent-files list.
+    pub browser_mode: crate::ui::popups::file_browser::BrowserMode,
+    /// Hovered footer button index in the browser (0=Up,1=Recent/Browse,2=Hidden,3=Cancel).
+    pub browser_button_hover: Option<usize>,
+    /// Keyboard-selected footer button index in the browser.
+    pub browser_button_selected: usize,
+    /// Remembers whether the browser was launched from Save As (true) or Open.
+    pub browser_origin_is_save: bool,
     /// Mouse position tracking
     pub last_mouse_pos: Option<(u16, u16)>,
     /// True while the left mouse button is held down in the editor area after
@@ -143,6 +166,16 @@ impl App {
             file_dialog_button_hover: None,
             confirm_button_hover: None,
             settings_theme_hover: None,
+            show_file_browser: false,
+            browser_cwd: PathBuf::new(),
+            browser_entries: Vec::new(),
+            browser_selected: 0,
+            browser_show_hidden: false,
+            browser_error: None,
+            browser_mode: crate::ui::popups::file_browser::BrowserMode::default(),
+            browser_button_hover: None,
+            browser_button_selected: 0,
+            browser_origin_is_save: false,
             last_mouse_pos: None,
             mouse_drag_active: false,
             scrollbar_drag_active: false,
@@ -728,31 +761,54 @@ impl App {
         };
     }
 
-    pub fn close_file_dialog(&mut self, confirmed: bool) {
-        if confirmed {
-            let path_str = self.file_path_input.trim();
-            if !path_str.is_empty() {
-                let path = PathBuf::from(path_str);
-                if self.file_dialog_is_save {
-                    if let Err(e) = std::fs::write(&path, self.active_buffer().text()) {
-                        self.file_dialog_message = format!("Save error: {}", e);
-                        return;
-                    }
-                    let buf = self.active_buffer_mut();
-                    buf.set_path(path);
-                    buf.is_modified = false;
-                } else {
-                    match std::fs::read_to_string(&path) {
-                        Ok(contents) => {
-                            let new_buf = Buffer::from_str(&contents, Some(path));
-                            self.buffers.push(new_buf);
-                            self.active = self.buffers.len() - 1;
-                        }
-                        Err(e) => {
-                            self.file_dialog_message = format!("Open error: {}", e);
-                            return;
-                        }
-                    }
+    /// Keyboard selection indices in the file dialog:
+    /// 0 = Save/Open, 1 = Browse…, 2 = Cancel.
+    pub fn close_file_dialog(&mut self, button: usize) {
+        match button {
+            0 => {} // Save/Open — handled below
+            1 => {
+                // Browse… — open the file browser over this dialog instead of
+                // confirming. Dialog stays open underneath.
+                self.open_file_browser();
+                return;
+            }
+            _ => {
+                // Cancel (2) or anything out of range.
+                self.show_file_dialog = false;
+                self.file_path_input.clear();
+                self.file_dialog_message.clear();
+                return;
+            }
+        }
+
+        let path_str = self.file_path_input.trim().to_string();
+        if path_str.is_empty() {
+            self.show_file_dialog = false;
+            self.file_path_input.clear();
+            self.file_dialog_message.clear();
+            return;
+        }
+        let path = PathBuf::from(&path_str);
+        if self.file_dialog_is_save {
+            if let Err(e) = std::fs::write(&path, self.active_buffer().text()) {
+                self.file_dialog_message = format!("Save error: {}", e);
+                return;
+            }
+            let buf = self.active_buffer_mut();
+            buf.set_path(path.clone());
+            buf.is_modified = false;
+            self.config.record_recent_file(&path);
+        } else {
+            match std::fs::read_to_string(&path) {
+                Ok(contents) => {
+                    let new_buf = Buffer::from_str(&contents, Some(path.clone()));
+                    self.buffers.push(new_buf);
+                    self.active = self.buffers.len() - 1;
+                    self.config.record_recent_file(&path);
+                }
+                Err(e) => {
+                    self.file_dialog_message = format!("Open error: {}", e);
+                    return;
                 }
             }
         }
@@ -771,6 +827,259 @@ impl App {
         if self.show_file_dialog {
             self.file_path_input.pop();
         }
+    }
+
+    // ===================== File browser =====================
+    //
+    // The browser is launched from the file dialog's `[ Browse… ]` button.
+    // All filesystem IO is funnelled through `refresh_browser` so error
+    // handling stays in one place. Selecting a file does NOT open/save it
+    // directly — it populates `file_path_input` and returns the user to the
+    // file dialog, preserving the typed-path flow (spec §"Confirm action").
+
+    /// Open the browser over the current file dialog. Seeds the starting
+    /// directory from the active buffer's path parent, falling back to the
+    /// OS home dir, then the CWD.
+    pub fn open_file_browser(&mut self) {
+        self.browser_origin_is_save = self.file_dialog_is_save;
+        self.browser_mode = crate::ui::popups::file_browser::BrowserMode::Dir;
+        self.browser_show_hidden = false;
+        self.browser_selected = 0;
+        self.browser_error = None;
+        self.browser_button_selected = 4; // 4 = "list area" sentinel (see main.rs keys)
+        self.browser_button_hover = None;
+
+        let start_dir = self
+            .active_buffer()
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|p| {
+                // A buffer path with no directory component (e.g. "Cargo.toml")
+                // yields an empty parent — interpret that as the CWD (".").
+                if p.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    p.to_path_buf()
+                }
+            })
+            .or_else(|| directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        // Canonicalize so `browser_cwd` is always absolute and free of `.`/`..`
+        // segments. Without this, launching the editor with a relative file
+        // path (e.g. `rust-edit src/main.rs`) seeds a relative cwd, and
+        // `browser_go_up`'s `Path::parent()` call would then yield an empty
+        // path → `read_directory("")` → ENOENT, bricking the browser.
+        // Fall back to the seed unchanged only if canonicalization itself
+        // fails (e.g. the directory vanished between open and browse).
+        self.browser_cwd = std::fs::canonicalize(&start_dir).unwrap_or(start_dir);
+        self.refresh_browser();
+        self.show_file_browser = true;
+    }
+
+    /// Close the browser. When `confirmed` is true the currently-selected
+    /// entry's path is written into `file_path_input` (file dialog reopens
+    /// focused on the action button so the user can hit Save/Open directly).
+    pub fn close_file_browser(&mut self, confirmed: bool) {
+        if confirmed {
+            if let Some(entry) = self.browser_entries.get(self.browser_selected) {
+                if !entry.is_dir {
+                    self.file_path_input = entry.path.to_string_lossy().to_string();
+                }
+            }
+        }
+        self.show_file_browser = false;
+    }
+
+    /// Re-read `browser_cwd` into `browser_entries` (Dir mode only). IO errors
+    /// are captured into `browser_error` and the previous listing is cleared;
+    /// the app never panics on an unreadable directory.
+    pub fn refresh_browser(&mut self) {
+        if self.browser_mode != crate::ui::popups::file_browser::BrowserMode::Dir {
+            self.refresh_recent();
+            return;
+        }
+        match crate::ui::popups::file_browser::read_directory(
+            &self.browser_cwd,
+            self.browser_show_hidden,
+        ) {
+            Ok(entries) => {
+                self.browser_entries = entries;
+                self.browser_error = None;
+                if self.browser_selected >= self.browser_entries.len() {
+                    self.browser_selected = self.browser_entries.len().saturating_sub(1);
+                }
+            }
+            Err(e) => {
+                self.browser_entries.clear();
+                self.browser_error = Some(format!("{}: {}", self.browser_cwd.display(), e));
+                self.browser_selected = 0;
+            }
+        }
+    }
+
+    /// Populate `browser_entries` from the persisted recent-files list,
+    /// dropping any that no longer exist on disk so the UI never offers a
+    /// dead path. Pure aside from the stat calls.
+    pub fn refresh_recent(&mut self) {
+        self.browser_entries = self
+            .config
+            .recent_files
+            .iter()
+            .filter_map(|s| {
+                let p = PathBuf::from(s);
+                let name = p.file_name()?.to_string_lossy().to_string();
+                let is_dir = std::fs::metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
+                Some(crate::ui::popups::file_browser::BrowserEntry {
+                    name,
+                    is_dir,
+                    path: p,
+                })
+            })
+            .collect();
+        self.browser_error = None;
+        if self.browser_selected >= self.browser_entries.len() {
+            self.browser_selected = self.browser_entries.len().saturating_sub(1);
+        }
+    }
+
+    /// Activate (Enter / click) the selected row. In Dir mode: directories are
+    /// entered, files confirm and return to the file dialog. In Recent mode:
+    /// any entry confirms immediately (it's always a file path).
+    pub fn browser_enter_selected(&mut self) {
+        let Some(entry) = self.browser_entries.get(self.browser_selected).cloned() else {
+            return;
+        };
+        match self.browser_mode {
+            crate::ui::popups::file_browser::BrowserMode::Dir => {
+                if entry.is_dir {
+                    // The pinned `..` row's stored path is a literal `cwd/..`,
+                    // which would make later `.parent()` calls bounce. Route it
+                    // through `browser_go_up` instead so navigation stays on
+                    // canonical absolute paths.
+                    if entry.name == ".." {
+                        self.browser_go_up();
+                        return;
+                    }
+                    self.browser_cwd = entry.path.clone();
+                    self.browser_selected = 0;
+                    self.refresh_browser();
+                } else {
+                    self.close_file_browser(true);
+                }
+            }
+            crate::ui::popups::file_browser::BrowserMode::Recent => {
+                if entry.is_dir {
+                    // Jump into Dir mode at this directory.
+                    self.browser_mode = crate::ui::popups::file_browser::BrowserMode::Dir;
+                    self.browser_cwd = entry.path;
+                    self.browser_selected = 0;
+                    self.refresh_browser();
+                } else {
+                    self.close_file_browser(true);
+                }
+            }
+        }
+    }
+
+    /// Go up one directory (Dir mode only). Uses the canonical parent so
+    /// repeated ups converge at the filesystem root rather than chasing
+    /// literal `..` segments forever.
+    pub fn browser_go_up(&mut self) {
+        if self.browser_mode != crate::ui::popups::file_browser::BrowserMode::Dir {
+            return;
+        }
+        let parent = match self.browser_cwd.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+            _ => return, // already at root, or cwd is empty/relative-rooted
+        };
+        if parent == self.browser_cwd {
+            return; // already at root
+        }
+        self.browser_cwd = parent;
+        self.browser_selected = 0;
+        self.refresh_browser();
+    }
+
+    pub fn browser_toggle_hidden(&mut self) {
+        self.browser_show_hidden = !self.browser_show_hidden;
+        self.refresh_browser();
+    }
+
+    /// Switch between directory listing and recent-files view.
+    pub fn browser_toggle_mode(&mut self) {
+        self.browser_mode = match self.browser_mode {
+            crate::ui::popups::file_browser::BrowserMode::Dir => {
+                crate::ui::popups::file_browser::BrowserMode::Recent
+            }
+            crate::ui::popups::file_browser::BrowserMode::Recent => {
+                crate::ui::popups::file_browser::BrowserMode::Dir
+            }
+        };
+        self.browser_selected = 0;
+        self.browser_error = None;
+        self.refresh_browser();
+    }
+
+    /// Move the row cursor by `delta`, clamping at both ends. Kept in `App`
+    /// (not the pure module) because it mutates UI state. Scroll is derived
+    /// from the selection at render/click time, so it needs no clamping here.
+    pub fn browser_move_cursor(&mut self, delta: i32) {
+        if self.browser_entries.is_empty() {
+            return;
+        }
+        let n = self.browser_entries.len() as i32;
+        let mut next = self.browser_selected as i32 + delta;
+        if next < 0 {
+            next = 0;
+        }
+        if next >= n {
+            next = n - 1;
+        }
+        self.browser_selected = next as usize;
+    }
+
+    /// Jump the row cursor to the first/last entry.
+    pub fn browser_jump(&mut self, to_end: bool) {
+        if self.browser_entries.is_empty() {
+            return;
+        }
+        self.browser_selected = if to_end {
+            self.browser_entries.len() - 1
+        } else {
+            0
+        };
+    }
+
+    /// Page the row cursor by approximately one viewport height.
+    pub fn browser_page(&mut self, up: bool, viewport_rows: usize) {
+        let step = viewport_rows.max(1) as i32;
+        self.browser_move_cursor(if up { -step } else { step });
+    }
+
+    /// Select an explicit row index (e.g. from a mouse click). Out-of-range
+    /// indices are clamped.
+    pub fn browser_select_index(&mut self, idx: usize) {
+        if self.browser_entries.is_empty() {
+            return;
+        }
+        self.browser_selected = idx.min(self.browser_entries.len() - 1);
+    }
+
+    /// Footer button labels for the current mode. Order: Up, Recent/Browse,
+    /// Hidden, Cancel.
+    pub fn browser_footer_labels(&self) -> [&'static str; 4] {
+        let mode_btn = match self.browser_mode {
+            crate::ui::popups::file_browser::BrowserMode::Dir => "[ Browse ]",
+            crate::ui::popups::file_browser::BrowserMode::Recent => "[ Recent ]",
+        };
+        let hidden_btn = if self.browser_show_hidden {
+            "[ Hidden: on ]"
+        } else {
+            "[ Hidden: off ]"
+        };
+        ["[ Up ]", mode_btn, hidden_btn, "[ Cancel ]"]
     }
 
     pub fn wrap_selection_or_cursor(&mut self, before: &str, after: &str) {
@@ -969,5 +1278,68 @@ mod tests {
             "Hello",
             "byte range must slice the original"
         );
+    }
+
+    // ----- File browser navigation regressions -----
+
+    /// Helper: build an App whose active buffer carries the given path, with no
+    /// real file IO needed for the buffer itself.
+    fn app_with_buffer_path(path: &str) -> App {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().set_path(PathBuf::from(path));
+        app
+    }
+
+    #[test]
+    fn open_file_browser_canonicalizes_relative_buffer_path() {
+        // Regression: launching with a relative file path used to seed a
+        // relative `browser_cwd`, which broke `browser_go_up` (empty parent)
+        // and left the browser stuck on an ENOENT error.
+        // Use Cargo.toml at the crate root as the "buffer's file" so the
+        // canonicalize call has a real, existing parent directory to resolve.
+        let mut app = app_with_buffer_path("Cargo.toml");
+        app.open_file_browser();
+
+        assert!(
+            app.browser_cwd.is_absolute(),
+            "browser_cwd must be absolute after open_file_browser, got {:?}",
+            app.browser_cwd
+        );
+        assert!(
+            !app.browser_cwd.as_os_str().is_empty(),
+            "browser_cwd must not be empty"
+        );
+        assert!(
+            app.browser_error.is_none(),
+            "initial listing must succeed, got error: {:?}",
+            app.browser_error
+        );
+    }
+
+    #[test]
+    fn browser_go_up_never_yields_empty_cwd() {
+        // Regression: `Path::new("src").parent()` returns `Some("")`, and
+        // reading "" fails with ENOENT. After canonicalization + the
+        // empty-parent guard, repeated ups must converge at the root without
+        // ever producing an empty or relative cwd.
+        let mut app = app_with_buffer_path("Cargo.toml");
+        app.open_file_browser();
+        assert!(app.browser_cwd.is_absolute());
+
+        // Hammer "go up" far past any plausible depth — must stay valid.
+        for _ in 0..64 {
+            app.browser_go_up();
+            assert!(
+                !app.browser_cwd.as_os_str().is_empty(),
+                "browser_cwd became empty after browser_go_up"
+            );
+            assert!(
+                app.browser_cwd.is_absolute(),
+                "browser_cwd must remain absolute, got {:?}",
+                app.browser_cwd
+            );
+        }
+        // We should have converged at the filesystem root.
+        assert_eq!(app.browser_cwd.parent(), None);
     }
 }

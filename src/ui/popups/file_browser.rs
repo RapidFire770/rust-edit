@@ -1,0 +1,494 @@
+// File-system browser popup for the Open/Save As dialogs.
+//
+// Pure presentation + value types. All mutable state lives on `App`
+// (consistent with the other popups — see AGENTS §3 "Module rules").
+//
+// Listing logic (`sort_entries`, `filter_hidden`, `read_directory`) is
+// side-effect-free and unit-tested in isolation below.
+
+#![allow(dead_code)]
+
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::Frame;
+use std::path::{Path, PathBuf};
+
+use crate::theme::Theme;
+use crate::ui::button::ButtonRow;
+
+/// Number of lines rendered above the list body (hint + blank separator).
+/// `list_area` and `render` both derive their layout from this so the click
+/// hit-test and the rendered rows can never drift.
+pub const HEADER_LINES: usize = 2;
+
+/// Page-aligned scroll offset that keeps `sel` visible in a viewport of
+/// `body_h` rows. Shared by `render` and the mouse click handler so both agree
+/// on which absolute row corresponds to which entry index.
+pub fn compute_scroll(sel: usize, body_h: usize) -> usize {
+    let bh = body_h.max(1);
+    (sel / bh) * bh
+}
+
+/// A single row in the browser listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub path: PathBuf,
+}
+
+impl BrowserEntry {
+    /// The pinned "go up one directory" entry. `None` when the cwd is a root
+    /// with no parent (e.g. `/` on Unix).
+    pub fn parent_entry(cwd: &Path) -> Option<Self> {
+        cwd.parent().map(|_| {
+            let path = cwd.join("..");
+            Self {
+                name: "..".to_string(),
+                is_dir: true,
+                path,
+            }
+        })
+    }
+}
+
+/// Browser view mode: directory listing or flat recent-files list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BrowserMode {
+    #[default]
+    Dir,
+    Recent,
+}
+
+/// Sort entries: directories first, then files; case-insensitive alpha within
+/// each group. Stable for equal keys. Pure — does not touch the filesystem.
+pub fn sort_entries(mut entries: Vec<BrowserEntry>) -> Vec<BrowserEntry> {
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    entries
+}
+
+/// Drop dotfile entries unless `show_hidden` is true. Pure.
+///
+/// NOTE: `read_directory` already skips dotfiles at the FS layer when
+/// `show_hidden` is false; this function exists for unit testing the filter
+/// rule in isolation and is not called from the read path.
+pub fn filter_hidden(entries: Vec<BrowserEntry>, show_hidden: bool) -> Vec<BrowserEntry> {
+    if show_hidden {
+        return entries;
+    }
+    entries
+        .into_iter()
+        .filter(|e| !e.name.starts_with('.'))
+        .collect()
+}
+
+/// Read a directory and return a sorted, optionally-filtered listing.
+///
+/// The pinned `..` entry (when the cwd has a parent) is always first and is
+/// never filtered out by `filter_hidden` — the user always needs a way up.
+///
+/// Symlinks are followed via `metadata()` so a symlink to a directory is
+/// enterable. Broken symlinks fall back to `symlink_metadata` and are shown as
+/// files (best-effort — they are not selectable as directories).
+pub fn read_directory(cwd: &Path, show_hidden: bool) -> std::io::Result<Vec<BrowserEntry>> {
+    let mut entries: Vec<BrowserEntry> = Vec::new();
+
+    for entry in std::fs::read_dir(cwd)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy().to_string();
+
+        // Skip dotfiles early unless requested (saves a stat call).
+        if !show_hidden && name.starts_with('.') {
+            continue;
+        }
+
+        // Follow symlinks: `DirEntry::metadata` does NOT traverse them on
+        // Unix, so a symlink-to-dir would otherwise be reported as a file.
+        // Fall back to the entry's own file_type if the target is unreachable
+        // (broken symlink) so the row still renders.
+        let is_dir = std::fs::metadata(entry.path())
+            .map(|m| m.is_dir())
+            .unwrap_or_else(|_| entry.file_type().map(|t| t.is_dir()).unwrap_or(false));
+
+        entries.push(BrowserEntry {
+            name,
+            is_dir,
+            path: entry.path(),
+        });
+    }
+
+    let mut sorted = sort_entries(entries);
+
+    // Pin `..` at the top so it is always reachable regardless of hidden filter.
+    if let Some(parent) = BrowserEntry::parent_entry(cwd) {
+        sorted.insert(0, parent);
+    }
+
+    Ok(sorted)
+}
+
+/// Compute the centered popup rect for the browser, mirroring the geometry
+/// helpers used by the other popups. Kept in one place so the render and the
+/// mouse handler agree.
+pub fn file_browser_rect(area: Rect) -> Rect {
+    let w = (area.width * 4 / 5).clamp(50, 96);
+    let h = (area.height * 7 / 10).clamp(16, 40);
+    let x = area.width.saturating_sub(w) / 2;
+    let y = area.height.saturating_sub(h) / 2;
+    Rect::new(x, y, w.min(area.width), h.min(area.height))
+}
+
+/// The footer button row sits on the last inner line of the popup — i.e. the
+/// line directly above the bottom border. The paragraph's inner area starts at
+/// `popup.y + 1`; the render pads lines up to index `popup.height - 3` and
+/// pushes the footer as the last line at that same index, so its screen y is
+/// `popup.y + 1 + (popup.height - 3)` = `popup.y + popup.height - 2`.
+pub fn footer_button_row(popup: Rect) -> u16 {
+    popup.y + popup.height.saturating_sub(2)
+}
+
+/// The list body occupies inner rows `(1 + HEADER_LINES) .. (height - 2)`.
+/// Returns `(start_y, end_y)` in absolute screen coordinates; `end_y` is
+/// exclusive (the footer button row begins at `end_y`).
+pub fn list_area(popup: Rect) -> (usize, usize) {
+    let start = (popup.y + 1 + HEADER_LINES as u16) as usize;
+    let end = (popup.y + popup.height.saturating_sub(2)) as usize;
+    (start, end)
+}
+
+/// Render the browser popup. Pure presentation — all state is read from `app`.
+pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
+    let popup = file_browser_rect(area);
+
+    let title = match app.browser_mode {
+        BrowserMode::Dir => format!(" Browse — {} ", app.browser_cwd.display()),
+        BrowserMode::Recent => " Recent Files ".to_string(),
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .style(theme.editor_bg_style());
+
+    let accent = Style::default()
+        .fg(Color::from(&theme.accent))
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(Color::from(&theme.editor_fg));
+    let dir_style = Style::default()
+        .fg(Color::from(&theme.accent))
+        .add_modifier(Modifier::BOLD);
+    let file_style = Style::default().fg(Color::from(&theme.editor_fg));
+    let selection_bg = Style::default()
+        .fg(Color::from(&theme.editor_bg))
+        .bg(Color::from(&theme.accent));
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Header hint line.
+    let hint = match app.browser_mode {
+        BrowserMode::Dir => {
+            "Enter dir: Enter/→/l   Up: Backspace/←/h/-   \
+                             Toggle hidden: Ctrl+H   Tab: footer buttons"
+        }
+        BrowserMode::Recent => {
+            "Open: Enter/l   Switch to browser: Tab to [Browse]   \
+                                Esc: back to dialog"
+        }
+    };
+    lines.push(Line::from(Span::styled(hint, dim)));
+    lines.push(Line::from(""));
+
+    let body_h = popup
+        .height
+        .saturating_sub(5) // border(2) + hint(1) + blank(1) + footer(1)
+        as usize;
+
+    if let Some(err) = &app.browser_error {
+        lines.push(Line::from(Span::styled(
+            format!(" Error: {} ", err),
+            Style::default()
+                .fg(Color::from(&theme.editor_bg))
+                .bg(Color::Red),
+        )));
+    } else if app.browser_entries.is_empty() {
+        let msg = match app.browser_mode {
+            BrowserMode::Dir => "(empty directory)",
+            BrowserMode::Recent => "(no recent files yet — open or save a file first)",
+        };
+        lines.push(Line::from(Span::styled(msg, dim)));
+    } else {
+        // Scroll is derived from the selection via the shared `compute_scroll`
+        // helper — the click handler uses the same function, so a screen row
+        // always maps back to the same entry the user sees highlighted.
+        let sel = app.browser_selected;
+        let scroll = compute_scroll(sel, body_h);
+        let scroll = scroll.min(app.browser_entries.len().saturating_sub(1));
+
+        let show_from = scroll;
+        let show_to = (show_from + body_h).min(app.browser_entries.len());
+
+        for i in show_from..show_to {
+            let entry = &app.browser_entries[i];
+            let marker = if entry.is_dir { "/" } else { " " };
+            let name = format!("{}{}", entry.name, if entry.is_dir { "/" } else { "" });
+            let base = if entry.is_dir { dir_style } else { file_style };
+            let style = if i == sel && app.browser_button_selected == 4 {
+                selection_bg
+            } else {
+                base
+            };
+            lines.push(Line::from(vec![
+                Span::styled(marker, dim),
+                Span::raw(" "),
+                Span::styled(name, style),
+            ]));
+        }
+    }
+
+    // Pad up to the footer row so the buttons always sit at the bottom.
+    let inner_h = popup.height.saturating_sub(2) as usize; // minus borders
+    while lines.len() < inner_h.saturating_sub(1) {
+        lines.push(Line::from(""));
+    }
+
+    // Footer buttons.
+    let labels = app.browser_footer_labels();
+    let is_primary = [false, true, false, false];
+    let mut row = ButtonRow::new(&labels, &is_primary);
+    // 0..=3 are buttons; 4 is the list sentinel → no button selected.
+    if app.browser_button_selected < 4 {
+        row.select(Some(app.browser_button_selected));
+    }
+    if let Some(h) = app.browser_button_hover {
+        row.set_hover(Some(h));
+    }
+    let _ = accent; // suppress unused warning if dim path took everything
+    let footer_line = row.render(theme);
+    lines.push(footer_line);
+
+    let para = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().fg(Color::from(&theme.editor_fg)));
+
+    f.render_widget(Clear, popup);
+    f.render_widget(para, popup);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn entry(name: &str, is_dir: bool) -> BrowserEntry {
+        BrowserEntry {
+            name: name.to_string(),
+            is_dir,
+            path: PathBuf::from(format!("/tmp/{}", name)),
+        }
+    }
+
+    #[test]
+    fn sort_entries_directories_first_then_alpha_case_insensitive() {
+        let input = vec![
+            entry("zebra.txt", false),
+            entry("Apple.txt", false),
+            entry("src", true),
+            entry("Beta", true),
+            entry("banana.rs", false),
+        ];
+        let out = sort_entries(input);
+
+        let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Beta", "src", "Apple.txt", "banana.rs", "zebra.txt"]
+        );
+    }
+
+    #[test]
+    fn filter_hidden_hides_dotfiles_by_default() {
+        let input = vec![
+            entry(".secret", false),
+            entry("visible.txt", false),
+            entry(".config", true),
+            entry("src", true),
+        ];
+        let out = filter_hidden(input, false);
+        let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
+        // Dotfile dirs are also hidden by default (matches typical file managers).
+        assert_eq!(names, vec!["visible.txt", "src"]);
+    }
+
+    #[test]
+    fn filter_hidden_keeps_everything_when_enabled() {
+        let input = vec![entry(".secret", false), entry("visible.txt", false)];
+        let out = filter_hidden(input, true);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn parent_entry_is_some_when_cwd_has_parent() {
+        let cwd = Path::new("/home/josh");
+        let p = BrowserEntry::parent_entry(cwd).unwrap();
+        assert_eq!(p.name, "..");
+        assert!(p.is_dir);
+        assert_eq!(p.path, PathBuf::from("/home/josh/.."));
+    }
+
+    #[test]
+    fn parent_entry_is_none_at_root() {
+        assert!(BrowserEntry::parent_entry(Path::new("/")).is_none());
+    }
+
+    #[test]
+    fn read_directory_lists_and_sorts_with_pinned_parent() {
+        let tmp = tempfile_dir();
+        fs::create_dir_all(tmp.join("subdir")).unwrap();
+        fs::write(tmp.join("zebra.txt"), "").unwrap();
+        fs::write(tmp.join("alpha.md"), "").unwrap();
+        fs::write(tmp.join(".hidden"), "").unwrap();
+
+        let entries = read_directory(&tmp, false).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        // `..` first (pinned), then dirs, then files alpha; dotfile hidden.
+        assert_eq!(names[0], "..");
+        assert!(names.contains(&"subdir"));
+        assert!(names.contains(&"alpha.md"));
+        assert!(names.contains(&"zebra.txt"));
+        assert!(!names.contains(&".hidden"));
+        // subdir before files
+        assert!(
+            names.iter().position(|n| *n == "subdir").unwrap()
+                < names.iter().position(|n| *n == "alpha.md").unwrap()
+        );
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_directory_shows_dotfiles_when_requested() {
+        let tmp = tempfile_dir();
+        fs::write(tmp.join(".visible_now"), "").unwrap();
+        fs::write(tmp.join("plain"), "").unwrap();
+
+        let entries = read_directory(&tmp, true).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&".visible_now"));
+        assert!(names.contains(&"plain"));
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_directory_errors_on_file_not_dir() {
+        let tmp = tempfile_dir();
+        let file_path = tmp.join("not_a_dir");
+        fs::write(&file_path, "").unwrap();
+        let result = read_directory(&file_path, false);
+        assert!(result.is_err());
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_directory_follows_symlink_to_dir() {
+        let tmp = tempfile_dir();
+        let real = tmp.join("real_dir");
+        let link = tmp.join("link_dir");
+        fs::create_dir_all(&real).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        #[cfg(unix)]
+        {
+            let entries = read_directory(&tmp, true).unwrap();
+            let link_entry = entries.iter().find(|e| e.name == "link_dir").unwrap();
+            assert!(link_entry.is_dir, "symlink to dir should be enterable");
+        }
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Helper: create a unique temp dir without pulling in the `tempfile` crate.
+    fn tempfile_dir() -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "rust-edit-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn footer_button_row_is_last_inner_line_above_bottom_border() {
+        // Regression for the off-by-one that made hover register one row
+        // below the visible footer buttons.
+        let popup = Rect::new(10, 5, 80, 20);
+        // Inner area: rows 6..=23 (borders at 5 and 24). Last inner row = 23.
+        // Bottom border = 24. Footer must sit at 23, NOT 24.
+        assert_eq!(footer_button_row(popup), 5 + 20 - 2);
+        assert_eq!(footer_button_row(popup), 23);
+        assert!(footer_button_row(popup) < popup.y + popup.height - 1);
+    }
+
+    #[test]
+    fn header_lines_constant_matches_rendered_header() {
+        // hint line + blank separator = 2 lines above the body. If this
+        // changes, `render` must push the same number of lines before the
+        // first entry or clicks will drift again.
+        assert_eq!(HEADER_LINES, 2);
+    }
+
+    #[test]
+    fn list_area_first_row_matches_first_rendered_entry() {
+        // Regression for the off-by-one where clicking the first entry
+        // selected the second. The first entry renders at inner row
+        // HEADER_LINES (0-indexed) inside the bordered block, i.e. at screen
+        // y = popup.y + 1 + HEADER_LINES. list_area.0 must equal that.
+        let popup = Rect::new(10, 5, 80, 20);
+        let (start, end) = list_area(popup);
+        assert_eq!(start, popup.y as usize + 1 + HEADER_LINES);
+        assert_eq!(start, 5 + 1 + 2); // = 8
+                                      // end is the exclusive upper bound; footer begins at end.
+        assert_eq!(end, (popup.y + popup.height - 2) as usize);
+        assert_eq!(end, footer_button_row(popup) as usize);
+    }
+
+    #[test]
+    fn compute_scroll_keeps_selection_in_first_page_when_small() {
+        assert_eq!(compute_scroll(0, 10), 0);
+        assert_eq!(compute_scroll(3, 10), 0);
+        assert_eq!(compute_scroll(9, 10), 0);
+    }
+
+    #[test]
+    fn compute_scroll_advances_page_when_selection_exceeds_viewport() {
+        // Page-aligned: sel 10 in a 10-row viewport starts the second page.
+        assert_eq!(compute_scroll(10, 10), 10);
+        assert_eq!(compute_scroll(15, 10), 10);
+        assert_eq!(compute_scroll(25, 10), 20);
+    }
+
+    #[test]
+    fn compute_scroll_handles_zero_or_unit_viewport() {
+        // Must never divide by zero. With body_h clamped to 1, every row is
+        // its own "page", so scroll simply tracks sel.
+        assert_eq!(compute_scroll(0, 0), 0);
+        assert_eq!(compute_scroll(5, 0), 5);
+        assert_eq!(compute_scroll(3, 1), 3);
+    }
+}
