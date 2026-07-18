@@ -200,9 +200,9 @@ pub fn list_footer_labels() -> [&'static str; 5] {
 
 pub fn list_footer_y(popup: Rect) -> u16 {
     // The footer is the last content line inside the bordered popup.
-    // Paragraph content starts at popup.y + 1 (top border), so the last row
-    // in a popup of height H is popup.y + 1 + (H - 3) = popup.y + H - 2 + 1.
-    popup.y + LIST_POPUP_H - 1
+    // Paragraph content starts at popup.y + 1 (top border).
+    // The padding logic results in the footer rendering at popup.y + H - 2.
+    popup.y + LIST_POPUP_H - 2
 }
 
 /// Compute the `(start_x, end_x)` screen column range of each footer button,

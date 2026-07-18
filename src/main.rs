@@ -1671,8 +1671,8 @@ fn themes_popup_handle_hover(app: &mut App, pos: (usize, usize), term: (u16, u16
     }
 
     // Footer button hover.
-    if y as u16 == footer_y {
-        let ranges = popups::themes::themes_button_x_ranges(popup.x, &footer_labels);
+    if y as u16 == footer_y.saturating_sub(1) {
+        let ranges = popups::themes::themes_button_x_ranges(popup.x + 1, &footer_labels);
         app.themes_button_hover = hit_button_row(x as u16, &ranges);
     } else {
         app.themes_button_hover = None;
@@ -1730,8 +1730,8 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
     *skip_editor = true;
 
     // Footer button click.
-    if y as u16 == footer_y {
-        let ranges = popups::themes::themes_button_x_ranges(popup.x, &footer_labels);
+    if y as u16 == footer_y.saturating_sub(1) {
+        let ranges = popups::themes::themes_button_x_ranges(popup.x + 1, &footer_labels);
         if let Some(idx) = hit_button_row(x as u16, &ranges) {
             match app.themes_mode {
                 ThemesMode::List => match idx {
