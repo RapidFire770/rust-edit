@@ -8,6 +8,7 @@ mod buffer;
 mod config;
 mod syntax;
 mod theme;
+mod themes;
 mod ui;
 mod utils;
 mod wrap;
@@ -82,7 +83,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
 
         // Position the real terminal cursor (after draw) so it's always visible at the exact
         // position, including on whitespace, spaces, and end-of-line. Hide it for popups/modals.
-        if app.show_help || app.show_word_count || app.show_settings || app.active_menu.is_some() {
+        if app.show_help
+            || app.show_word_count
+            || app.show_configure
+            || app.show_themes
+            || app.active_menu.is_some()
+        {
             terminal.hide_cursor().ok();
         } else if app.config.word_wrap {
             let buf = app.active_buffer();
@@ -645,23 +651,62 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         KeyCode::Esc if app.show_word_count => {
                             app.close_word_count();
                         }
-                        KeyCode::Esc if app.show_settings => {
-                            app.close_settings();
+                        KeyCode::Esc if app.show_configure => {
+                            app.close_configure();
                         }
-                        KeyCode::Char('j') | KeyCode::Down if app.show_settings => {
-                            let n = crate::theme::Theme::built_ins().len();
-                            app.settings_selected = (app.settings_selected + 1) % n;
+                        KeyCode::Char('j') | KeyCode::Down if app.show_configure => {
+                            let n = App::configure_row_count();
+                            app.configure_selected = (app.configure_selected + 1) % n;
                         }
-                        KeyCode::Char('k') | KeyCode::Up if app.show_settings => {
-                            let n = crate::theme::Theme::built_ins().len();
-                            app.settings_selected = if app.settings_selected == 0 {
+                        KeyCode::Char('k') | KeyCode::Up if app.show_configure => {
+                            let n = App::configure_row_count();
+                            app.configure_selected = if app.configure_selected == 0 {
                                 n - 1
                             } else {
-                                app.settings_selected - 1
+                                app.configure_selected - 1
                             };
                         }
-                        KeyCode::Enter if app.show_settings => {
-                            app.apply_settings_theme(app.settings_selected);
+                        KeyCode::Left if app.show_configure => {
+                            app.configure_adjust(app.configure_selected, -1);
+                        }
+                        KeyCode::Right if app.show_configure => {
+                            app.configure_adjust(app.configure_selected, 1);
+                        }
+                        KeyCode::Enter if app.show_configure => {
+                            app.configure_toggle(app.configure_selected);
+                        }
+                        KeyCode::Esc if app.show_themes => {
+                            themes_popup_handle_esc(app);
+                        }
+                        KeyCode::Char('j') | KeyCode::Down if app.show_themes => {
+                            themes_popup_handle_vert(app, 1);
+                        }
+                        KeyCode::Char('k') | KeyCode::Up if app.show_themes => {
+                            themes_popup_handle_vert(app, -1);
+                        }
+                        KeyCode::Enter if app.show_themes => {
+                            themes_popup_handle_enter(app);
+                        }
+                        KeyCode::Char('e') if app.show_themes => {
+                            themes_popup_start_edit(app, /*copy_name=*/ false);
+                        }
+                        KeyCode::Char('n') if app.show_themes => {
+                            themes_popup_start_edit(app, /*copy_name=*/ true);
+                        }
+                        KeyCode::Char('d') if app.show_themes => {
+                            themes_popup_request_delete(app);
+                        }
+                        KeyCode::Char('s') if app.show_themes => {
+                            themes_popup_try_save(app);
+                        }
+                        KeyCode::Tab if app.show_themes => {
+                            themes_popup_handle_tab(app);
+                        }
+                        KeyCode::Backspace if app.show_themes => {
+                            themes_popup_handle_backspace(app);
+                        }
+                        KeyCode::Char(ch) if app.show_themes => {
+                            themes_popup_handle_char(app, ch);
                         }
                         // Dropdown menu keyboard navigation
                         KeyCode::Esc if app.active_menu.is_some() => {
@@ -671,7 +716,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             let len = match app.active_menu.as_deref() {
                                 Some("File") => 6,
                                 Some("Tools") => 5,
-                                Some("Settings") => 2,
+                                Some("Settings") => 3,
                                 _ => 1,
                             };
                             app.menu_selected = (app.menu_selected + 1) % len;
@@ -680,7 +725,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             let len = match app.active_menu.as_deref() {
                                 Some("File") => 6,
                                 Some("Tools") => 5,
-                                Some("Settings") => 2,
+                                Some("Settings") => 3,
                                 _ => 1,
                             };
                             app.menu_selected = if app.menu_selected == 0 {
@@ -893,22 +938,35 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
         }
     }
 
-    if app.show_settings {
-        let w = 45u16;
-        let h = 14u16;
-        let px = (tw.saturating_sub(w)) / 2;
-        let py = (th.saturating_sub(h)) / 2;
-
-        if y >= py && y < py + h && x >= px && x < px + w {
-            let rel_y = (y - py) as usize;
-            if (3..6).contains(&rel_y) {
-                app.settings_theme_hover = Some(rel_y - 3);
+    if app.show_configure {
+        let term_area = Rect::new(0, 0, tw, th);
+        let popup = popups::configure::configure_rect(term_area);
+        let row_ys = popups::configure::row_ys(popup);
+        if y >= popup.y && y < popup.y + popup.height && x >= popup.x && x < popup.x + popup.width {
+            let mut on_row = None;
+            for (i, &ry) in row_ys.iter().enumerate() {
+                if y == ry {
+                    on_row = Some(i);
+                }
+            }
+            app.configure_row_hover = on_row;
+            // Footer button hover.
+            let fy = popups::configure::footer_row_y(popup);
+            if y == fy {
+                let labels = popups::configure::footer_labels();
+                let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x, &labels);
+                app.configure_button_hover = hit_button_row(x, &ranges);
             } else {
-                app.settings_theme_hover = None;
+                app.configure_button_hover = None;
             }
         } else {
-            app.settings_theme_hover = None;
+            app.configure_row_hover = None;
+            app.configure_button_hover = None;
         }
+    }
+
+    if app.show_themes {
+        themes_popup_handle_hover(app, (x as usize, y as usize), (tw, th));
     }
 
     if let Some(menu_name) = app.active_menu.as_deref() {
@@ -1092,31 +1150,50 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 }
             }
 
-            // === Interactive popup clicks (e.g. Settings themes) + outside close for popups ===
-            if app.show_settings && !skip_editor {
-                // Compute the rect from the REAL terminal size (was hardcoded 120x20).
+            // === Interactive popup clicks (Configure + Themes) + outside close ===
+            if app.show_configure && !skip_editor {
                 let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
-                let w = 45u16;
-                let h = 14u16;
-                let px = (tw.saturating_sub(w)) / 2;
-                let py = (th.saturating_sub(h)) / 2;
-                let in_popup = (y as u16 >= py && (y as u16) < py + h)
-                    && (x as u16 >= px && (x as u16) < px + w);
+                let term_area = Rect::new(0, 0, tw, th);
+                let popup = popups::configure::configure_rect(term_area);
+                let in_popup = (y as u16 >= popup.y && (y as u16) < popup.y + popup.height)
+                    && (x as u16 >= popup.x && (x as u16) < popup.x + popup.width);
                 if in_popup {
-                    let rel_y = (y as u16 - py) as usize;
-                    // theme rows are at approx inner rel_y 3,4,5
-                    if (3..6).contains(&rel_y) {
-                        let idx = rel_y - 3;
-                        app.settings_selected = idx;
-                        app.apply_settings_theme(idx);
-                        skip_editor = true;
-                    } else {
-                        skip_editor = true; // clicked inside but non-item
+                    let row_ys = popups::configure::row_ys(popup);
+                    // Row click → toggle/step that row.
+                    for (i, &ry) in row_ys.iter().enumerate() {
+                        if y as u16 == ry {
+                            // Left-click the tab-size value cell steps down; right-click
+                            // or a click on the label steps up. We treat any row
+                            // click as a toggle for simplicity (tab size steps +1).
+                            app.configure_toggle(i);
+                            app.configure_selected = i;
+                        }
                     }
+                    // Footer buttons.
+                    let fy = popups::configure::footer_row_y(popup);
+                    if y as u16 == fy {
+                        let labels = popups::configure::footer_labels();
+                        let ranges =
+                            crate::ui::button::ButtonRow::button_x_ranges(popup.x, &labels);
+                        if let Some(idx) = hit_button_row(x as u16, &ranges) {
+                            if idx == 0 {
+                                app.configure_toggle(app.configure_selected);
+                            } else {
+                                app.close_configure();
+                            }
+                        }
+                    }
+                    // Any click inside the popup (row, footer, or padding) consumes
+                    // the event so it never falls through to the editor.
+                    skip_editor = true;
                 } else {
-                    app.close_settings();
+                    app.close_configure();
                     skip_editor = true;
                 }
+            }
+
+            if app.show_themes && !skip_editor {
+                themes_popup_handle_click(app, (x, y), &mut skip_editor);
             }
 
             // === Help popup: clickable tabs + inside-click ignore + outside-click close ===
@@ -1393,12 +1470,322 @@ fn drag_edge_delta(app: &App) -> Option<(isize, isize)> {
     }
 }
 
+/// Resolve which footer-button index (if any) a mouse column hits, given the
+/// `(start,end)` x-ranges produced by [`ButtonRow::button_x_ranges`]. Shared by
+/// the Configure and Themes click/hover handlers so both agree with the renderer.
+fn hit_button_row(x: u16, ranges: &[(u16, u16)]) -> Option<usize> {
+    for (i, (s, e)) in ranges.iter().enumerate() {
+        if x >= *s && x < *e {
+            return Some(i);
+        }
+    }
+    None
+}
+
+// ===================== Themes popup input handlers =====================
+//
+// These helpers keep main.rs's event match arms short while giving the Themes
+// popup the same keyboard + mouse parity as the other popups (AGENTS Core
+// Principle 2). State mutations go through `App` methods where possible.
+
+fn themes_popup_handle_vert(app: &mut App, delta: i32) {
+    use popups::themes::ThemesMode;
+    if app.themes_mode == ThemesMode::Edit {
+        if let Some(edit) = app.themes_edit.as_mut() {
+            edit.move_role(delta);
+        }
+        return;
+    }
+    // List mode: cycle through built-ins + customs.
+    let registry = crate::themes::ThemeRegistry::load();
+    let n = registry.all().len();
+    if n == 0 {
+        return;
+    }
+    let new = ((app.themes_selected as i32 + delta) % n as i32 + n as i32) % n as i32;
+    app.themes_selected = new as usize;
+}
+
+fn themes_popup_handle_enter(app: &mut App) {
+    use popups::themes::ThemesMode;
+    if app.themes_mode == ThemesMode::Edit {
+        themes_popup_try_save(app);
+        return;
+    }
+    app.apply_theme_by_index(app.themes_selected);
+}
+
+fn themes_popup_handle_esc(app: &mut App) {
+    use popups::themes::ThemesMode;
+    if app.themes_mode == ThemesMode::Edit {
+        // Cancel editor → back to list.
+        app.themes_edit = None;
+        app.themes_mode = ThemesMode::List;
+    } else {
+        app.close_themes();
+    }
+}
+
+fn themes_popup_handle_tab(app: &mut App) {
+    use popups::themes::ThemesMode;
+    if app.themes_mode == ThemesMode::Edit {
+        if let Some(edit) = app.themes_edit.as_mut() {
+            edit.cycle_focus();
+        }
+    }
+}
+
+fn themes_popup_handle_backspace(app: &mut App) {
+    if let Some(edit) = app.themes_edit.as_mut() {
+        edit.backspace();
+    }
+}
+
+fn themes_popup_handle_char(app: &mut App, ch: char) {
+    use popups::themes::EditFocus;
+    if let Some(edit) = app.themes_edit.as_mut() {
+        // Only forward printable chars in name/color fields. Role list and
+        // list-mode ignore text input.
+        match edit.focus {
+            EditFocus::Name | EditFocus::Color => edit.type_char(ch),
+            EditFocus::Role => {}
+        }
+    }
+}
+
+/// Begin editing. When `copy_name` is true we're making a new theme from the
+/// currently selected source (built-in or custom) with a blank name — the
+/// user must type one before saving. Editing a built-in also forces a copy.
+fn themes_popup_start_edit(app: &mut App, copy_name: bool) {
+    use popups::themes::{ThemeEditState, ThemesMode};
+    let registry = crate::themes::ThemeRegistry::load();
+    let source = registry.all().get(app.themes_selected).cloned().cloned();
+    let Some(source) = source else { return };
+    let is_built_in = registry.is_built_in(&source.name);
+    // Editing a built-in always becomes a Save-As (copy), so we never mutate
+    // the hardcoded themes.
+    let force_copy = is_built_in || copy_name;
+    let name_override = if force_copy {
+        Some(String::new())
+    } else {
+        None
+    };
+    let edit = ThemeEditState::new(source, name_override);
+    app.themes_edit = Some(edit);
+    app.themes_mode = ThemesMode::Edit;
+}
+
+/// Attempt to save the in-progress theme. On success, apply it and return to
+/// list mode; on failure, surface the error inline (stored on the edit state).
+fn themes_popup_try_save(app: &mut App) {
+    use popups::themes::ThemesMode;
+    let Some(edit) = app.themes_edit.as_ref() else {
+        return;
+    };
+    let name = edit.name.trim().to_string();
+    if name.is_empty() {
+        // Can't save without a name — just stay in editor. The footer already
+        // advertises the requirement.
+        return;
+    }
+    let mut theme = edit.theme.clone();
+    theme.name = name.clone();
+    // Mutate the registry in place: build it once, save through it, then drop.
+    let mut registry = crate::themes::ThemeRegistry::load();
+    match registry.save_custom(theme.clone()) {
+        Ok(_path) => {
+            // Apply live + persist as the active theme.
+            app.theme = theme.clone();
+            app.config.set_theme(&theme.name);
+            app.themes_edit = None;
+            app.themes_mode = ThemesMode::List;
+            // Re-select the saved theme in the list.
+            let idx = registry.all().iter().position(|t| t.name == theme.name);
+            if let Some(i) = idx {
+                app.themes_selected = i;
+            }
+        }
+        Err(e) => {
+            // Surface the error in the editor's name field (best-effort).
+            if let Some(edit) = app.themes_edit.as_mut() {
+                edit.color_err = Some(format!("save failed: {e}"));
+            }
+        }
+    }
+}
+
+/// Request deletion of the selected theme. Built-ins refuse; customs are
+/// removed immediately (a confirm popup could gate this, but for now we keep
+/// the flow short — undo is via re-saving the .toml).
+fn themes_popup_request_delete(app: &mut App) {
+    let registry = crate::themes::ThemeRegistry::load();
+    let name_opt = registry
+        .all()
+        .get(app.themes_selected)
+        .map(|t| t.name.clone());
+    let Some(name) = name_opt else { return };
+    if registry.is_built_in(&name) {
+        return; // can't delete built-ins
+    }
+    let mut registry = crate::themes::ThemeRegistry::load();
+    let _ = registry.delete_custom(&name);
+    // Clamp selection into the new range.
+    let n = registry.all().len();
+    if app.themes_selected >= n && n > 0 {
+        app.themes_selected = n - 1;
+    }
+}
+
+/// Mouse hover for the Themes popup (both modes).
+fn themes_popup_handle_hover(app: &mut App, pos: (usize, usize), term: (u16, u16)) {
+    use popups::themes::ThemesMode;
+    let (x, y) = pos;
+    let term_area = Rect::new(0, 0, term.0, term.1);
+    let (popup, footer_y, footer_labels) = match app.themes_mode {
+        ThemesMode::List => {
+            let p = popups::themes::list_rect(term_area);
+            (
+                p,
+                popups::themes::list_footer_y(p),
+                popups::themes::list_footer_labels().to_vec(),
+            )
+        }
+        ThemesMode::Edit => {
+            let p = popups::themes::edit_rect(term_area);
+            (
+                p,
+                p.y + popups::themes::EDIT_POPUP_H - 1,
+                popups::themes::edit_footer_labels().to_vec(),
+            )
+        }
+    };
+    let in_popup = (y as u16) >= popup.y
+        && (y as u16) < popup.y + popup.height
+        && (x as u16) >= popup.x
+        && (x as u16) < popup.x + popup.width;
+
+    if !in_popup {
+        app.themes_list_hover = None;
+        app.themes_button_hover = None;
+        return;
+    }
+
+    // Footer button hover.
+    if y as u16 == footer_y {
+        let ranges = popups::themes::themes_button_x_ranges(popup.x, &footer_labels);
+        app.themes_button_hover = hit_button_row(x as u16, &ranges);
+    } else {
+        app.themes_button_hover = None;
+    }
+
+    // List-mode row hover.
+    if app.themes_mode == ThemesMode::List {
+        let first = popups::themes::list_first_row_y(popup);
+        let registry = crate::themes::ThemeRegistry::load();
+        let total = registry.all().len();
+        let rel = (y as u16).saturating_sub(first);
+        if (rel as usize) < total {
+            app.themes_list_hover = Some(rel as usize);
+        } else {
+            app.themes_list_hover = None;
+        }
+    }
+}
+
+/// Mouse click for the Themes popup (both modes).
+fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &mut bool) {
+    use popups::themes::ThemesMode;
+    let (x, y) = pos;
+    let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+    let term_area = Rect::new(0, 0, tw, th);
+    let (popup, footer_y, footer_labels) = match app.themes_mode {
+        ThemesMode::List => {
+            let p = popups::themes::list_rect(term_area);
+            (
+                p,
+                popups::themes::list_footer_y(p),
+                popups::themes::list_footer_labels().to_vec(),
+            )
+        }
+        ThemesMode::Edit => {
+            let p = popups::themes::edit_rect(term_area);
+            (
+                p,
+                p.y + popups::themes::EDIT_POPUP_H - 1,
+                popups::themes::edit_footer_labels().to_vec(),
+            )
+        }
+    };
+    let in_popup = (y as u16) >= popup.y
+        && (y as u16) < popup.y + popup.height
+        && (x as u16) >= popup.x
+        && (x as u16) < popup.x + popup.width;
+
+    if !in_popup {
+        // Click outside closes (list) or cancels (editor).
+        themes_popup_handle_esc(app);
+        *skip_editor = true;
+        return;
+    }
+    *skip_editor = true;
+
+    // Footer button click.
+    if y as u16 == footer_y {
+        let ranges = popups::themes::themes_button_x_ranges(popup.x, &footer_labels);
+        if let Some(idx) = hit_button_row(x as u16, &ranges) {
+            match app.themes_mode {
+                ThemesMode::List => match idx {
+                    0 => app.apply_theme_by_index(app.themes_selected),
+                    1 => themes_popup_start_edit(app, false),
+                    2 => themes_popup_start_edit(app, true),
+                    3 => themes_popup_request_delete(app),
+                    _ => app.close_themes(),
+                },
+                ThemesMode::Edit => match idx {
+                    0 => themes_popup_handle_tab(app),
+                    1 | 3 => themes_popup_try_save(app),
+                    _ => themes_popup_handle_esc(app),
+                },
+            }
+            return;
+        }
+    }
+
+    // List-mode: row click applies the theme.
+    if app.themes_mode == ThemesMode::List {
+        let first = popups::themes::list_first_row_y(popup);
+        let registry = crate::themes::ThemeRegistry::load();
+        let total = registry.all().len();
+        let rel = (y as u16).saturating_sub(first);
+        if (rel as usize) < total {
+            app.themes_selected = rel as usize;
+            app.apply_theme_by_index(app.themes_selected);
+        }
+    } else {
+        // Edit-mode: clicking a role row selects it and loads its value.
+        let roles_top = popup.y + 2; // border + header
+        let roles_height = popups::themes::EDIT_POPUP_H.saturating_sub(6);
+        let rel_role = (y as u16).saturating_sub(roles_top);
+        if rel_role < roles_height && rel_role < popups::themes::ROLE_FIELDS.len() as u16 {
+            if let Some(edit) = app.themes_edit.as_mut() {
+                edit.role_selected = rel_role as usize;
+                use popups::themes::color_buf_for;
+                use popups::themes::field_value;
+                edit.color_buf = color_buf_for(&field_value(&edit.theme, edit.role_selected));
+                edit.color_err = None;
+                edit.focus = popups::themes::EditFocus::Color;
+            }
+        }
+    }
+}
+
 /// True when any modal/popup is open and the editor (and its drag selection)
 /// should be suspended.
 fn any_modal_open(app: &App) -> bool {
     app.show_help
         || app.show_word_count
-        || app.show_settings
+        || app.show_configure
+        || app.show_themes
         || app.show_file_dialog
         || app.show_file_browser
         || app.show_confirm
@@ -1490,8 +1877,9 @@ fn handle_menu_action(app: &mut App) {
             let _ = app.format_current_document();
         }
         ("Tools", 4) => app.toggle_word_wrap(),
-        ("Settings", 0) => app.open_settings(),
-        ("Settings", 1) => app.open_settings(), // themes
+        ("Settings", 0) => app.open_configure(),
+        ("Settings", 1) => app.open_themes(),
+        ("Settings", 2) => app.show_help = !app.show_help, // Help (F1)
         _ => {}
     }
 }
@@ -1573,14 +1961,12 @@ fn ui(f: &mut Frame, app: &mut App) {
         crate::ui::header::render_dropdown(f, menu, area, app.current_theme(), app.menu_selected);
     }
 
-    if app.show_settings {
-        popups::settings::render(
-            f,
-            area,
-            app.current_theme(),
-            app.settings_selected,
-            app.config.word_wrap,
-        );
+    if app.show_configure {
+        popups::configure::render(f, area, app.current_theme(), app);
+    }
+
+    if app.show_themes {
+        popups::themes::render(f, area, app.current_theme(), app);
     }
 
     if app.show_confirm {

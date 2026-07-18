@@ -104,6 +104,24 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
             ],
         ),
         (
+            "Configure & Themes",
+            vec![
+                ("Settings menu", "Configure... / Themes... / Help"),
+                (
+                    "j / k, Up / Down",
+                    "Move selection in Configure / Themes list",
+                ),
+                ("Enter", "Toggle option (Configure) / Apply theme (Themes)"),
+                ("Left / Right", "Step tab size in Configure"),
+                ("e", "Edit selected theme (forces Save-As for built-ins)"),
+                ("n", "New theme from the selected source"),
+                ("d", "Delete the selected custom theme"),
+                ("Tab", "Cycle Name → Role → Color field in the editor"),
+                ("s / Enter", "Save the in-progress theme"),
+                ("Esc", "Close popup / cancel editor"),
+            ],
+        ),
+        (
             "Mouse",
             vec![
                 ("Click tab", "Switch buffer"),

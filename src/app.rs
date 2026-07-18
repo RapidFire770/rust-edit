@@ -47,8 +47,32 @@ pub struct App {
     pub help_content_scroll: (u16, u16),
     /// Currently open menu for dropdown ("File", "Tools", "Settings")
     pub active_menu: Option<String>,
-    pub show_settings: bool,
-    pub settings_selected: usize,
+    // ----- Configure popup (tab size, toggles) -----
+    pub show_configure: bool,
+    /// Selected row index in the Configure popup (0..N_ROWS-1).
+    pub configure_selected: usize,
+    /// Row currently under the mouse (live hover). When set, steals the
+    /// highlight from the keyboard selection so only one row is highlighted.
+    pub configure_row_hover: Option<usize>,
+    /// Hovered footer button in the Configure popup (0=Toggle, 1=Close).
+    pub configure_button_hover: Option<usize>,
+    // ----- Themes popup -----
+    pub show_themes: bool,
+    /// Which screen of the Themes popup is active: list or editor.
+    pub themes_mode: crate::ui::popups::themes::ThemesMode,
+    /// Selected row in the Themes list (built-ins then customs).
+    pub themes_selected: usize,
+    /// Themes list scroll offset (rows). The list can exceed the popup height
+    /// once several custom themes are installed.
+    pub themes_scroll: u16,
+    /// Row currently under the mouse in the Themes list.
+    pub themes_list_hover: Option<usize>,
+    /// Hovered footer button in the Themes list.
+    pub themes_button_hover: Option<usize>,
+    /// Editor-mode state (name buffer, in-progress theme, focused field, role
+    /// list scroll). Populated when the user picks New/Edit; `None` in list mode.
+    pub themes_edit: Option<crate::ui::popups::themes::ThemeEditState>,
+    // legacy (removed): show_settings/settings_selected/settings_theme_hover
     /// Selected index in currently open dropdown menu (if any)
     pub menu_selected: usize,
     // Popup states for Sprint 2
@@ -65,7 +89,6 @@ pub struct App {
     /// Button hover states (per popup)
     pub file_dialog_button_hover: Option<usize>, // 0 = Save/Open, 1 = Cancel
     pub confirm_button_hover: Option<usize>, // 0 = Confirm, 1 = Cancel
-    pub settings_theme_hover: Option<usize>, // Which theme row hovered
     // ----- File browser popup state -----
     /// True while the directory-listing popup is open over the file dialog.
     pub show_file_browser: bool,
@@ -118,11 +141,10 @@ pub struct App {
 impl App {
     pub fn new(initial_files: &[String]) -> Self {
         let config = Config::load();
-        let theme = match config.theme.as_str() {
-            "light" => Theme::light(),
-            "high-contrast" | "high_contrast" => Theme::high_contrast(),
-            _ => Theme::dark_red(),
-        };
+        let theme = crate::themes::ThemeRegistry::load()
+            .by_name(&config.theme)
+            .cloned()
+            .unwrap_or_default();
         let highlighter = SyntaxHighlighter::new();
 
         let mut buffers = Vec::new();
@@ -155,8 +177,17 @@ impl App {
             help_tab: crate::ui::popups::help::HelpTab::default(),
             help_content_scroll: (0, 0),
             active_menu: None,
-            show_settings: false,
-            settings_selected: 0,
+            show_configure: false,
+            configure_selected: 0,
+            configure_row_hover: None,
+            configure_button_hover: None,
+            show_themes: false,
+            themes_mode: crate::ui::popups::themes::ThemesMode::default(),
+            themes_selected: 0,
+            themes_scroll: 0,
+            themes_list_hover: None,
+            themes_button_hover: None,
+            themes_edit: None,
             menu_selected: 0,
             show_confirm: false,
             confirm_message: String::new(),
@@ -169,7 +200,6 @@ impl App {
             confirm_selected: 0,
             file_dialog_button_hover: None,
             confirm_button_hover: None,
-            settings_theme_hover: None,
             show_file_browser: false,
             browser_cwd: PathBuf::new(),
             browser_entries: Vec::new(),
@@ -648,24 +678,93 @@ impl App {
         self.menu_selected = 0;
     }
 
-    pub fn open_settings(&mut self) {
-        self.show_settings = true;
-        self.settings_selected = 0;
+    // ----- Configure popup -----
+    pub fn open_configure(&mut self) {
+        self.show_configure = true;
+        self.configure_selected = 0;
+        self.configure_row_hover = None;
+        self.configure_button_hover = None;
         self.close_menu();
     }
 
-    pub fn close_settings(&mut self) {
-        self.show_settings = false;
+    pub fn close_configure(&mut self) {
+        self.show_configure = false;
     }
 
-    /// Cycle or set theme live from settings
-    pub fn apply_settings_theme(&mut self, idx: usize) {
-        let themes = crate::theme::Theme::built_ins();
-        if idx < themes.len() {
-            self.theme = themes[idx].clone();
-            // update config for persist
-            self.config.theme = self.theme.name.clone();
-            self.config.save();
+    /// Number of editable rows in the Configure popup. Kept in sync with
+    /// `popups::configure::render`. Exposed as a shared constant so the key/mouse
+    /// handlers and the renderer never drift apart.
+    pub fn configure_row_count() -> usize {
+        crate::ui::popups::configure::ROW_COUNT
+    }
+
+    /// Apply a change to a Configure row and persist + live-apply it.
+    /// `delta` is +1/-1 for steppers (tab size) or ignored for toggles.
+    /// For toggles the value is flipped regardless of `delta`.
+    pub fn configure_adjust(&mut self, row: usize, delta: i32) {
+        match row {
+            0 => {
+                // Tab size stepper (clamped 1..=8 by Config).
+                let new = (self.config.tab_size as i32 + delta).clamp(1, 8) as u8;
+                self.config.set_tab_size(new);
+            }
+            1 => {
+                // Word wrap toggle.
+                let on = !self.config.word_wrap;
+                self.toggle_word_wrap(); // handles viewport re-sync
+                let _ = on;
+            }
+            2 => {
+                self.config
+                    .set_show_line_numbers(!self.config.show_line_numbers);
+            }
+            3 => {
+                self.config.set_mouse_enabled(!self.config.mouse_enabled);
+            }
+            _ => {}
+        }
+    }
+
+    /// Toggle the focused Configure row (bools flip; tab size steps up by one).
+    pub fn configure_toggle(&mut self, row: usize) {
+        match row {
+            0 => self.configure_adjust(0, 1),
+            _ => self.configure_adjust(row, 0),
+        }
+    }
+
+    // ----- Themes popup -----
+    pub fn open_themes(&mut self) {
+        self.show_themes = true;
+        self.themes_mode = crate::ui::popups::themes::ThemesMode::List;
+        // Default-select the currently active theme so the list opens pointing
+        // at what the user is seeing.
+        let registry = crate::themes::ThemeRegistry::load();
+        let active_name = &self.theme.name;
+        self.themes_selected = registry
+            .all()
+            .iter()
+            .position(|t| &t.name == active_name)
+            .unwrap_or(0);
+        self.themes_scroll = 0;
+        self.themes_list_hover = None;
+        self.themes_button_hover = None;
+        self.themes_edit = None;
+        self.close_menu();
+    }
+
+    pub fn close_themes(&mut self) {
+        self.show_themes = false;
+        self.themes_edit = None;
+    }
+
+    /// Apply a theme by registry index (built-ins then customs) live + persist.
+    /// Out-of-range indices are ignored.
+    pub fn apply_theme_by_index(&mut self, idx: usize) {
+        let registry = crate::themes::ThemeRegistry::load();
+        if let Some(theme) = registry.all().get(idx) {
+            self.theme = (*theme).clone();
+            self.config.set_theme(&self.theme.name);
         }
     }
 

@@ -86,6 +86,24 @@ impl Config {
         self.save();
     }
 
+    /// Set tab size (clamped to 1–8) and persist. Mirrors `set_theme`.
+    pub fn set_tab_size(&mut self, n: u8) {
+        self.tab_size = n.clamp(1, 8);
+        self.save();
+    }
+
+    /// Toggle line-number visibility and persist.
+    pub fn set_show_line_numbers(&mut self, on: bool) {
+        self.show_line_numbers = on;
+        self.save();
+    }
+
+    /// Toggle mouse input and persist.
+    pub fn set_mouse_enabled(&mut self, on: bool) {
+        self.mouse_enabled = on;
+        self.save();
+    }
+
     /// Record a file as just-opened/saved: move it to the front of
     /// `recent_files`, dedupe by canonicalized path, and cap the list at
     /// [`RECENT_FILES_MAX`]. Persists immediately. No-op if the path doesn't

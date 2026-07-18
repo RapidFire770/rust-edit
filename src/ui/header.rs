@@ -112,7 +112,7 @@ pub fn render_dropdown(
         "Format Document",
         "Toggle Word Wrap (Alt+Z)",
     ];
-    let settings_items = vec!["Settings...", "Themes"];
+    let settings_items = vec!["Configure...", "Themes...", "Help (F1)"];
 
     // x offset where each dropdown should appear, matching the header layout:
     // " File "│" Tools "│" Settings "  → File starts col 0, Tools col 7, Settings col 15.
@@ -173,7 +173,7 @@ pub fn dropdown_rect(area: Rect, menu_name: &str) -> Rect {
     let h = match menu_name {
         "File" => 8,
         "Tools" => 7,
-        "Settings" => 4,
+        "Settings" => 5,
         _ => 4,
     };
     let w = 26;
@@ -220,6 +220,6 @@ mod tests {
         assert_eq!(rect.x, 15);
         assert_eq!(rect.y, crate::ui::layout::HEADER_ROWS);
         assert_eq!(rect.width, 26);
-        assert_eq!(rect.height, 4);
+        assert_eq!(rect.height, 5);
     }
 }
