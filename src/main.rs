@@ -63,7 +63,83 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Blink interval for the software cursor blink.
+const BLINK_INTERVAL: Duration = Duration::from_millis(533);
+
+/// Compute the screen position of the cursor, or None if it's not in view.
+/// Returns (x, y) in terminal coordinates.
+fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
+    // Hide cursor when any modal/popup is open
+    if app.show_help
+        || app.show_word_count
+        || app.show_configure
+        || app.show_themes
+        || app.active_menu.is_some()
+    {
+        return None;
+    }
+
+    if app.config.word_wrap {
+        let buf = app.active_buffer();
+        let layout = crate::wrap::compute_layout(
+            &buf.rope,
+            0,
+            buf.line_count(),
+            buf.visible_width.max(1),
+            app.config.tab_size,
+        );
+        let cursor_screen_row = crate::wrap::screen_row_of_byte(&layout, &buf.rope, 0, buf.cursor);
+        let scroll_row = buf.scroll_offset.0;
+        if cursor_screen_row >= scroll_row {
+            let view_row = cursor_screen_row - scroll_row;
+            let screen_y = crate::ui::layout::HEADER_ROWS + view_row as u16;
+            // Column within the sub-row: distance from the sub-row's start byte to the cursor.
+            let (line_idx, _col_in_line) = buf.cursor_position();
+            let line_first_byte = buf.rope.line_to_byte(line_idx);
+            // Find the sub-row containing the cursor.
+            let line_breaks = layout.breaks.get(line_idx).cloned().unwrap_or_default();
+            let mut sub_row_start_byte = line_first_byte;
+            for &brk in &line_breaks {
+                if buf.cursor < brk {
+                    break;
+                }
+                sub_row_start_byte = brk;
+            }
+            let col_offset = buf
+                .rope
+                .byte_slice(sub_row_start_byte..buf.cursor)
+                .to_string()
+                .chars()
+                .count();
+            let screen_x = Buffer::GUTTER_WIDTH as u16 + col_offset as u16;
+            Some((screen_x, screen_y))
+        } else {
+            None
+        }
+    } else {
+        let buf = app.active_buffer();
+        let (cur_row, cur_col) = buf.cursor_position();
+        let scroll_row = buf.scroll_offset.0;
+        let hscroll = buf.scroll_offset.1;
+        if cur_row >= scroll_row {
+            let view_row = cur_row - scroll_row;
+            // Header now occupies HEADER_ROWS (menu + separator rule).
+            let screen_y = crate::ui::layout::HEADER_ROWS + view_row as u16;
+            // Hardware cursor must compensate hscroll: the drawn content starts at logical hscroll.
+            let content_col = cur_col.saturating_sub(hscroll);
+            let screen_x = Buffer::GUTTER_WIDTH as u16 + content_col as u16;
+            Some((screen_x, screen_y))
+        } else {
+            None
+        }
+    }
+}
+
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
+    // Software cursor blink state
+    let mut cursor_blink_on = true;
+    let mut last_blink = std::time::Instant::now();
+
     loop {
         // Keep each buffer's notion of the viewport fresh so that the internal
         // adjust_scroll (run on edits/moves) clamps against the *real* height and
@@ -83,70 +159,17 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
 
         // Position the real terminal cursor (after draw) so it's always visible at the exact
         // position, including on whitespace, spaces, and end-of-line. Hide it for popups/modals.
-        if app.show_help
-            || app.show_word_count
-            || app.show_configure
-            || app.show_themes
-            || app.active_menu.is_some()
-        {
-            terminal.hide_cursor().ok();
-        } else if app.config.word_wrap {
-            let buf = app.active_buffer();
-            let layout = crate::wrap::compute_layout(
-                &buf.rope,
-                0,
-                buf.line_count(),
-                buf.visible_width.max(1),
-                app.config.tab_size,
-            );
-            let cursor_screen_row =
-                crate::wrap::screen_row_of_byte(&layout, &buf.rope, 0, buf.cursor);
-            let scroll_row = buf.scroll_offset.0;
-            if cursor_screen_row >= scroll_row {
-                let view_row = cursor_screen_row - scroll_row;
-                let screen_y = crate::ui::layout::HEADER_ROWS + view_row as u16;
-                // Column within the sub-row: distance from the sub-row's start byte to the cursor.
-                let (line_idx, col_in_line) = buf.cursor_position();
-                let line_first_byte = buf.rope.line_to_byte(line_idx);
-                // Find the sub-row containing the cursor.
-                let line_breaks = layout.breaks.get(line_idx).cloned().unwrap_or_default();
-                let mut sub_row_start_byte = line_first_byte;
-                for &brk in &line_breaks {
-                    if buf.cursor < brk {
-                        break;
-                    }
-                    sub_row_start_byte = brk;
-                }
-                let col_offset = buf
-                    .rope
-                    .byte_slice(sub_row_start_byte..buf.cursor)
-                    .to_string()
-                    .chars()
-                    .count();
-                let _ = col_in_line;
-                let screen_x = Buffer::GUTTER_WIDTH as u16 + col_offset as u16;
-                terminal.set_cursor_position((screen_x, screen_y)).ok();
+        // The cursor blinks in software: only show it when the blink phase is "on".
+        let cursor_pos = compute_cursor_position(app);
+        if let Some((x, y)) = cursor_pos {
+            if cursor_blink_on {
+                terminal.set_cursor_position((x, y)).ok();
                 terminal.show_cursor().ok();
             } else {
                 terminal.hide_cursor().ok();
             }
         } else {
-            let buf = app.active_buffer();
-            let (cur_row, cur_col) = buf.cursor_position();
-            let scroll_row = buf.scroll_offset.0;
-            let hscroll = buf.scroll_offset.1;
-            if cur_row >= scroll_row {
-                let view_row = cur_row - scroll_row;
-                // Header now occupies HEADER_ROWS (menu + separator rule).
-                let screen_y = crate::ui::layout::HEADER_ROWS + view_row as u16;
-                // Hardware cursor must compensate hscroll: the drawn content starts at logical hscroll.
-                let content_col = cur_col.saturating_sub(hscroll);
-                let screen_x = Buffer::GUTTER_WIDTH as u16 + content_col as u16;
-                terminal.set_cursor_position((screen_x, screen_y)).ok();
-                terminal.show_cursor().ok();
-            } else {
-                terminal.hide_cursor().ok();
-            }
+            terminal.hide_cursor().ok();
         }
 
         // Block for the first event, then drain anything already queued without
@@ -159,9 +182,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
         // Edge auto-scroll: when a mouse-drag selection is in progress and the
         // pointer sits at a viewport edge, crossterm emits no events while the
         // mouse is held still, so we switch to a short bounded poll. On timeout
-        // we apply one scroll step + re-extend the selection, then loop. When
-        // not dragging-at-edge we keep the original blocking semantics (idle CPU
-        // stays at zero).
+        // we apply one scroll step + re-extend the selection, then loop.
+        //
+        // Cursor blink: when the cursor should be visible, we use a bounded poll
+        // with a timeout based on the blink interval. On timeout, we toggle the
+        // blink state and redraw. When an event arrives, we reset the blink timer
+        // so the cursor appears solid briefly.
         if any_modal_open(app) {
             app.mouse_drag_active = false;
             app.scrollbar_drag_active = false;
@@ -171,6 +197,21 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
         } else {
             None
         };
+
+        // Compute timeout for cursor blink (if cursor should be visible)
+        let cursor_should_blink = compute_cursor_position(app).is_some();
+        let blink_timeout = if cursor_should_blink {
+            let elapsed = last_blink.elapsed();
+            if elapsed >= BLINK_INTERVAL {
+                Duration::ZERO // toggle now
+            } else {
+                BLINK_INTERVAL - elapsed
+            }
+        } else {
+            // No cursor to blink, use a long timeout (effectively blocking)
+            Duration::from_secs(3600)
+        };
+
         let first = if let Some((drow, dcol)) = edge {
             if event::poll(Duration::from_millis(30))? {
                 event::read()?
@@ -203,8 +244,18 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                 extend_drag_to_mouse(app);
                 continue;
             }
-        } else {
+        } else if event::poll(blink_timeout)? {
+            // Event available, reset blink timer so cursor appears solid
+            cursor_blink_on = true;
+            last_blink = std::time::Instant::now();
             event::read()?
+        } else {
+            // Timed out, toggle blink state and redraw
+            if cursor_should_blink {
+                cursor_blink_on = !cursor_blink_on;
+                last_blink = std::time::Instant::now();
+            }
+            continue;
         };
         let mut events = vec![first];
         while event::poll(Duration::ZERO)? {

@@ -1,9 +1,12 @@
 ### Fixes & Bugs:
+- [x] The text cursor does not blink properly, it only blinks/flashes slightly when the mouse moves around the window.
 - [ ] Themes popup is to small, bottom row buttons are cut off.
 - [ ] Themes popup buttons only highlight when mouse is below the button.
 - [ ] Configure popup tab size can be increased with the mouse but not decreased.
 - [ ] Edit / new theme not working. Cannot select any colors to change or type color values.
 - [ ] Browser Window when mouse is outside the popup it still scrolls the files list.
+- [ ] Scrollbar to display in the help menu to indicate to the user that the content is scrollable.
+- [ ] The setttings configure popup window toggle and close buttons highlighting does not function as intended. When hovering over the close button it highlights properly and unhighlights when the mouse moves off. The toggle button stays constantly highlighted red no matter if the mouse is over it or not.
 
 ---
 
