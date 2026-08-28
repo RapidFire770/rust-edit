@@ -245,9 +245,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                 continue;
             }
         } else if event::poll(blink_timeout)? {
-            // Event available, reset blink timer so cursor appears solid
-            cursor_blink_on = true;
-            last_blink = std::time::Instant::now();
             event::read()?
         } else {
             // Timed out, toggle blink state and redraw
@@ -261,6 +258,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
         while event::poll(Duration::ZERO)? {
             events.push(event::read()?);
         }
+
+        // Capture cursor position before processing events to detect changes
+        let cursor_pos_before = app.active_buffer().cursor;
         // Apply the accumulated wheel delta directly (one scroll op), then drop
         // all wheel events so only key/click/other events remain for the dispatch.
         let wheel_delta = events.iter().filter_map(wheel_lines).sum::<isize>();
@@ -882,6 +882,15 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                 Event::Resize(_, _) => {}
                 _ => {}
             }
+        }
+
+        // Reset blink timer if cursor position changed (typing, navigation, click)
+        // This makes the cursor appear solid briefly after actual cursor movement,
+        // but not on mouse hover which doesn't change the cursor position.
+        let cursor_pos_after = app.active_buffer().cursor;
+        if cursor_pos_before != cursor_pos_after {
+            cursor_blink_on = true;
+            last_blink = std::time::Instant::now();
         }
 
         if app.should_quit {
