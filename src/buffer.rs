@@ -55,6 +55,10 @@ pub struct Buffer {
     pub path: Option<PathBuf>,
     pub language: Language,
     pub is_modified: bool,
+    /// True only for the editor-created empty untitled buffer (startup with no
+    /// files, or the reset buffer after closing the last tab). `[+]` / `Ctrl+N`
+    /// tabs stay false so they are never auto-replaced on File > Open.
+    pub is_initial: bool,
 
     /// Byte offset of cursor in the rope.
     pub cursor: usize,
@@ -105,6 +109,7 @@ impl Buffer {
             path: None,
             language: Language::Plain,
             is_modified: false,
+            is_initial: false,
             cursor: 0,
             selection: None,
             selection_anchor: None,
@@ -118,6 +123,13 @@ impl Buffer {
         }
     }
 
+    /// Auto-created untitled placeholder (startup / last-tab close).
+    pub fn placeholder() -> Self {
+        let mut b = Self::new();
+        b.is_initial = true;
+        b
+    }
+
     pub fn from_str(s: &str, path: Option<PathBuf>) -> Self {
         let rope = Rope::from_str(s);
         let language = path
@@ -129,6 +141,7 @@ impl Buffer {
             path,
             language,
             is_modified: false,
+            is_initial: false,
             cursor: 0,
             selection: None,
             selection_anchor: None,
@@ -908,6 +921,27 @@ mod tests {
         assert_eq!(b.line_count(), 1);
         assert_eq!(b.text(), "");
         assert_eq!(b.cursor_position(), (0, 0));
+        assert!(
+            !b.is_initial,
+            "Buffer::new is a user tab, not a placeholder"
+        );
+        assert!(!b.is_modified);
+        assert!(b.path.is_none());
+    }
+
+    #[test]
+    fn from_str_is_not_initial() {
+        let b = Buffer::from_str("hi", None);
+        assert!(!b.is_initial);
+    }
+
+    #[test]
+    fn placeholder_is_initial_untitled_unmodified() {
+        let b = Buffer::placeholder();
+        assert!(b.is_initial);
+        assert!(b.path.is_none());
+        assert!(!b.is_modified);
+        assert_eq!(b.text(), "");
     }
 
     #[test]

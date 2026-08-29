@@ -149,7 +149,7 @@ impl App {
 
         let mut buffers = Vec::new();
         if initial_files.is_empty() {
-            buffers.push(Buffer::new());
+            buffers.push(Buffer::placeholder());
         } else {
             for f in initial_files {
                 let path = PathBuf::from(f);
@@ -302,7 +302,7 @@ impl App {
             return;
         }
         if self.buffers.len() <= 1 {
-            self.buffers[0] = Buffer::new();
+            self.buffers[0] = Buffer::placeholder();
             self.active = 0;
             return;
         }
@@ -834,7 +834,7 @@ impl App {
                                 self.active = self.buffers.len() - 1;
                             }
                         } else {
-                            self.buffers[0] = Buffer::new();
+                            self.buffers[0] = Buffer::placeholder();
                             self.active = 0;
                         }
                     }
@@ -1453,5 +1453,51 @@ mod tests {
         }
         // We should have converged at the filesystem root.
         assert_eq!(app.browser_cwd.parent(), None);
+    }
+
+    #[test]
+    fn empty_launch_creates_placeholder() {
+        let app = App::new(&[]);
+        assert_eq!(app.buffers.len(), 1);
+        assert!(app.buffers[0].is_initial);
+        assert!(app.buffers[0].path.is_none());
+        assert!(!app.buffers[0].is_modified);
+    }
+
+    #[test]
+    fn new_tab_is_not_a_placeholder() {
+        let mut app = App::new(&[]);
+        app.new_tab();
+        assert_eq!(app.buffers.len(), 2);
+        assert!(
+            app.buffers[0].is_initial,
+            "original startup tab stays initial"
+        );
+        assert!(
+            !app.buffers[1].is_initial,
+            "[+] tab must never be marked initial"
+        );
+    }
+
+    #[test]
+    fn closing_last_tab_creates_a_fresh_placeholder() {
+        let mut app = App::new(&[]);
+        app.buffers[0].is_initial = false; // pretend it was a user tab
+        app.close_current_tab();
+        assert_eq!(app.buffers.len(), 1);
+        assert!(app.buffers[0].is_initial);
+        assert!(app.buffers[0].path.is_none());
+        assert!(!app.buffers[0].is_modified);
+    }
+
+    #[test]
+    fn confirming_close_of_last_modified_tab_creates_placeholder() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("x");
+        app.show_confirm_dialog("Close tab with unsaved changes?", "close_tab");
+        app.close_confirm(true);
+        assert_eq!(app.buffers.len(), 1);
+        assert!(app.buffers[0].is_initial);
+        assert_eq!(app.buffers[0].text(), "");
     }
 }
