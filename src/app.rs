@@ -951,15 +951,10 @@ impl App {
             buf.is_modified = false;
             self.config.record_recent_file(&path);
         } else {
-            match std::fs::read_to_string(&path) {
-                Ok(contents) => {
-                    let new_buf = Buffer::from_str(&contents, Some(path.clone()));
-                    self.buffers.push(new_buf);
-                    self.active = self.buffers.len() - 1;
-                    self.config.record_recent_file(&path);
-                }
+            match self.open_file_in_tab(&path) {
+                Ok(()) => {}
                 Err(e) => {
-                    self.file_dialog_message = format!("Open error: {}", e);
+                    self.file_dialog_message = format!("Open error: {e}");
                     return;
                 }
             }
@@ -1752,5 +1747,34 @@ mod tests {
         assert_eq!(app.active, 0);
         let _ = fs::remove_file(&first);
         let _ = fs::remove_file(&second);
+    }
+
+    #[test]
+    fn file_dialog_open_replaces_placeholder() {
+        let mut app = App::new(&[]);
+        let path = unique_temp_file("from-dialog");
+        app.show_file_dialog(false);
+        app.file_path_input = path.to_string_lossy().to_string();
+        app.close_file_dialog(0); // Open
+        assert!(!app.show_file_dialog, "success must dismiss the dialog");
+        assert_eq!(app.buffers.len(), 1, "dialog must use open_file_in_tab");
+        assert_eq!(app.buffers[0].text(), "from-dialog");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_dialog_open_error_keeps_dialog_and_buffers() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog(false);
+        app.file_path_input = "/this/does/not/exist/rust-edit-nope.txt".into();
+        app.close_file_dialog(0);
+        assert!(app.show_file_dialog, "error must keep the dialog open");
+        assert!(
+            app.file_dialog_message.starts_with("Open error:"),
+            "got {:?}",
+            app.file_dialog_message
+        );
+        assert_eq!(app.buffers.len(), 1);
+        assert!(app.buffers[0].is_initial);
     }
 }
