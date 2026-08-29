@@ -65,8 +65,7 @@ fn main() -> Result<()> {
 
 /// Blink interval for the software cursor blink.
 const BLINK_INTERVAL: Duration = Duration::from_millis(533);
-/// Long poll when the cursor is hidden. Task 2 will call `next_blink_timeout`.
-#[allow(dead_code)]
+/// Long poll when the cursor is hidden.
 const IDLE_POLL: Duration = Duration::from_secs(3600);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -85,8 +84,6 @@ struct HoverVisual {
 }
 
 /// Snapshot popup hover/selection for idle-mouse redraw decisions.
-/// Task 2 will call this from `run_app`.
-#[allow(dead_code)]
 fn hover_visual(app: &App) -> HoverVisual {
     HoverVisual {
         file_dialog_button_hover: app.file_dialog_button_hover,
@@ -103,8 +100,7 @@ fn hover_visual(app: &App) -> HoverVisual {
     }
 }
 
-/// Remaining blink interval, or `IDLE_POLL` when hidden. Task 2 will call this from `run_app`.
-#[allow(dead_code)]
+/// Remaining blink interval, or `IDLE_POLL` when hidden.
 fn next_blink_timeout(last_blink: Instant, interval: Duration, should_blink: bool) -> Duration {
     if !should_blink {
         return IDLE_POLL;
@@ -117,15 +113,12 @@ fn next_blink_timeout(last_blink: Instant, interval: Duration, should_blink: boo
     }
 }
 
-/// True when the software cursor should toggle. Task 2 will call this from `run_app`.
-#[allow(dead_code)]
+/// True when the software cursor should toggle.
 fn blink_is_due(last_blink: Instant, interval: Duration, should_blink: bool) -> bool {
     should_blink && last_blink.elapsed() >= interval
 }
 
 /// True for pointer motion that should not, by itself, force a redraw.
-/// Task 2 will call this from `run_app`.
-#[allow(dead_code)]
 fn event_is_idle_mouse_move(event: &Event) -> bool {
     matches!(
         event,
@@ -136,8 +129,6 @@ fn event_is_idle_mouse_move(event: &Event) -> bool {
 /// True when this drained batch must produce a new frame.
 /// `wheel_delta` is applied before dispatch and is a visual change even if
 /// the wheel events were then dropped from `events`.
-/// Task 2 will call this from `run_app`.
-#[allow(dead_code)]
 fn batch_needs_redraw(
     events: &[Event],
     wheel_delta: isize,
@@ -225,9 +216,9 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     // Software cursor blink state
     let mut cursor_blink_on = true;
-    let mut last_blink = std::time::Instant::now();
+    let mut last_blink = Instant::now();
 
-    loop {
+    'outer: loop {
         // Keep each buffer's notion of the viewport fresh so that the internal
         // adjust_scroll (run on edits/moves) clamps against the *real* height and
         // width instead of stale defaults. Fixes half-screen scroll jumping and
@@ -259,50 +250,36 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             terminal.hide_cursor().ok();
         }
 
-        // Block for the first event, then drain anything already queued without
-        // blocking. Consecutive mouse-wheel events are collapsed into a single
-        // net scroll applied once, so a scroll burst produces one redraw instead
-        // of one per wheel notch — removing the seconds-of-lag backlog and CPU
-        // spike on large files. Key/mouse-click events are never dropped: they
-        // are applied in arrival order.
-        //
-        // Edge auto-scroll: when a mouse-drag selection is in progress and the
-        // pointer sits at a viewport edge, crossterm emits no events while the
-        // mouse is held still, so we switch to a short bounded poll. On timeout
-        // we apply one scroll step + re-extend the selection, then loop.
-        //
-        // Cursor blink: when the cursor should be visible, we use a bounded poll
-        // with a timeout based on the blink interval. On timeout, we toggle the
-        // blink state and redraw. When an event arrives, we reset the blink timer
-        // so the cursor appears solid briefly.
-        if any_modal_open(app) {
-            app.mouse_drag_active = false;
-            app.scrollbar_drag_active = false;
-        }
-        let edge = if app.mouse_drag_active {
-            drag_edge_delta(app)
-        } else {
-            None
-        };
-
-        // Compute timeout for cursor blink (if cursor should be visible)
-        let cursor_should_blink = compute_cursor_position(app).is_some();
-        let blink_timeout = if cursor_should_blink {
-            let elapsed = last_blink.elapsed();
-            if elapsed >= BLINK_INTERVAL {
-                Duration::ZERO // toggle now
-            } else {
-                BLINK_INTERVAL - elapsed
+        // Draw, then wait for a batch that actually changes the frame.
+        // Idle mouse-moves stay in this wait loop so we never hide/draw/show
+        // (which flashes the hardware caret). Blink due is checked first so
+        // queued motion cannot starve the 533ms phase toggle. Only a cursor
+        // byte change resets the blink timer; mouse-move does not.
+        'wait: loop {
+            if any_modal_open(app) {
+                app.mouse_drag_active = false;
+                app.scrollbar_drag_active = false;
             }
-        } else {
-            // No cursor to blink, use a long timeout (effectively blocking)
-            Duration::from_secs(3600)
-        };
-
-        let first = if let Some((drow, dcol)) = edge {
-            if event::poll(Duration::from_millis(30))? {
-                event::read()?
+            let cursor_should_blink = compute_cursor_position(app).is_some();
+            if blink_is_due(last_blink, BLINK_INTERVAL, cursor_should_blink) {
+                cursor_blink_on = !cursor_blink_on;
+                last_blink = Instant::now();
+                break 'wait; // redraw so the new phase is visible
+            }
+            let edge = if app.mouse_drag_active {
+                drag_edge_delta(app)
             } else {
+                None
+            };
+            let poll_timeout = if edge.is_some() {
+                Duration::from_millis(30)
+            } else {
+                next_blink_timeout(last_blink, BLINK_INTERVAL, cursor_should_blink)
+            };
+
+            let first = if event::poll(poll_timeout)? {
+                event::read()?
+            } else if let Some((drow, dcol)) = edge {
                 // Timed out: no input arrived, but we're dragging at an edge.
                 // Advance the viewport one step and re-extend the selection.
                 let vis = app.editor_visible_lines.get().max(1);
@@ -329,661 +306,679 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                     };
                 }
                 extend_drag_to_mouse(app);
-                continue;
-            }
-        } else if event::poll(blink_timeout)? {
-            event::read()?
-        } else {
-            // Timed out, toggle blink state and redraw
-            if cursor_should_blink {
-                cursor_blink_on = !cursor_blink_on;
-                last_blink = std::time::Instant::now();
-            }
-            continue;
-        };
-        let mut events = vec![first];
-        while event::poll(Duration::ZERO)? {
-            events.push(event::read()?);
-        }
-
-        // Capture cursor position before processing events to detect changes
-        let cursor_pos_before = app.active_buffer().cursor;
-        // Apply the accumulated wheel delta directly (one scroll op), then drop
-        // all wheel events so only key/click/other events remain for the dispatch.
-        let wheel_delta = events.iter().filter_map(wheel_lines).sum::<isize>();
-        if wheel_delta != 0 {
-            if app.show_file_browser {
-                // Route wheel to the browser list, not the editor underneath.
-                app.browser_move_cursor(wheel_delta as i32);
-            } else if app.show_help {
-                // Route wheel to help popup content scroll instead of buffer.
-                let new_row = (app.help_content_scroll.0 as isize + wheel_delta).max(0) as u16;
-                app.help_content_scroll.0 = new_row;
-            } else if app.config.word_wrap {
-                let buf = app.active_buffer();
-                let total = crate::wrap::total_screen_rows(
-                    &buf.rope,
-                    buf.visible_width,
-                    app.config.tab_size,
-                );
-                let b = app.active_buffer_mut();
-                b.scroll_wrapped(wheel_delta, total);
+                break 'wait;
             } else {
-                let visible = app.editor_visible_lines.get().max(5);
-                app.active_buffer_mut().scroll(wheel_delta);
-                app.active_buffer_mut().clamp_scroll(visible);
+                // Timed out, toggle blink state and redraw
+                if cursor_should_blink {
+                    cursor_blink_on = !cursor_blink_on;
+                    last_blink = Instant::now();
+                }
+                break 'wait;
+            };
+            let mut events = vec![first];
+            while event::poll(Duration::ZERO)? {
+                events.push(event::read()?);
             }
-        }
-        events.retain(|e| wheel_lines(e).is_none());
 
-        for event in events {
-            match event {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        match key.code {
-                            // Ctrl+H toggles hidden files in the browser. Must
-                            // live HERE, not in the browser key block below:
-                            // this outer CONTROL block swallows every Ctrl+char
-                            // via its `continue`, so a Ctrl+H arm further down
-                            // would be unreachable (it was — see git history).
-                            KeyCode::Char('h') if app.show_file_browser => {
-                                app.browser_toggle_hidden();
-                            }
-                            KeyCode::Char('q') => {
-                                app.request_quit();
-                            }
-                            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
-                                // Ctrl+Alt+S: Save As. Placed before plain Ctrl+S so the
-                                // ALT variant doesn't fall through to save_current().
-                                app.show_file_dialog(true);
-                            }
-                            KeyCode::Char('s') => {
-                                app.save_current();
-                            }
-                            KeyCode::Char('o') => {
-                                app.show_file_dialog(false);
-                            }
-                            KeyCode::Char('n') => app.new_tab(),
-                            KeyCode::Char('w') => app.close_current_tab(),
-                            KeyCode::Char('c') => {
-                                app.copy_selection_or_line();
-                            }
-                            KeyCode::Char('v') => {
-                                app.paste();
-                            }
-                            KeyCode::Char('x') => {
-                                app.copy_selection_or_line();
-                                if app.active_buffer().selection.is_some() {
-                                    app.active_buffer_mut().delete();
+            let hover_before = hover_visual(app);
+            let cursor_pos_before = app.active_buffer().cursor;
+            // Apply the accumulated wheel delta directly (one scroll op), then drop
+            // all wheel events so only key/click/other events remain for the dispatch.
+            let wheel_delta = events.iter().filter_map(wheel_lines).sum::<isize>();
+            if wheel_delta != 0 {
+                if app.show_file_browser {
+                    // Route wheel to the browser list, not the editor underneath.
+                    app.browser_move_cursor(wheel_delta as i32);
+                } else if app.show_help {
+                    // Route wheel to help popup content scroll instead of buffer.
+                    let new_row = (app.help_content_scroll.0 as isize + wheel_delta).max(0) as u16;
+                    app.help_content_scroll.0 = new_row;
+                } else if app.config.word_wrap {
+                    let buf = app.active_buffer();
+                    let total = crate::wrap::total_screen_rows(
+                        &buf.rope,
+                        buf.visible_width,
+                        app.config.tab_size,
+                    );
+                    let b = app.active_buffer_mut();
+                    b.scroll_wrapped(wheel_delta, total);
+                } else {
+                    let visible = app.editor_visible_lines.get().max(5);
+                    app.active_buffer_mut().scroll(wheel_delta);
+                    app.active_buffer_mut().clamp_scroll(visible);
+                }
+            }
+            events.retain(|e| wheel_lines(e).is_none());
+
+            for event in events.clone() {
+                match event {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            match key.code {
+                                // Ctrl+H toggles hidden files in the browser. Must
+                                // live HERE, not in the browser key block below:
+                                // this outer CONTROL block swallows every Ctrl+char
+                                // via its `continue`, so a Ctrl+H arm further down
+                                // would be unreachable (it was — see git history).
+                                KeyCode::Char('h') if app.show_file_browser => {
+                                    app.browser_toggle_hidden();
                                 }
-                            }
-                            KeyCode::Char('f') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
-                                // Single Find/Replace shortcut (Ctrl+F). The bar has
-                                // separate Query/Replace fields reachable via Tab, so a
-                                // second Ctrl+H shortcut is no longer needed.
-                                let was_open = app.is_find_active();
-                                app.toggle_find();
-                                if !was_open {
-                                    if let Some(fs) = &mut app.find_state {
-                                        fs.focus = FindFocus::Query;
+                                KeyCode::Char('q') => {
+                                    app.request_quit();
+                                }
+                                KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
+                                    // Ctrl+Alt+S: Save As. Placed before plain Ctrl+S so the
+                                    // ALT variant doesn't fall through to save_current().
+                                    app.show_file_dialog(true);
+                                }
+                                KeyCode::Char('s') => {
+                                    app.save_current();
+                                }
+                                KeyCode::Char('o') => {
+                                    app.show_file_dialog(false);
+                                }
+                                KeyCode::Char('n') => app.new_tab(),
+                                KeyCode::Char('w') => app.close_current_tab(),
+                                KeyCode::Char('c') => {
+                                    app.copy_selection_or_line();
+                                }
+                                KeyCode::Char('v') => {
+                                    app.paste();
+                                }
+                                KeyCode::Char('x') => {
+                                    app.copy_selection_or_line();
+                                    if app.active_buffer().selection.is_some() {
+                                        app.active_buffer_mut().delete();
                                     }
                                 }
-                            }
-                            KeyCode::Char('a') => {
-                                if app.is_find_active() {
-                                    app.replace_all();
-                                } else {
-                                    app.active_buffer_mut().select_all();
+                                KeyCode::Char('f')
+                                    if !key.modifiers.contains(KeyModifiers::SHIFT) =>
+                                {
+                                    // Single Find/Replace shortcut (Ctrl+F). The bar has
+                                    // separate Query/Replace fields reachable via Tab, so a
+                                    // second Ctrl+H shortcut is no longer needed.
+                                    let was_open = app.is_find_active();
+                                    app.toggle_find();
+                                    if !was_open {
+                                        if let Some(fs) = &mut app.find_state {
+                                            fs.focus = FindFocus::Query;
+                                        }
+                                    }
                                 }
-                            }
-                            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                                let _ = app.format_current_document();
-                            }
-                            KeyCode::Char('z') => {
-                                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                KeyCode::Char('a') => {
+                                    if app.is_find_active() {
+                                        app.replace_all();
+                                    } else {
+                                        app.active_buffer_mut().select_all();
+                                    }
+                                }
+                                KeyCode::Char('f')
+                                    if key.modifiers.contains(KeyModifiers::SHIFT) =>
+                                {
+                                    let _ = app.format_current_document();
+                                }
+                                KeyCode::Char('z') => {
+                                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                        app.redo();
+                                    } else {
+                                        app.undo();
+                                    }
+                                }
+                                KeyCode::Char('y') => {
                                     app.redo();
-                                } else {
-                                    app.undo();
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
+                        match key.code {
+                            // ----- File browser popup keys (takes precedence over
+                            // everything else when open). -----
+                            //
+                            // Focus model: `browser_button_selected` holds either a
+                            // button index (0..=3) or the sentinel `4` meaning the
+                            // list area is focused. Tab cycles list -> 0 -> 1 -> 2
+                            // -> 3 -> list. Enter activates whichever is focused.
+                            //
+                            // NOTE: Ctrl+H (toggle hidden) is handled up in the
+                            // CONTROL block — adding it here would be dead code.
+                            KeyCode::Up | KeyCode::Char('k') if app.show_file_browser => {
+                                app.browser_move_cursor(-1);
+                                app.browser_button_selected = 4; // typing nav refocuses list
+                                continue;
+                            }
+                            KeyCode::Down | KeyCode::Char('j') if app.show_file_browser => {
+                                app.browser_move_cursor(1);
+                                app.browser_button_selected = 4;
+                                continue;
+                            }
+                            KeyCode::Char('g') if app.show_file_browser => {
+                                app.browser_jump(false);
+                                continue;
+                            }
+                            KeyCode::Char('G') if app.show_file_browser => {
+                                app.browser_jump(true);
+                                continue;
+                            }
+                            KeyCode::PageUp if app.show_file_browser => {
+                                let vh = app.editor_visible_lines.get().max(4);
+                                app.browser_page(true, vh);
+                                continue;
+                            }
+                            KeyCode::PageDown if app.show_file_browser => {
+                                let vh = app.editor_visible_lines.get().max(4);
+                                app.browser_page(false, vh);
+                                continue;
+                            }
+                            KeyCode::Tab if app.show_file_browser => {
+                                // list(4) -> 0 -> 1 -> 2 -> 3 -> list(4)
+                                app.browser_button_selected = match app.browser_button_selected {
+                                    4 => 0,
+                                    n if n < 3 => n + 1,
+                                    _ => 4,
+                                };
+                                continue;
+                            }
+                            KeyCode::Enter if app.show_file_browser => {
+                                match app.browser_button_selected {
+                                    0 => app.browser_go_up(),
+                                    1 => app.browser_toggle_mode(),
+                                    2 => app.browser_toggle_hidden(),
+                                    3 => app.close_file_browser(false),
+                                    _ => app.browser_enter_selected(),
+                                }
+                                continue;
+                            }
+                            // `l`/Right activate the focused thing (list entry or button).
+                            KeyCode::Char('l') | KeyCode::Right if app.show_file_browser => {
+                                match app.browser_button_selected {
+                                    0 => app.browser_go_up(),
+                                    1 => app.browser_toggle_mode(),
+                                    2 => app.browser_toggle_hidden(),
+                                    3 => app.close_file_browser(false),
+                                    _ => app.browser_enter_selected(),
+                                }
+                                continue;
+                            }
+                            // `h`/Left/Backspace/- go up one directory. (Plain `h`
+                            // only — Ctrl+H is handled up in the CONTROL block.)
+                            KeyCode::Backspace
+                            | KeyCode::Char('-')
+                            | KeyCode::Left
+                            | KeyCode::Char('h')
+                                if app.show_file_browser =>
+                            {
+                                app.browser_go_up();
+                                continue;
+                            }
+                            KeyCode::Esc | KeyCode::Char('q') if app.show_file_browser => {
+                                app.close_file_browser(false);
+                                continue;
+                            }
+                            // While the browser is open, swallow every other key so
+                            // unbound chars (e.g. 'x', 'f') don't leak into the
+                            // underlying file dialog's path field.
+                            _ if app.show_file_browser => {
+                                continue;
+                            }
+
+                            // File dialog button navigation
+                            KeyCode::Left if app.show_file_dialog => {
+                                // Cycle 0 -> 2 -> 1 -> 0 (right-to-left visual order).
+                                app.file_dialog_selected = match app.file_dialog_selected {
+                                    0 => 2,
+                                    2 => 1,
+                                    _ => 0,
+                                };
+                                continue;
+                            }
+                            KeyCode::Right if app.show_file_dialog => {
+                                // Cycle 0 -> 1 -> 2 -> 0.
+                                app.file_dialog_selected = match app.file_dialog_selected {
+                                    0 => 1,
+                                    1 => 2,
+                                    _ => 0,
+                                };
+                                continue;
+                            }
+
+                            // Confirm dialog button navigation
+                            KeyCode::Left if app.show_confirm => {
+                                app.confirm_selected = 0;
+                                continue;
+                            }
+                            KeyCode::Right if app.show_confirm => {
+                                app.confirm_selected = 1;
+                                continue;
+                            }
+
+                            // Modal popups take focus precedence over everything else
+                            // (find nav, editor typing). When a confirm or file dialog is
+                            // open, ONLY its keys are accepted — this fixes the bug where
+                            // the find bar's n/N/Y intercepted the confirm dialog.
+                            KeyCode::Char('y' | 'Y') if app.show_confirm => {
+                                let is_quit = app.confirm_action.as_deref() == Some("quit");
+                                app.close_confirm(true);
+                                if is_quit {
+                                    app.should_quit = true;
+                                    return Ok(());
+                                }
+                                continue;
+                            }
+                            KeyCode::Char('n' | 'N') if app.show_confirm => {
+                                app.close_confirm(false);
+                                continue;
+                            }
+                            KeyCode::Enter if app.show_confirm => {
+                                let confirmed = app.confirm_selected == 0; // 0 = Confirm
+                                let is_quit = app.confirm_action.as_deref() == Some("quit");
+                                app.close_confirm(confirmed);
+                                if confirmed && is_quit {
+                                    app.should_quit = true;
+                                }
+                                continue;
+                            }
+                            KeyCode::Esc if app.show_confirm => {
+                                app.close_confirm(false);
+                                continue;
+                            }
+                            KeyCode::Char(ch) if app.show_file_dialog => {
+                                app.file_dialog_input_char(ch);
+                                continue;
+                            }
+                            KeyCode::Backspace if app.show_file_dialog => {
+                                app.file_dialog_backspace();
+                                continue;
+                            }
+                            KeyCode::Enter if app.show_file_dialog => {
+                                // 0 = Save/Open, 1 = Browse…, 2 = Cancel
+                                app.close_file_dialog(app.file_dialog_selected);
+                                continue;
+                            }
+                            KeyCode::Esc if app.show_file_dialog => {
+                                app.close_file_dialog(2); // Cancel
+                                continue;
+                            }
+                            // Help popup: when open, Esc closes and 1/2/3/Tab switch tabs.
+                            KeyCode::Esc if app.show_help => {
+                                app.show_help = false;
+                                continue;
+                            }
+                            KeyCode::Tab if app.show_help => {
+                                app.help_tab = app.help_tab.next();
+                                continue;
+                            }
+                            KeyCode::Char('1') if app.show_help => {
+                                app.help_tab = popups::help::HelpTab::Shortcuts;
+                                continue;
+                            }
+                            KeyCode::Char('2') if app.show_help => {
+                                app.help_tab = popups::help::HelpTab::Languages;
+                                continue;
+                            }
+                            KeyCode::Char('3') if app.show_help => {
+                                app.help_tab = popups::help::HelpTab::About;
+                                continue;
+                            }
+                            KeyCode::F(1) => {
+                                app.show_help = !app.show_help;
+                            }
+                            KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::ALT) => {
+                                app.toggle_word_wrap();
+                            }
+                            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::ALT) => {
+                                app.compute_and_show_word_count();
+                            }
+                            // Alt+letter for menus (opens dropdown)
+                            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
+                                app.open_menu("File");
+                            }
+                            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::ALT) => {
+                                app.open_menu("Tools");
+                            }
+                            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
+                                app.open_menu("Settings");
+                            }
+                            // Horizontal scroll: Alt+H left, Alt+L right (mnemonic; Ctrl+H
+                            // and Ctrl+L were taken/conflicting). Auto-hscroll also follows
+                            // the cursor, but these give manual control over long lines.
+                            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::ALT) => {
+                                app.active_buffer_mut().scroll_offset.1 =
+                                    app.active_buffer_mut().scroll_offset.1.saturating_sub(4);
+                            }
+                            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => {
+                                app.active_buffer_mut().scroll_offset.1 =
+                                    app.active_buffer_mut().scroll_offset.1.saturating_add(4);
+                            }
+                            KeyCode::Char(d)
+                                if ('1'..='9').contains(&d)
+                                    && key.modifiers.contains(KeyModifiers::ALT) =>
+                            {
+                                let idx = (d as u8 - b'1') as usize;
+                                if idx < app.buffers.len() {
+                                    app.active = idx;
                                 }
                             }
-                            KeyCode::Char('y') => {
-                                app.redo();
+                            KeyCode::Tab if app.is_find_active() => {
+                                // Tab cycles focus: Query → Replace → Command → Query.
+                                // This is how the user leaves the text boxes so the
+                                // navigation/replace keys (n/N/r/Enter/c/x/w) become live
+                                // and n/N can be typed into the boxes again.
+                                if let Some(fs) = &mut app.find_state {
+                                    fs.focus = fs.focus.next();
+                                }
+                            }
+                            // While a text box has focus, every printable char (including
+                            // n/N/r/c/x/w) edits that field; Backspace deletes from it.
+                            KeyCode::Char(ch)
+                                if app.is_find_active()
+                                    && app
+                                        .find_state
+                                        .as_ref()
+                                        .is_some_and(|fs| fs.editing_text()) =>
+                            {
+                                app.update_find_input(Some(ch), false);
+                            }
+                            KeyCode::Backspace
+                                if app.is_find_active()
+                                    && app
+                                        .find_state
+                                        .as_ref()
+                                        .is_some_and(|fs| fs.editing_text()) =>
+                            {
+                                app.update_find_input(None, true);
+                            }
+                            // Command mode: navigation, replace, and option toggles.
+                            // Other keys are ignored (editor stays blocked while bar open).
+                            KeyCode::Char('n')
+                                if app
+                                    .find_state
+                                    .as_ref()
+                                    .is_some_and(|fs| fs.focus == FindFocus::Command) =>
+                            {
+                                app.find_next();
+                            }
+                            KeyCode::Char('N')
+                                if app
+                                    .find_state
+                                    .as_ref()
+                                    .is_some_and(|fs| fs.focus == FindFocus::Command) =>
+                            {
+                                app.find_prev();
+                            }
+                            KeyCode::Char('r')
+                                if app
+                                    .find_state
+                                    .as_ref()
+                                    .is_some_and(|fs| fs.focus == FindFocus::Command) =>
+                            {
+                                app.replace_current();
+                            }
+                            KeyCode::Enter if app.is_find_active() => {
+                                app.replace_current();
+                            }
+                            KeyCode::Char('c')
+                                if app
+                                    .find_state
+                                    .as_ref()
+                                    .is_some_and(|fs| fs.focus == FindFocus::Command) =>
+                            {
+                                if let Some(fs) = &mut app.find_state {
+                                    fs.case_sensitive = !fs.case_sensitive;
+                                    app.update_find_matches();
+                                }
+                            }
+                            KeyCode::Char('x')
+                                if app
+                                    .find_state
+                                    .as_ref()
+                                    .is_some_and(|fs| fs.focus == FindFocus::Command) =>
+                            {
+                                if let Some(fs) = &mut app.find_state {
+                                    fs.use_regex = !fs.use_regex;
+                                    app.update_find_matches();
+                                }
+                            }
+                            KeyCode::Char('w')
+                                if app
+                                    .find_state
+                                    .as_ref()
+                                    .is_some_and(|fs| fs.focus == FindFocus::Command) =>
+                            {
+                                if let Some(fs) = &mut app.find_state {
+                                    fs.whole_word = !fs.whole_word;
+                                    app.update_find_matches();
+                                }
+                            }
+                            // MD formatting toolbar (Sprint 2)
+                            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                if app.active_buffer().language == crate::buffer::Language::Markdown
+                                {
+                                    app.wrap_selection_or_cursor("**", "**");
+                                }
+                            }
+                            KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                if app.active_buffer().language == crate::buffer::Language::Markdown
+                                {
+                                    app.wrap_selection_or_cursor("*", "*");
+                                }
+                            }
+                            KeyCode::Char('`') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                if app.active_buffer().language == crate::buffer::Language::Markdown
+                                {
+                                    app.wrap_selection_or_cursor("`", "`");
+                                }
+                            }
+                            KeyCode::Esc if app.is_find_active() => {
+                                app.clear_find();
+                            }
+                            KeyCode::Esc if app.show_word_count => {
+                                app.close_word_count();
+                            }
+                            KeyCode::Esc if app.show_configure => {
+                                app.close_configure();
+                            }
+                            KeyCode::Char('j') | KeyCode::Down if app.show_configure => {
+                                let n = App::configure_row_count();
+                                app.configure_selected = (app.configure_selected + 1) % n;
+                            }
+                            KeyCode::Char('k') | KeyCode::Up if app.show_configure => {
+                                let n = App::configure_row_count();
+                                app.configure_selected = if app.configure_selected == 0 {
+                                    n - 1
+                                } else {
+                                    app.configure_selected - 1
+                                };
+                            }
+                            KeyCode::Left if app.show_configure => {
+                                app.configure_adjust(app.configure_selected, -1);
+                            }
+                            KeyCode::Right if app.show_configure => {
+                                app.configure_adjust(app.configure_selected, 1);
+                            }
+                            KeyCode::Enter if app.show_configure => {
+                                app.configure_toggle(app.configure_selected);
+                            }
+                            KeyCode::Esc if app.show_themes => {
+                                themes_popup_handle_esc(app);
+                            }
+                            KeyCode::Char('j') | KeyCode::Down if app.show_themes => {
+                                themes_popup_handle_vert(app, 1);
+                            }
+                            KeyCode::Char('k') | KeyCode::Up if app.show_themes => {
+                                themes_popup_handle_vert(app, -1);
+                            }
+                            KeyCode::Enter if app.show_themes => {
+                                themes_popup_handle_enter(app);
+                            }
+                            KeyCode::Char('e') if app.show_themes => {
+                                themes_popup_start_edit(app, /*copy_name=*/ false);
+                            }
+                            KeyCode::Char('n') if app.show_themes => {
+                                themes_popup_start_edit(app, /*copy_name=*/ true);
+                            }
+                            KeyCode::Char('d') if app.show_themes => {
+                                themes_popup_request_delete(app);
+                            }
+                            KeyCode::Char('s') if app.show_themes => {
+                                themes_popup_try_save(app);
+                            }
+                            KeyCode::Tab if app.show_themes => {
+                                themes_popup_handle_tab(app);
+                            }
+                            KeyCode::Backspace if app.show_themes => {
+                                themes_popup_handle_backspace(app);
+                            }
+                            KeyCode::Char(ch) if app.show_themes => {
+                                themes_popup_handle_char(app, ch);
+                            }
+                            // Dropdown menu keyboard navigation
+                            KeyCode::Esc if app.active_menu.is_some() => {
+                                app.close_menu();
+                            }
+                            KeyCode::Char('j') | KeyCode::Down if app.active_menu.is_some() => {
+                                let len = match app.active_menu.as_deref() {
+                                    Some("File") => 6,
+                                    Some("Tools") => 5,
+                                    Some("Settings") => 3,
+                                    _ => 1,
+                                };
+                                app.menu_selected = (app.menu_selected + 1) % len;
+                            }
+                            KeyCode::Char('k') | KeyCode::Up if app.active_menu.is_some() => {
+                                let len = match app.active_menu.as_deref() {
+                                    Some("File") => 6,
+                                    Some("Tools") => 5,
+                                    Some("Settings") => 3,
+                                    _ => 1,
+                                };
+                                app.menu_selected = if app.menu_selected == 0 {
+                                    len - 1
+                                } else {
+                                    app.menu_selected - 1
+                                };
+                            }
+                            KeyCode::Enter if app.active_menu.is_some() => {
+                                handle_menu_action(app);
+                                app.close_menu();
+                            }
+                            KeyCode::Char(ch) => {
+                                app.active_buffer_mut().insert_char(ch);
+                            }
+                            KeyCode::Enter => {
+                                app.active_buffer_mut().newline_with_indent();
+                            }
+                            KeyCode::Backspace => {
+                                app.active_buffer_mut().backspace();
+                            }
+                            KeyCode::Delete => {
+                                app.active_buffer_mut().delete();
+                            }
+                            KeyCode::Left => {
+                                let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                                app.active_buffer_mut().move_cursor(-1, extend);
+                            }
+                            KeyCode::Right => {
+                                let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                                app.active_buffer_mut().move_cursor(1, extend);
+                            }
+                            KeyCode::Up => {
+                                let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                                let vis = app.editor_visible_lines.get().max(1);
+                                app.active_buffer_mut().move_lines_up(1, extend);
+                                if app.config.word_wrap {
+                                    if let Some(layout) = active_wrap_layout(app) {
+                                        app.active_buffer_mut()
+                                            .ensure_cursor_visible_wrapped(&layout, vis);
+                                    }
+                                } else {
+                                    app.active_buffer_mut().ensure_cursor_visible(vis);
+                                }
+                            }
+                            KeyCode::Down => {
+                                let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                                let vis = app.editor_visible_lines.get().max(1);
+                                app.active_buffer_mut().move_lines_down(1, extend);
+                                if app.config.word_wrap {
+                                    if let Some(layout) = active_wrap_layout(app) {
+                                        app.active_buffer_mut()
+                                            .ensure_cursor_visible_wrapped(&layout, vis);
+                                    }
+                                } else {
+                                    app.active_buffer_mut().ensure_cursor_visible(vis);
+                                }
+                            }
+                            KeyCode::Home => {
+                                let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                                app.active_buffer_mut().move_home(extend);
+                            }
+                            KeyCode::End => {
+                                let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                                app.active_buffer_mut().move_end(extend);
+                            }
+                            KeyCode::PageUp => {
+                                let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                                let visible = app.editor_visible_lines.get().max(1);
+                                if app.config.word_wrap {
+                                    if let Some(layout) = active_wrap_layout(app) {
+                                        app.active_buffer_mut()
+                                            .page_wrapped(&layout, false, visible, extend);
+                                    }
+                                } else {
+                                    app.active_buffer_mut().page_up(visible, extend);
+                                    app.active_buffer_mut().ensure_cursor_visible(visible);
+                                }
+                            }
+                            KeyCode::PageDown => {
+                                let extend = key.modifiers.contains(KeyModifiers::SHIFT);
+                                let visible = app.editor_visible_lines.get().max(1);
+                                if app.config.word_wrap {
+                                    if let Some(layout) = active_wrap_layout(app) {
+                                        app.active_buffer_mut()
+                                            .page_wrapped(&layout, true, visible, extend);
+                                    }
+                                } else {
+                                    app.active_buffer_mut().page_down(visible, extend);
+                                    app.active_buffer_mut().ensure_cursor_visible(visible);
+                                }
+                            }
+                            KeyCode::Tab => {
+                                app.active_buffer_mut().indent();
+                            }
+                            KeyCode::Esc => {
+                                app.active_buffer_mut().selection = None;
                             }
                             _ => {}
                         }
-                        continue;
                     }
-
-                    match key.code {
-                        // ----- File browser popup keys (takes precedence over
-                        // everything else when open). -----
-                        //
-                        // Focus model: `browser_button_selected` holds either a
-                        // button index (0..=3) or the sentinel `4` meaning the
-                        // list area is focused. Tab cycles list -> 0 -> 1 -> 2
-                        // -> 3 -> list. Enter activates whichever is focused.
-                        //
-                        // NOTE: Ctrl+H (toggle hidden) is handled up in the
-                        // CONTROL block — adding it here would be dead code.
-                        KeyCode::Up | KeyCode::Char('k') if app.show_file_browser => {
-                            app.browser_move_cursor(-1);
-                            app.browser_button_selected = 4; // typing nav refocuses list
-                            continue;
-                        }
-                        KeyCode::Down | KeyCode::Char('j') if app.show_file_browser => {
-                            app.browser_move_cursor(1);
-                            app.browser_button_selected = 4;
-                            continue;
-                        }
-                        KeyCode::Char('g') if app.show_file_browser => {
-                            app.browser_jump(false);
-                            continue;
-                        }
-                        KeyCode::Char('G') if app.show_file_browser => {
-                            app.browser_jump(true);
-                            continue;
-                        }
-                        KeyCode::PageUp if app.show_file_browser => {
-                            let vh = app.editor_visible_lines.get().max(4);
-                            app.browser_page(true, vh);
-                            continue;
-                        }
-                        KeyCode::PageDown if app.show_file_browser => {
-                            let vh = app.editor_visible_lines.get().max(4);
-                            app.browser_page(false, vh);
-                            continue;
-                        }
-                        KeyCode::Tab if app.show_file_browser => {
-                            // list(4) -> 0 -> 1 -> 2 -> 3 -> list(4)
-                            app.browser_button_selected = match app.browser_button_selected {
-                                4 => 0,
-                                n if n < 3 => n + 1,
-                                _ => 4,
-                            };
-                            continue;
-                        }
-                        KeyCode::Enter if app.show_file_browser => {
-                            match app.browser_button_selected {
-                                0 => app.browser_go_up(),
-                                1 => app.browser_toggle_mode(),
-                                2 => app.browser_toggle_hidden(),
-                                3 => app.close_file_browser(false),
-                                _ => app.browser_enter_selected(),
-                            }
-                            continue;
-                        }
-                        // `l`/Right activate the focused thing (list entry or button).
-                        KeyCode::Char('l') | KeyCode::Right if app.show_file_browser => {
-                            match app.browser_button_selected {
-                                0 => app.browser_go_up(),
-                                1 => app.browser_toggle_mode(),
-                                2 => app.browser_toggle_hidden(),
-                                3 => app.close_file_browser(false),
-                                _ => app.browser_enter_selected(),
-                            }
-                            continue;
-                        }
-                        // `h`/Left/Backspace/- go up one directory. (Plain `h`
-                        // only — Ctrl+H is handled up in the CONTROL block.)
-                        KeyCode::Backspace
-                        | KeyCode::Char('-')
-                        | KeyCode::Left
-                        | KeyCode::Char('h')
-                            if app.show_file_browser =>
-                        {
-                            app.browser_go_up();
-                            continue;
-                        }
-                        KeyCode::Esc | KeyCode::Char('q') if app.show_file_browser => {
-                            app.close_file_browser(false);
-                            continue;
-                        }
-                        // While the browser is open, swallow every other key so
-                        // unbound chars (e.g. 'x', 'f') don't leak into the
-                        // underlying file dialog's path field.
-                        _ if app.show_file_browser => {
-                            continue;
-                        }
-
-                        // File dialog button navigation
-                        KeyCode::Left if app.show_file_dialog => {
-                            // Cycle 0 -> 2 -> 1 -> 0 (right-to-left visual order).
-                            app.file_dialog_selected = match app.file_dialog_selected {
-                                0 => 2,
-                                2 => 1,
-                                _ => 0,
-                            };
-                            continue;
-                        }
-                        KeyCode::Right if app.show_file_dialog => {
-                            // Cycle 0 -> 1 -> 2 -> 0.
-                            app.file_dialog_selected = match app.file_dialog_selected {
-                                0 => 1,
-                                1 => 2,
-                                _ => 0,
-                            };
-                            continue;
-                        }
-
-                        // Confirm dialog button navigation
-                        KeyCode::Left if app.show_confirm => {
-                            app.confirm_selected = 0;
-                            continue;
-                        }
-                        KeyCode::Right if app.show_confirm => {
-                            app.confirm_selected = 1;
-                            continue;
-                        }
-
-                        // Modal popups take focus precedence over everything else
-                        // (find nav, editor typing). When a confirm or file dialog is
-                        // open, ONLY its keys are accepted — this fixes the bug where
-                        // the find bar's n/N/Y intercepted the confirm dialog.
-                        KeyCode::Char('y' | 'Y') if app.show_confirm => {
-                            let is_quit = app.confirm_action.as_deref() == Some("quit");
-                            app.close_confirm(true);
-                            if is_quit {
-                                app.should_quit = true;
-                                return Ok(());
-                            }
-                            continue;
-                        }
-                        KeyCode::Char('n' | 'N') if app.show_confirm => {
-                            app.close_confirm(false);
-                            continue;
-                        }
-                        KeyCode::Enter if app.show_confirm => {
-                            let confirmed = app.confirm_selected == 0; // 0 = Confirm
-                            let is_quit = app.confirm_action.as_deref() == Some("quit");
-                            app.close_confirm(confirmed);
-                            if confirmed && is_quit {
-                                app.should_quit = true;
-                            }
-                            continue;
-                        }
-                        KeyCode::Esc if app.show_confirm => {
-                            app.close_confirm(false);
-                            continue;
-                        }
-                        KeyCode::Char(ch) if app.show_file_dialog => {
-                            app.file_dialog_input_char(ch);
-                            continue;
-                        }
-                        KeyCode::Backspace if app.show_file_dialog => {
-                            app.file_dialog_backspace();
-                            continue;
-                        }
-                        KeyCode::Enter if app.show_file_dialog => {
-                            // 0 = Save/Open, 1 = Browse…, 2 = Cancel
-                            app.close_file_dialog(app.file_dialog_selected);
-                            continue;
-                        }
-                        KeyCode::Esc if app.show_file_dialog => {
-                            app.close_file_dialog(2); // Cancel
-                            continue;
-                        }
-                        // Help popup: when open, Esc closes and 1/2/3/Tab switch tabs.
-                        KeyCode::Esc if app.show_help => {
-                            app.show_help = false;
-                            continue;
-                        }
-                        KeyCode::Tab if app.show_help => {
-                            app.help_tab = app.help_tab.next();
-                            continue;
-                        }
-                        KeyCode::Char('1') if app.show_help => {
-                            app.help_tab = popups::help::HelpTab::Shortcuts;
-                            continue;
-                        }
-                        KeyCode::Char('2') if app.show_help => {
-                            app.help_tab = popups::help::HelpTab::Languages;
-                            continue;
-                        }
-                        KeyCode::Char('3') if app.show_help => {
-                            app.help_tab = popups::help::HelpTab::About;
-                            continue;
-                        }
-                        KeyCode::F(1) => {
-                            app.show_help = !app.show_help;
-                        }
-                        KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::ALT) => {
-                            app.toggle_word_wrap();
-                        }
-                        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::ALT) => {
-                            app.compute_and_show_word_count();
-                        }
-                        // Alt+letter for menus (opens dropdown)
-                        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
-                            app.open_menu("File");
-                        }
-                        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::ALT) => {
-                            app.open_menu("Tools");
-                        }
-                        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
-                            app.open_menu("Settings");
-                        }
-                        // Horizontal scroll: Alt+H left, Alt+L right (mnemonic; Ctrl+H
-                        // and Ctrl+L were taken/conflicting). Auto-hscroll also follows
-                        // the cursor, but these give manual control over long lines.
-                        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::ALT) => {
-                            app.active_buffer_mut().scroll_offset.1 =
-                                app.active_buffer_mut().scroll_offset.1.saturating_sub(4);
-                        }
-                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => {
-                            app.active_buffer_mut().scroll_offset.1 =
-                                app.active_buffer_mut().scroll_offset.1.saturating_add(4);
-                        }
-                        KeyCode::Char(d)
-                            if ('1'..='9').contains(&d)
-                                && key.modifiers.contains(KeyModifiers::ALT) =>
-                        {
-                            let idx = (d as u8 - b'1') as usize;
-                            if idx < app.buffers.len() {
-                                app.active = idx;
-                            }
-                        }
-                        KeyCode::Tab if app.is_find_active() => {
-                            // Tab cycles focus: Query → Replace → Command → Query.
-                            // This is how the user leaves the text boxes so the
-                            // navigation/replace keys (n/N/r/Enter/c/x/w) become live
-                            // and n/N can be typed into the boxes again.
-                            if let Some(fs) = &mut app.find_state {
-                                fs.focus = fs.focus.next();
-                            }
-                        }
-                        // While a text box has focus, every printable char (including
-                        // n/N/r/c/x/w) edits that field; Backspace deletes from it.
-                        KeyCode::Char(ch)
-                            if app.is_find_active()
-                                && app.find_state.as_ref().is_some_and(|fs| fs.editing_text()) =>
-                        {
-                            app.update_find_input(Some(ch), false);
-                        }
-                        KeyCode::Backspace
-                            if app.is_find_active()
-                                && app.find_state.as_ref().is_some_and(|fs| fs.editing_text()) =>
-                        {
-                            app.update_find_input(None, true);
-                        }
-                        // Command mode: navigation, replace, and option toggles.
-                        // Other keys are ignored (editor stays blocked while bar open).
-                        KeyCode::Char('n')
-                            if app
-                                .find_state
-                                .as_ref()
-                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
-                        {
-                            app.find_next();
-                        }
-                        KeyCode::Char('N')
-                            if app
-                                .find_state
-                                .as_ref()
-                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
-                        {
-                            app.find_prev();
-                        }
-                        KeyCode::Char('r')
-                            if app
-                                .find_state
-                                .as_ref()
-                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
-                        {
-                            app.replace_current();
-                        }
-                        KeyCode::Enter if app.is_find_active() => {
-                            app.replace_current();
-                        }
-                        KeyCode::Char('c')
-                            if app
-                                .find_state
-                                .as_ref()
-                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
-                        {
-                            if let Some(fs) = &mut app.find_state {
-                                fs.case_sensitive = !fs.case_sensitive;
-                                app.update_find_matches();
-                            }
-                        }
-                        KeyCode::Char('x')
-                            if app
-                                .find_state
-                                .as_ref()
-                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
-                        {
-                            if let Some(fs) = &mut app.find_state {
-                                fs.use_regex = !fs.use_regex;
-                                app.update_find_matches();
-                            }
-                        }
-                        KeyCode::Char('w')
-                            if app
-                                .find_state
-                                .as_ref()
-                                .is_some_and(|fs| fs.focus == FindFocus::Command) =>
-                        {
-                            if let Some(fs) = &mut app.find_state {
-                                fs.whole_word = !fs.whole_word;
-                                app.update_find_matches();
-                            }
-                        }
-                        // MD formatting toolbar (Sprint 2)
-                        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            if app.active_buffer().language == crate::buffer::Language::Markdown {
-                                app.wrap_selection_or_cursor("**", "**");
-                            }
-                        }
-                        KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            if app.active_buffer().language == crate::buffer::Language::Markdown {
-                                app.wrap_selection_or_cursor("*", "*");
-                            }
-                        }
-                        KeyCode::Char('`') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            if app.active_buffer().language == crate::buffer::Language::Markdown {
-                                app.wrap_selection_or_cursor("`", "`");
-                            }
-                        }
-                        KeyCode::Esc if app.is_find_active() => {
-                            app.clear_find();
-                        }
-                        KeyCode::Esc if app.show_word_count => {
-                            app.close_word_count();
-                        }
-                        KeyCode::Esc if app.show_configure => {
-                            app.close_configure();
-                        }
-                        KeyCode::Char('j') | KeyCode::Down if app.show_configure => {
-                            let n = App::configure_row_count();
-                            app.configure_selected = (app.configure_selected + 1) % n;
-                        }
-                        KeyCode::Char('k') | KeyCode::Up if app.show_configure => {
-                            let n = App::configure_row_count();
-                            app.configure_selected = if app.configure_selected == 0 {
-                                n - 1
-                            } else {
-                                app.configure_selected - 1
-                            };
-                        }
-                        KeyCode::Left if app.show_configure => {
-                            app.configure_adjust(app.configure_selected, -1);
-                        }
-                        KeyCode::Right if app.show_configure => {
-                            app.configure_adjust(app.configure_selected, 1);
-                        }
-                        KeyCode::Enter if app.show_configure => {
-                            app.configure_toggle(app.configure_selected);
-                        }
-                        KeyCode::Esc if app.show_themes => {
-                            themes_popup_handle_esc(app);
-                        }
-                        KeyCode::Char('j') | KeyCode::Down if app.show_themes => {
-                            themes_popup_handle_vert(app, 1);
-                        }
-                        KeyCode::Char('k') | KeyCode::Up if app.show_themes => {
-                            themes_popup_handle_vert(app, -1);
-                        }
-                        KeyCode::Enter if app.show_themes => {
-                            themes_popup_handle_enter(app);
-                        }
-                        KeyCode::Char('e') if app.show_themes => {
-                            themes_popup_start_edit(app, /*copy_name=*/ false);
-                        }
-                        KeyCode::Char('n') if app.show_themes => {
-                            themes_popup_start_edit(app, /*copy_name=*/ true);
-                        }
-                        KeyCode::Char('d') if app.show_themes => {
-                            themes_popup_request_delete(app);
-                        }
-                        KeyCode::Char('s') if app.show_themes => {
-                            themes_popup_try_save(app);
-                        }
-                        KeyCode::Tab if app.show_themes => {
-                            themes_popup_handle_tab(app);
-                        }
-                        KeyCode::Backspace if app.show_themes => {
-                            themes_popup_handle_backspace(app);
-                        }
-                        KeyCode::Char(ch) if app.show_themes => {
-                            themes_popup_handle_char(app, ch);
-                        }
-                        // Dropdown menu keyboard navigation
-                        KeyCode::Esc if app.active_menu.is_some() => {
-                            app.close_menu();
-                        }
-                        KeyCode::Char('j') | KeyCode::Down if app.active_menu.is_some() => {
-                            let len = match app.active_menu.as_deref() {
-                                Some("File") => 6,
-                                Some("Tools") => 5,
-                                Some("Settings") => 3,
-                                _ => 1,
-                            };
-                            app.menu_selected = (app.menu_selected + 1) % len;
-                        }
-                        KeyCode::Char('k') | KeyCode::Up if app.active_menu.is_some() => {
-                            let len = match app.active_menu.as_deref() {
-                                Some("File") => 6,
-                                Some("Tools") => 5,
-                                Some("Settings") => 3,
-                                _ => 1,
-                            };
-                            app.menu_selected = if app.menu_selected == 0 {
-                                len - 1
-                            } else {
-                                app.menu_selected - 1
-                            };
-                        }
-                        KeyCode::Enter if app.active_menu.is_some() => {
-                            handle_menu_action(app);
-                            app.close_menu();
-                        }
-                        KeyCode::Char(ch) => {
-                            app.active_buffer_mut().insert_char(ch);
-                        }
-                        KeyCode::Enter => {
-                            app.active_buffer_mut().newline_with_indent();
-                        }
-                        KeyCode::Backspace => {
-                            app.active_buffer_mut().backspace();
-                        }
-                        KeyCode::Delete => {
-                            app.active_buffer_mut().delete();
-                        }
-                        KeyCode::Left => {
-                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                            app.active_buffer_mut().move_cursor(-1, extend);
-                        }
-                        KeyCode::Right => {
-                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                            app.active_buffer_mut().move_cursor(1, extend);
-                        }
-                        KeyCode::Up => {
-                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                            let vis = app.editor_visible_lines.get().max(1);
-                            app.active_buffer_mut().move_lines_up(1, extend);
-                            if app.config.word_wrap {
-                                if let Some(layout) = active_wrap_layout(app) {
-                                    app.active_buffer_mut()
-                                        .ensure_cursor_visible_wrapped(&layout, vis);
-                                }
-                            } else {
-                                app.active_buffer_mut().ensure_cursor_visible(vis);
-                            }
-                        }
-                        KeyCode::Down => {
-                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                            let vis = app.editor_visible_lines.get().max(1);
-                            app.active_buffer_mut().move_lines_down(1, extend);
-                            if app.config.word_wrap {
-                                if let Some(layout) = active_wrap_layout(app) {
-                                    app.active_buffer_mut()
-                                        .ensure_cursor_visible_wrapped(&layout, vis);
-                                }
-                            } else {
-                                app.active_buffer_mut().ensure_cursor_visible(vis);
-                            }
-                        }
-                        KeyCode::Home => {
-                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                            app.active_buffer_mut().move_home(extend);
-                        }
-                        KeyCode::End => {
-                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                            app.active_buffer_mut().move_end(extend);
-                        }
-                        KeyCode::PageUp => {
-                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                            let visible = app.editor_visible_lines.get().max(1);
-                            if app.config.word_wrap {
-                                if let Some(layout) = active_wrap_layout(app) {
-                                    app.active_buffer_mut()
-                                        .page_wrapped(&layout, false, visible, extend);
-                                }
-                            } else {
-                                app.active_buffer_mut().page_up(visible, extend);
-                                app.active_buffer_mut().ensure_cursor_visible(visible);
-                            }
-                        }
-                        KeyCode::PageDown => {
-                            let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                            let visible = app.editor_visible_lines.get().max(1);
-                            if app.config.word_wrap {
-                                if let Some(layout) = active_wrap_layout(app) {
-                                    app.active_buffer_mut()
-                                        .page_wrapped(&layout, true, visible, extend);
-                                }
-                            } else {
-                                app.active_buffer_mut().page_down(visible, extend);
-                                app.active_buffer_mut().ensure_cursor_visible(visible);
-                            }
-                        }
-                        KeyCode::Tab => {
-                            app.active_buffer_mut().indent();
-                        }
-                        KeyCode::Esc => {
-                            app.active_buffer_mut().selection = None;
-                        }
-                        _ => {}
-                    }
+                    Event::Mouse(mouse) => handle_mouse(mouse, app),
+                    Event::Resize(_, _) => {}
+                    _ => {}
                 }
-                Event::Mouse(mouse) => handle_mouse(mouse, app),
-                Event::Resize(_, _) => {}
-                _ => {}
             }
-        }
 
-        // Reset blink timer if cursor position changed (typing, navigation, click)
-        // This makes the cursor appear solid briefly after actual cursor movement,
-        // but not on mouse hover which doesn't change the cursor position.
-        let cursor_pos_after = app.active_buffer().cursor;
-        if cursor_pos_before != cursor_pos_after {
-            cursor_blink_on = true;
-            last_blink = std::time::Instant::now();
+            let cursor_pos_after = app.active_buffer().cursor;
+            if cursor_pos_before != cursor_pos_after {
+                cursor_blink_on = true;
+                last_blink = Instant::now();
+            }
+            if app.should_quit {
+                return Ok(());
+            }
+            if batch_needs_redraw(&events, wheel_delta, hover_before, hover_visual(app))
+                || cursor_pos_before != cursor_pos_after
+            {
+                break 'wait; // real change → redraw
+            }
+            // else idle mouse-move: stay in 'wait. Do NOT hide/draw/show. Do NOT reset last_blink.
         }
 
         if app.should_quit {
-            return Ok(());
+            break 'outer;
         }
     }
+    Ok(())
 }
 
 /// Signed scroll contribution of an event in lines (down positive), or None if
