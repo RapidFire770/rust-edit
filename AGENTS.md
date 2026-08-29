@@ -138,7 +138,7 @@ rust-edit/
 
 **Key types / established patterns (read before editing these areas):**
 
-- `Buffer` fields: `cursor` (byte offset), `selection` (normalized `Range`) + `selection_anchor` (fixed anchor for bidirectional extend), `scroll_offset` (row, col), `visible_lines`/`visible_width` (synced each frame), `generation` (invalidation key for the highlight cache). Auto-scroll lives in `adjust_scroll` (vertical+horizontal edge clamping) and `ensure_cursor_*`.
+- `Buffer` fields: `cursor` (byte offset), `selection` (normalized `Range`) + `selection_anchor` (fixed anchor for bidirectional extend), `scroll_offset` (row, col), `visible_lines`/`visible_width` (synced each frame), `generation` (invalidation key for the highlight cache), `is_initial` (true only for the auto-created untitled placeholder at startup or after closing the last tab; `[+]` tabs stay false). Auto-scroll lives in `adjust_scroll` (vertical+horizontal edge clamping) and `ensure_cursor_*`. File open goes through `App::open_file_in_tab` (duplicate-focus, then in-place placeholder replace, else append).
 - `FindState.focus: FindFocus` — a 3-state model (Query → Replace → Command) so letters like `n`/`N` type normally into the boxes and navigate only in Command mode.
 - Syntax highlighting: `app.refresh_highlight_cache()` recomputes a visible window only on edit/scroll/language change; `editor.rs` reads the cache. One `HighlightLines` per window (multi-line constructs stay correct).
 - Event coalescing: `run_app` drains queued events and sums consecutive mouse-wheel deltas into one scroll → one redraw per burst.
