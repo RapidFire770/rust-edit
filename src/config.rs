@@ -111,6 +111,9 @@ impl Config {
     /// recorded).
     pub fn record_recent_file(&mut self, path: &Path) {
         if self.record_recent_file_inmemory(path) {
+            // App unit tests load the user's real XDG config via App::new.
+            // Skip persist so opening temp files cannot rewrite config.toml.
+            #[cfg(not(test))]
             self.save();
         }
     }

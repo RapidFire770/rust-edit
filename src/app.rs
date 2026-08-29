@@ -10,7 +10,7 @@ use crate::theme::Theme;
 use crate::ui::find::{FindFocus, FindState};
 use crate::utils::clipboard::ClipboardWrapper;
 use ratatui::text::Span;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Cached syntax-highlight spans for the currently visible editor window.
 ///
@@ -865,6 +865,52 @@ impl App {
         };
     }
 
+    /// Open `path` into a tab.
+    ///
+    /// Order: read the file (error → `Err`, nothing changes); if a buffer
+    /// already holds this file, focus it; else replace the first placeholder
+    /// (`is_initial && path.is_none() && !is_modified`) in place; else append.
+    /// On success, records the path in recents.
+    pub fn open_file_in_tab(&mut self, path: &Path) -> Result<(), String> {
+        let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+
+        if let Some(idx) = self.index_of_open_path(path) {
+            self.active = idx;
+            self.config.record_recent_file(path);
+            return Ok(());
+        }
+
+        let new_buf = Buffer::from_str(&contents, Some(path.to_path_buf()));
+        if let Some(idx) = self.placeholder_index() {
+            self.buffers[idx] = new_buf;
+            self.active = idx;
+        } else {
+            self.buffers.push(new_buf);
+            self.active = self.buffers.len() - 1;
+        }
+        self.config.record_recent_file(path);
+        Ok(())
+    }
+
+    pub(crate) fn placeholder_index(&self) -> Option<usize> {
+        self.buffers
+            .iter()
+            .position(|b| b.is_initial && b.path.is_none() && !b.is_modified)
+    }
+
+    pub(crate) fn index_of_open_path(&self, path: &Path) -> Option<usize> {
+        let want = Self::canonical_or_raw(path);
+        self.buffers.iter().position(|b| {
+            b.path
+                .as_ref()
+                .is_some_and(|p| Self::canonical_or_raw(p) == want)
+        })
+    }
+
+    fn canonical_or_raw(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
     /// Keyboard selection indices in the file dialog:
     /// 0 = Save/Open, 1 = Browse…, 2 = Cancel.
     pub fn close_file_dialog(&mut self, button: usize) {
@@ -1332,6 +1378,22 @@ fn find_matches_in_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    fn unique_temp_file(contents: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "rust-edit-open-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&p, contents).unwrap();
+        p
+    }
 
     #[test]
     fn search_case_sensitive_default() {
@@ -1499,5 +1561,81 @@ mod tests {
         assert_eq!(app.buffers.len(), 1);
         assert!(app.buffers[0].is_initial);
         assert_eq!(app.buffers[0].text(), "");
+    }
+
+    #[test]
+    fn open_replaces_initial_placeholder() {
+        let mut app = App::new(&[]);
+        let path = unique_temp_file("hello from disk");
+        app.open_file_in_tab(&path).expect("open");
+        assert_eq!(
+            app.buffers.len(),
+            1,
+            "placeholder must be replaced, not appended"
+        );
+        assert_eq!(app.active, 0);
+        assert_eq!(app.buffers[0].text(), "hello from disk");
+        assert_eq!(app.buffers[0].path.as_deref(), Some(path.as_path()));
+        assert!(!app.buffers[0].is_initial);
+        assert!(!app.buffers[0].is_modified);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn open_keeps_modified_placeholder_and_appends() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("typed");
+        let path = unique_temp_file("file");
+        app.open_file_in_tab(&path).expect("open");
+        assert_eq!(app.buffers.len(), 2);
+        assert_eq!(app.buffers[0].text(), "typed");
+        assert!(app.buffers[0].is_initial, "modified placeholder is kept");
+        assert_eq!(app.buffers[1].path.as_deref(), Some(path.as_path()));
+        assert_eq!(app.active, 1);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn open_read_error_changes_nothing() {
+        let mut app = App::new(&[]);
+        let err = app
+            .open_file_in_tab(Path::new("/this/does/not/exist/rust-edit-nope.txt"))
+            .unwrap_err();
+        assert!(!err.is_empty());
+        assert_eq!(app.buffers.len(), 1);
+        assert!(app.buffers[0].is_initial);
+        assert_eq!(app.active, 0);
+    }
+
+    #[test]
+    fn undone_typing_in_placeholder_is_still_replaced() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("hello");
+        app.active_buffer_mut().undo();
+        assert!(!app.buffers[0].is_modified);
+        let path = unique_temp_file("replaced");
+        app.open_file_in_tab(&path).expect("open");
+        assert_eq!(app.buffers.len(), 1);
+        assert_eq!(app.buffers[0].text(), "replaced");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn inactive_placeholder_is_still_replaced_and_activated() {
+        let mut app = App::new(&[]);
+        app.new_tab(); // active = 1, placeholder remains at 0
+        assert_eq!(app.active, 1);
+        let path = unique_temp_file("now-active");
+        app.open_file_in_tab(&path).expect("open");
+        assert_eq!(
+            app.buffers.len(),
+            2,
+            "placeholder replaced in place; [+] kept"
+        );
+        assert_eq!(app.active, 0, "opened file becomes active");
+        assert_eq!(app.buffers[0].path.as_deref(), Some(path.as_path()));
+        assert!(app.buffers[1].path.is_none());
+        assert!(!app.buffers[1].is_initial);
+        let _ = fs::remove_file(&path);
     }
 }
