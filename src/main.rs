@@ -1950,8 +1950,9 @@ fn handle_header_click(x: usize, app: &mut App) {
     }
 
     // File tabs start after the menu block + a 2-col gap. Each tab renders as
-    // "[ name• ] " — width in COLUMNS (chars().count(), not bytes) is name + 6
-    // (brackets, two inner spaces, one trailing space). [+] is 3 cols.
+    // "[ name• ]" (name + 4 cols: brackets + two inner spaces) plus one
+    // trailing space = name + 5 cols in COLUMNS (chars().count(), not bytes).
+    // [+] is 3 cols.
     let mut pos = 27usize;
     for i in 0..app.buffers.len() {
         let buf = &app.buffers[i];
@@ -1965,7 +1966,7 @@ fn handle_header_click(x: usize, app: &mut App) {
         if buf.is_modified {
             name.push('•');
         }
-        let tab_width = name.chars().count() + 6; // "[ " + name + " ] "
+        let tab_width = name.chars().count() + 5; // "[ " + name + " ]" + " "
         if x >= pos && x < pos + tab_width {
             app.active = i;
             app.close_menu();
@@ -2264,5 +2265,39 @@ mod cursor_blink_tests {
             empty_hover(),
             empty_hover()
         ));
+    }
+}
+
+#[cfg(test)]
+mod plus_button_hit_test_tests {
+    use super::*;
+
+    /// The `[+]` new-tab button's hit region must track the rendered header as
+    /// tabs accumulate. The menu block + gap is 27 cols; each untitled tab
+    /// ("untitled", 8 chars) renders as `[ untitled ]` (12 cols) plus one
+    /// trailing space = 13 cols. So `[+]` starts at column 27 + N*13. A click
+    /// in the middle of its 3-col region must create a new blank tab.
+    #[test]
+    fn plus_button_stays_aligned_as_tabs_accumulate() {
+        for n in 1..=4usize {
+            // App::new starts with one placeholder buffer; add tabs to reach N.
+            let mut app = App::new(&[]);
+            while app.buffers.len() < n {
+                app.new_tab();
+            }
+            assert_eq!(app.buffers.len(), n, "setup: expected {n} buffers");
+
+            // Rendered [+] start column, then click its middle column.
+            let plus_start = 27 + n * 13;
+            let click_x = plus_start + 1;
+
+            let before = app.buffers.len();
+            handle_header_click(click_x, &mut app);
+            assert_eq!(
+                app.buffers.len(),
+                before + 1,
+                "with {n} tab(s), a click at column {click_x} (middle of [+]) must create a new tab"
+            );
+        }
     }
 }
