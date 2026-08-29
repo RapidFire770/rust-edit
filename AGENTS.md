@@ -7,7 +7,9 @@
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
 
-**Mandatory first step for any task:** Read the full Design Specification (`docs/Rust-Edit-Design-Specification-2026-06-24.md` or the version provided with this task). It contains the prioritized scope, UI rules, tradeoffs, and data model. Do not implement anything that contradicts it.
+**IMPORTANT:** Always check available skills and invoke them when relevant to the user's request. Always use the subagent-driven-development skill for any task, if a git worktree is not setup, configure one up before handoff to the subagent. 
+
+**Mandatory first step for any task:** Read the full Design Specification (`docs/Rust-Edit-Design-Specification-2026-06-24.md` or the version provided with this task). It contains the prioritized scope, UI rules, tradeoffs, and data model.
 
 ---
 
@@ -18,28 +20,17 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
    - No reliance on non-portable extensions (Kitty graphics protocol for "font sizes", sixel for rich text, etc.) unless explicitly approved and feature-gated.
    - When in doubt: choose the simpler, more compatible path and document the limitation.
 2. **Keyboard and mouse are first-class peers**
-   - Every action must be reachable both ways: full keyboard shortcuts *and* full
-     mouse interaction (click tabs, menus, cursor placement, text selection,
-     scrolling, and clickable buttons in every popup).
-   - Neither input method is "secondary" or "optional." When adding a feature,
-     wire up both the keybinding and the mouse path.
+   - Every action must be reachable both ways: full keyboard shortcuts *and* full mouse interaction (click tabs, menus, cursor placement, text selection, scrolling, and clickable buttons in every popup).
+   - Neither input method is "secondary" or "optional." When adding a feature, wire up both the keybinding and the mouse path.
 3. **Incremental & shippable > perfect**
-   - Phase 1 is complete. Phase 2 features (full LSP, split panes, git
-     integration, plugins, session restore — see Design Spec §5.3) require
-     explicit approval before starting.
+   - Phase 1 is complete. Phase 2 features (full LSP, split panes, git integration, plugins, session restore — see Design Spec §5.3) require explicit approval before starting.
    - Every change should leave the app in a runnable, testable state.
 4. **Explain tradeoffs**
    - When you have a choice (crate X vs Y, approach A vs B), briefly state the pros/cons in your reasoning or commit message. Cite terminal constraints, performance, complexity, or maintenance burden.
 5. **Respect the spec — with documented deviations**
-   - The Design Spec is the historical source of intent; this AGENTS.md reflects
-     the *current* agreed scope. Where they differ, AGENTS.md wins:
-     - **Markdown rendered preview was removed.** Markdown files keep source
-       syntax highlighting and the `Ctrl+B/I/\`` formatting inserters, but the
-       pulldown-cmark split-preview pane was deleted (the rendering was
-       incomplete and editing in the source pane was awkward). Re-adding a
-       preview requires a new design decision.
-     - **Single Find/Replace shortcut (`Ctrl+F`)** — the bar has query/replace
-       fields reachable via Tab, so a separate `Ctrl+H` was dropped.
+   - The Design Spec is the historical source of intent; this AGENTS.md reflects the *current* agreed scope. Where they differ, AGENTS.md wins:
+     - **Markdown rendered preview was removed.** Markdown files keep source syntax highlighting and the `Ctrl+B/I/\`` formatting inserters, but the pulldown-cmark split-preview pane was deleted (the rendering was incomplete and editing in the source pane was awkward). Re-adding a preview requires a new design decision.
+     - **Single Find/Replace shortcut (**`Ctrl+F`**)** — the bar has query/replace fields reachable via Tab, so a separate `Ctrl+H` was dropped.
    - LSP is Phase 2+ only.
    - Printing/PDF export is future-only.
    - If the spec is unclear, ask before coding.
@@ -82,6 +73,7 @@ pretty_assertions = "1.4"
 Run `cargo fmt` and `cargo clippy -- -D warnings` on every change.
 
 ### Toolchain / cargo path (important for agents)
+
 **For use in most environments** : Cargo is located at `/usr/bin/cargo`.
 
 **For use in Zcode Appimage** : The system `cargo` proxy is broken in this environment (it fails with
@@ -143,18 +135,10 @@ rust-edit/
 
 **Key types / established patterns (read before editing these areas):**
 
-- `Buffer` fields: `cursor` (byte offset), `selection` (normalized `Range`) +
-  `selection_anchor` (fixed anchor for bidirectional extend), `scroll_offset`
-  (row, col), `visible_lines`/`visible_width` (synced each frame), `generation`
-  (invalidation key for the highlight cache). Auto-scroll lives in
-  `adjust_scroll` (vertical+horizontal edge clamping) and `ensure_cursor_*`.
-- `FindState.focus: FindFocus` — a 3-state model (Query → Replace → Command) so
-  letters like `n`/`N` type normally into the boxes and navigate only in Command mode.
-- Syntax highlighting: `app.refresh_highlight_cache()` recomputes a visible
-  window only on edit/scroll/language change; `editor.rs` reads the cache. One
-  `HighlightLines` per window (multi-line constructs stay correct).
-- Event coalescing: `run_app` drains queued events and sums consecutive
-  mouse-wheel deltas into one scroll → one redraw per burst.
+- `Buffer` fields: `cursor` (byte offset), `selection` (normalized `Range`) + `selection_anchor` (fixed anchor for bidirectional extend), `scroll_offset` (row, col), `visible_lines`/`visible_width` (synced each frame), `generation` (invalidation key for the highlight cache). Auto-scroll lives in `adjust_scroll` (vertical+horizontal edge clamping) and `ensure_cursor_*`.
+- `FindState.focus: FindFocus` — a 3-state model (Query → Replace → Command) so letters like `n`/`N` type normally into the boxes and navigate only in Command mode.
+- Syntax highlighting: `app.refresh_highlight_cache()` recomputes a visible window only on edit/scroll/language change; `editor.rs` reads the cache. One `HighlightLines` per window (multi-line constructs stay correct).
+- Event coalescing: `run_app` drains queued events and sums consecutive mouse-wheel deltas into one scroll → one redraw per burst.
 
 ---
 
