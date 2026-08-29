@@ -877,6 +877,7 @@ impl App {
         if let Some(idx) = self.index_of_open_path(path) {
             self.active = idx;
             self.config.record_recent_file(path);
+            self.cached_highlights = None;
             return Ok(());
         }
 
@@ -889,6 +890,7 @@ impl App {
             self.active = self.buffers.len() - 1;
         }
         self.config.record_recent_file(path);
+        self.cached_highlights = None;
         Ok(())
     }
 
@@ -1636,6 +1638,25 @@ mod tests {
         assert_eq!(app.buffers[0].path.as_deref(), Some(path.as_path()));
         assert!(app.buffers[1].path.is_none());
         assert!(!app.buffers[1].is_initial);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn open_file_in_tab_invalidates_highlight_cache() {
+        let mut app = App::new(&[]);
+        app.cached_highlights = Some(CachedHighlights {
+            language: Language::Plain,
+            generation: 0,
+            start_line: 0,
+            count: 1,
+            spans: vec![vec![Span::raw("dummy")]],
+        });
+        let path = unique_temp_file("plain text");
+        app.open_file_in_tab(&path).expect("open");
+        assert!(
+            app.cached_highlights.is_none(),
+            "opening a Plain file must drop the generation-0 placeholder cache"
+        );
         let _ = fs::remove_file(&path);
     }
 }
