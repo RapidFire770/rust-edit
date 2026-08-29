@@ -1659,4 +1659,44 @@ mod tests {
         );
         let _ = fs::remove_file(&path);
     }
+
+    #[test]
+    fn open_same_file_twice_focuses_existing_tab() {
+        let path = unique_temp_file("once");
+        let mut app = App::new(&[]);
+        app.open_file_in_tab(&path).unwrap();
+        app.new_tab();
+        assert_eq!(app.buffers.len(), 2);
+        assert_eq!(app.active, 1);
+        app.open_file_in_tab(&path).unwrap();
+        assert_eq!(app.buffers.len(), 2, "must not duplicate");
+        assert_eq!(app.active, 0, "existing tab focused");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn open_relative_and_absolute_path_are_the_same_tab() {
+        let rel = PathBuf::from("Cargo.toml");
+        let abs = std::fs::canonicalize(&rel).expect("Cargo.toml must exist");
+        let mut app = App::new(&[]);
+        app.open_file_in_tab(&rel).unwrap();
+        app.open_file_in_tab(&abs).unwrap();
+        assert_eq!(
+            app.buffers.len(),
+            1,
+            "relative vs absolute must not duplicate"
+        );
+        assert_eq!(app.active, 0);
+    }
+
+    #[test]
+    fn duplicate_check_falls_back_to_raw_path_when_canonicalize_fails() {
+        // A buffer whose path no longer exists cannot be canonicalized.
+        let mut app = App::new(&[]);
+        let gone = PathBuf::from("/definitely/missing/rust-edit-gone-file.rs");
+        app.buffers[0].set_path(gone.clone());
+        app.buffers[0].is_initial = false;
+        // Directly exercise the matcher (open_file_in_tab would fail at read — rule 1).
+        assert_eq!(app.index_of_open_path(&gone), Some(0));
+    }
 }
