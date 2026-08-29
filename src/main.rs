@@ -28,7 +28,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io::stdout;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::app::App;
 use crate::buffer::Buffer;
@@ -65,6 +65,91 @@ fn main() -> Result<()> {
 
 /// Blink interval for the software cursor blink.
 const BLINK_INTERVAL: Duration = Duration::from_millis(533);
+/// Long poll when the cursor is hidden. Task 2 will call `next_blink_timeout`.
+#[allow(dead_code)]
+const IDLE_POLL: Duration = Duration::from_secs(3600);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct HoverVisual {
+    file_dialog_button_hover: Option<usize>,
+    file_dialog_selected: usize,
+    browser_button_hover: Option<usize>,
+    browser_button_selected: usize,
+    browser_list_hover: Option<usize>,
+    confirm_button_hover: Option<usize>,
+    configure_row_hover: Option<usize>,
+    configure_button_hover: Option<usize>,
+    themes_list_hover: Option<usize>,
+    themes_button_hover: Option<usize>,
+}
+
+/// Snapshot popup hover/selection for idle-mouse redraw decisions.
+/// Task 2 will call this from `run_app`.
+#[allow(dead_code)]
+fn hover_visual(app: &App) -> HoverVisual {
+    HoverVisual {
+        file_dialog_button_hover: app.file_dialog_button_hover,
+        file_dialog_selected: app.file_dialog_selected,
+        browser_button_hover: app.browser_button_hover,
+        browser_button_selected: app.browser_button_selected,
+        browser_list_hover: app.browser_list_hover,
+        confirm_button_hover: app.confirm_button_hover,
+        configure_row_hover: app.configure_row_hover,
+        configure_button_hover: app.configure_button_hover,
+        themes_list_hover: app.themes_list_hover,
+        themes_button_hover: app.themes_button_hover,
+    }
+}
+
+/// Remaining blink interval, or `IDLE_POLL` when hidden. Task 2 will call this from `run_app`.
+#[allow(dead_code)]
+fn next_blink_timeout(last_blink: Instant, interval: Duration, should_blink: bool) -> Duration {
+    if !should_blink {
+        return IDLE_POLL;
+    }
+    let elapsed = last_blink.elapsed();
+    if elapsed >= interval {
+        Duration::ZERO
+    } else {
+        interval - elapsed
+    }
+}
+
+/// True when the software cursor should toggle. Task 2 will call this from `run_app`.
+#[allow(dead_code)]
+fn blink_is_due(last_blink: Instant, interval: Duration, should_blink: bool) -> bool {
+    should_blink && last_blink.elapsed() >= interval
+}
+
+/// True for pointer motion that should not, by itself, force a redraw.
+/// Task 2 will call this from `run_app`.
+#[allow(dead_code)]
+fn event_is_idle_mouse_move(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Mouse(m) if matches!(m.kind, MouseEventKind::Moved)
+    )
+}
+
+/// True when this drained batch must produce a new frame.
+/// `wheel_delta` is applied before dispatch and is a visual change even if
+/// the wheel events were then dropped from `events`.
+/// Task 2 will call this from `run_app`.
+#[allow(dead_code)]
+fn batch_needs_redraw(
+    events: &[Event],
+    wheel_delta: isize,
+    hover_before: HoverVisual,
+    hover_after: HoverVisual,
+) -> bool {
+    if wheel_delta != 0 {
+        return true;
+    }
+    if hover_before != hover_after {
+        return true;
+    }
+    events.iter().any(|e| !event_is_idle_mouse_move(e))
+}
 
 /// Compute the screen position of the cursor, or None if it's not in view.
 /// Returns (x, y) in terminal coordinates.
@@ -2048,5 +2133,126 @@ fn ui(f: &mut Frame, app: &mut App) {
     // Browser renders on top of the file dialog when open.
     if app.show_file_browser {
         popups::file_browser::render(f, area, app.current_theme(), app);
+    }
+}
+
+#[cfg(test)]
+mod cursor_blink_tests {
+    use super::*;
+    use crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
+    };
+    use std::time::{Duration, Instant};
+
+    fn moved(column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn left_down(column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn key_char(c: char) -> Event {
+        Event::Key(KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        })
+    }
+
+    #[test]
+    fn blink_timeout_is_remaining_interval() {
+        let last = Instant::now() - Duration::from_millis(100);
+        let t = next_blink_timeout(last, Duration::from_millis(533), true);
+        assert!(t <= Duration::from_millis(433));
+        assert!(t > Duration::from_millis(300));
+    }
+
+    #[test]
+    fn blink_timeout_is_zero_when_due() {
+        let last = Instant::now() - Duration::from_millis(800);
+        assert_eq!(
+            next_blink_timeout(last, Duration::from_millis(533), true),
+            Duration::ZERO
+        );
+        assert!(blink_is_due(last, Duration::from_millis(533), true));
+    }
+
+    #[test]
+    fn blink_timeout_is_long_when_cursor_hidden() {
+        let t = next_blink_timeout(Instant::now(), Duration::from_millis(533), false);
+        assert!(t >= Duration::from_secs(60));
+        assert!(!blink_is_due(
+            Instant::now(),
+            Duration::from_millis(533),
+            false
+        ));
+    }
+
+    fn empty_hover() -> HoverVisual {
+        HoverVisual::default()
+    }
+
+    #[test]
+    fn idle_mouse_moves_do_not_need_redraw() {
+        let events = vec![moved(10, 10), moved(11, 10), moved(12, 11)];
+        assert!(!batch_needs_redraw(
+            &events,
+            0,
+            empty_hover(),
+            empty_hover()
+        ));
+    }
+
+    #[test]
+    fn mouse_move_needs_redraw_when_hover_changes() {
+        let before = HoverVisual {
+            configure_button_hover: None,
+            ..HoverVisual::default()
+        };
+        let after = HoverVisual {
+            configure_button_hover: Some(1),
+            ..HoverVisual::default()
+        };
+        assert!(batch_needs_redraw(&[moved(4, 20)], 0, before, after));
+    }
+
+    #[test]
+    fn click_or_key_or_wheel_always_needs_redraw() {
+        assert!(batch_needs_redraw(
+            &[left_down(8, 8)],
+            0,
+            empty_hover(),
+            empty_hover()
+        ));
+        assert!(batch_needs_redraw(
+            &[key_char('a')],
+            0,
+            empty_hover(),
+            empty_hover()
+        ));
+        assert!(batch_needs_redraw(&[], 3, empty_hover(), empty_hover()));
+    }
+
+    #[test]
+    fn resize_needs_redraw() {
+        assert!(batch_needs_redraw(
+            &[Event::Resize(80, 24)],
+            0,
+            empty_hover(),
+            empty_hover()
+        ));
     }
 }
