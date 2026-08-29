@@ -9,7 +9,8 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
 
 **IMPORTANT:** 
   - Always check available skills and invoke them when relevant to the user's request. 
-  - Always use the subagent-driven-development skill for any task, if a git worktree is not setup, configure one up before handoff to the subagent.
+  - For large tasks always use the subagent-driven-development skill for any task, if a git worktree is not setup, configure one up before handoff to the subagent. 
+  - For smaller tasks just use basic subagents on the main branch and a code reviewer subagent to review the work afterward. Create a commit once work is validated.
   - Keep this AGENTS.md file updated with information about the project that other AI agents would need to know. 
 
 **Mandatory first step for any task:** Read the full Design Specification (`docs/Rust-Edit-Design-Specification-2026-06-24.md` or the version provided with this task). It contains the prioritized scope, UI rules, tradeoffs, and data model.
