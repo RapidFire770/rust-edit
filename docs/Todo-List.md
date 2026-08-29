@@ -1,7 +1,7 @@
 ### Fixes & Bugs:
 - [x] The text cursor does not blink properly, it only blinks/flashes slightly when the mouse moves around the window.
 - [x] Mouse movment is slightly interupting the cursor blink causing an oddly blink/flashing effect on the cursor.
-- [ ] When opening a file and the default untitled document is displayed and not modified, it should be closed/replaced on the tab bar with the opened file.
+- [ ] When opening a file and the default untitled document is open and not modified, it should be closed/replaced on the tab bar unless it has been typed in/modified by the user.
 - [ ] When a popup modal is visible such as the Settings Configure popup, hitting the space bar is moving the cursor position in the background, the column indicator is updating and when leaving the popup the cursor position on screen has moved.
 - [ ] Not all popup modals are hiding the cursor in the background when they are visible.
 - [ ] The setttings configure popup window toggle and close buttons highlighting does not function as intended. When hovering over the close button it highlights properly and unhighlights when the mouse moves off. The toggle button stays constantly highlighted red no matter if the mouse is over it or not.
