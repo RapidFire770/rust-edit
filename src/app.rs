@@ -1699,4 +1699,58 @@ mod tests {
         // Directly exercise the matcher (open_file_in_tab would fail at read — rule 1).
         assert_eq!(app.index_of_open_path(&gone), Some(0));
     }
+
+    #[test]
+    fn plus_created_empty_tab_is_never_replaced() {
+        // Start with a real file so the only empty tab is the [+] one.
+        let first = unique_temp_file("first");
+        let mut app = App::new(&[first.to_string_lossy().to_string()]);
+        assert_eq!(app.buffers.len(), 1);
+        assert!(!app.buffers[0].is_initial);
+        app.new_tab();
+        assert!(!app.buffers[1].is_initial);
+        let second = unique_temp_file("second");
+        app.open_file_in_tab(&second).unwrap();
+        assert_eq!(
+            app.buffers.len(),
+            3,
+            "[+] empty tab must be kept; file appended"
+        );
+        assert!(app.buffers[1].path.is_none());
+        assert!(!app.buffers[1].is_initial);
+        assert_eq!(app.buffers[2].path.as_deref(), Some(second.as_path()));
+        assert_eq!(app.active, 2);
+        let _ = fs::remove_file(&first);
+        let _ = fs::remove_file(&second);
+    }
+
+    #[test]
+    fn open_appends_when_app_started_with_a_file() {
+        let first = unique_temp_file("one");
+        let mut app = App::new(&[first.to_string_lossy().to_string()]);
+        let second = unique_temp_file("two");
+        app.open_file_in_tab(&second).unwrap();
+        assert_eq!(app.buffers.len(), 2);
+        assert_eq!(app.active, 1);
+        assert_eq!(app.buffers[0].path.as_deref(), Some(first.as_path()));
+        assert_eq!(app.buffers[1].path.as_deref(), Some(second.as_path()));
+        let _ = fs::remove_file(&first);
+        let _ = fs::remove_file(&second);
+    }
+
+    #[test]
+    fn placeholder_after_closing_last_tab_is_replaceable() {
+        let first = unique_temp_file("closing");
+        let mut app = App::new(&[first.to_string_lossy().to_string()]);
+        app.close_current_tab(); // unmodified → reset to placeholder
+        assert_eq!(app.buffers.len(), 1);
+        assert!(app.buffers[0].is_initial);
+        let second = unique_temp_file("after-close");
+        app.open_file_in_tab(&second).unwrap();
+        assert_eq!(app.buffers.len(), 1, "reset placeholder must be replaced");
+        assert_eq!(app.buffers[0].path.as_deref(), Some(second.as_path()));
+        assert_eq!(app.active, 0);
+        let _ = fs::remove_file(&first);
+        let _ = fs::remove_file(&second);
+    }
 }
