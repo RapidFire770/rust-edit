@@ -81,6 +81,7 @@ struct HoverVisual {
     configure_button_hover: Option<usize>,
     themes_list_hover: Option<usize>,
     themes_button_hover: Option<usize>,
+    menu_selected: usize,
 }
 
 /// Snapshot popup hover/selection for idle-mouse redraw decisions.
@@ -98,6 +99,7 @@ fn hover_visual(app: &App) -> HoverVisual {
         configure_button_hover: app.configure_button_hover,
         themes_list_hover: app.themes_list_hover,
         themes_button_hover: app.themes_button_hover,
+        menu_selected: app.menu_selected,
     }
 }
 
@@ -2224,6 +2226,19 @@ mod cursor_blink_tests {
         };
         let after = HoverVisual {
             configure_button_hover: Some(1),
+            ..HoverVisual::default()
+        };
+        assert!(batch_needs_redraw(&[moved(4, 20)], 0, before, after));
+    }
+
+    #[test]
+    fn mouse_move_needs_redraw_when_menu_selection_changes() {
+        let before = HoverVisual {
+            menu_selected: 0,
+            ..HoverVisual::default()
+        };
+        let after = HoverVisual {
+            menu_selected: 2,
             ..HoverVisual::default()
         };
         assert!(batch_needs_redraw(&[moved(4, 20)], 0, before, after));
