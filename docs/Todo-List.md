@@ -1,6 +1,6 @@
 ### Fixes & Bugs:
 - [x] The text cursor does not blink properly, it only blinks/flashes slightly when the mouse moves around the window.
-- [ ] Mouse movment is slightly interupting the cursor blink causing an oddly blink/flashing effect on the cursor.
+- [x] Mouse movment is slightly interupting the cursor blink causing an oddly blink/flashing effect on the cursor.
 - [ ] When opening a file and the default untitled document is displayed and not modified, it should be closed/replaced on the tab bar with the opened file.
 - [ ] Themes popup is to small, bottom row buttons are cut off.
 - [ ] Themes popup buttons only highlight when mouse is below the button.
