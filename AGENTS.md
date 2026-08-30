@@ -144,6 +144,11 @@ rust-edit/
 - `FindState.focus: FindFocus` — a 3-state model (Query → Replace → Command) so letters like `n`/`N` type normally into the boxes and navigate only in Command mode.
 - Syntax highlighting: `app.refresh_highlight_cache()` recomputes a visible window only on edit/scroll/language change; `editor.rs` reads the cache. One `HighlightLines` per window (multi-line constructs stay correct).
 - Event coalescing: `run_app` drains queued events and sums consecutive mouse-wheel deltas into one scroll → one redraw per burst.
+- Popup focus: at most one centered popup owns input (`App::popup_focus`).
+  Other popups cannot open. Global shortcuts are swallowed except Ctrl+Q.
+  Quit confirm paints last and stacks on top of the current popup without
+  dismissing it. File browser may stack only on the file dialog (Browse…).
+  Mouse and wheel follow `popup_focus`, not independent `show_*` flags.
 
 ---
 
