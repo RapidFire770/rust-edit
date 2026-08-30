@@ -4,7 +4,7 @@
 - [x] When opening a file and the default untitled document is open and not modified, it should be closed/replaced on the tab bar unless it has been typed in/modified by the user.
   - [x] Not allowing the duplicate tabs is also preventing the user from opening multiple blank/new untitled files when they hit the + button. This prevents the program from functioning as a user would expect from a typical text editing program. Duplicate tabs should only prevent opening of the same named file from the users disk and not prevent creating new empty files for the user to start typing into.
 - [ ] When a popup modal is visible such as the Settings Configure popup, hitting the space bar is moving the cursor position in the background, the column indicator is updating and when leaving the popup the cursor position on screen has moved.
-- [ ] Not all popup modals are hiding the cursor in the background when they are visible.
+- [ ] Not all popup modals are hiding the cursor in the background when they are visible. Specifically seeing this from the Open and Save As popups.
 - [ ] The setttings configure popup window toggle and close buttons highlighting does not function as intended. When hovering over the close button it highlights properly and unhighlights when the mouse moves off. The toggle button stays constantly highlighted red no matter if the mouse is over it or not.
 - [ ] Themes popup is to small, bottom row buttons are cut off.
 - [ ] Themes popup buttons only highlight when mouse is below the button.
