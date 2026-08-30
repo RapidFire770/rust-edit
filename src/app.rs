@@ -138,6 +138,18 @@ pub struct App {
     pub cached_highlights: Option<CachedHighlights>,
 }
 
+/// Which centered popup currently owns input. Highest z-order wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PopupFocus {
+    Confirm,
+    FileBrowser,
+    FileDialog,
+    Themes,
+    Configure,
+    Help,
+    WordCount,
+}
+
 impl App {
     pub fn new(initial_files: &[String]) -> Self {
         let config = Config::load();
@@ -638,6 +650,9 @@ impl App {
     }
 
     pub fn compute_and_show_word_count(&mut self) {
+        if self.popup_is_open() {
+            return;
+        }
         let buf = self.active_buffer();
         let text = buf.text();
         let words = text.split_whitespace().count();
@@ -664,6 +679,9 @@ impl App {
     }
 
     pub fn open_menu(&mut self, name: &str) {
+        if self.popup_is_open() {
+            return;
+        }
         if self.active_menu.as_deref() == Some(name) {
             self.active_menu = None;
             self.menu_selected = 0;
@@ -680,6 +698,9 @@ impl App {
 
     // ----- Configure popup -----
     pub fn open_configure(&mut self) {
+        if self.popup_is_open() {
+            return;
+        }
         self.show_configure = true;
         self.configure_selected = 0;
         self.configure_row_hover = None;
@@ -735,6 +756,9 @@ impl App {
 
     // ----- Themes popup -----
     pub fn open_themes(&mut self) {
+        if self.popup_is_open() {
+            return;
+        }
         self.show_themes = true;
         self.themes_mode = crate::ui::popups::themes::ThemesMode::List;
         // Default-select the currently active theme so the list opens pointing
@@ -816,6 +840,43 @@ impl App {
 
     // --- Sprint 2 popup helpers ---
 
+    pub fn popup_focus(&self) -> Option<PopupFocus> {
+        if self.show_confirm {
+            Some(PopupFocus::Confirm)
+        } else if self.show_file_browser {
+            Some(PopupFocus::FileBrowser)
+        } else if self.show_file_dialog {
+            Some(PopupFocus::FileDialog)
+        } else if self.show_themes {
+            Some(PopupFocus::Themes)
+        } else if self.show_configure {
+            Some(PopupFocus::Configure)
+        } else if self.show_help {
+            Some(PopupFocus::Help)
+        } else if self.show_word_count {
+            Some(PopupFocus::WordCount)
+        } else {
+            None
+        }
+    }
+
+    pub fn popup_is_open(&self) -> bool {
+        self.popup_focus().is_some()
+    }
+
+    pub fn open_help(&mut self) {
+        if self.popup_is_open() {
+            return;
+        }
+        self.show_help = true;
+        self.help_content_scroll = (0, 0);
+        self.close_menu();
+    }
+
+    pub fn close_help(&mut self) {
+        self.show_help = false;
+    }
+
     pub fn show_confirm_dialog(&mut self, message: &str, action: &str) {
         self.confirm_selected = 0;
         self.confirm_message = message.to_string();
@@ -851,6 +912,9 @@ impl App {
     }
 
     pub fn show_file_dialog(&mut self, is_save: bool) {
+        if self.popup_is_open() {
+            return;
+        }
         self.file_dialog_selected = 0;
         self.show_file_dialog = true;
         self.file_dialog_is_save = is_save;
@@ -988,6 +1052,9 @@ impl App {
     /// directory from the active buffer's path parent, falling back to the
     /// OS home dir, then the CWD.
     pub fn open_file_browser(&mut self) {
+        if !self.show_file_dialog || self.show_confirm {
+            return;
+        }
         self.browser_origin_is_save = self.file_dialog_is_save;
         self.browser_mode = crate::ui::popups::file_browser::BrowserMode::Dir;
         self.browser_show_hidden = false;
@@ -1469,6 +1536,7 @@ mod tests {
         // Use Cargo.toml at the crate root as the "buffer's file" so the
         // canonicalize call has a real, existing parent directory to resolve.
         let mut app = app_with_buffer_path("Cargo.toml");
+        app.show_file_dialog = true;
         app.open_file_browser();
 
         assert!(
@@ -1494,6 +1562,7 @@ mod tests {
         // empty-parent guard, repeated ups must converge at the root without
         // ever producing an empty or relative cwd.
         let mut app = app_with_buffer_path("Cargo.toml");
+        app.show_file_dialog = true;
         app.open_file_browser();
         assert!(app.browser_cwd.is_absolute());
 
@@ -1776,5 +1845,82 @@ mod tests {
         );
         assert_eq!(app.buffers.len(), 1);
         assert!(app.buffers[0].is_initial);
+    }
+
+    #[test]
+    fn popup_focus_prefers_confirm_over_other_popups() {
+        let mut app = App::new(&[]);
+        app.show_help = true;
+        app.show_file_dialog = true;
+        app.show_file_browser = true;
+        assert_eq!(app.popup_focus(), Some(PopupFocus::FileBrowser));
+        app.show_confirm_dialog("Quit with unsaved changes?", "quit");
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Confirm));
+    }
+
+    #[test]
+    fn popup_focus_file_browser_over_file_dialog() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog = true;
+        assert_eq!(app.popup_focus(), Some(PopupFocus::FileDialog));
+        app.show_file_browser = true;
+        assert_eq!(app.popup_focus(), Some(PopupFocus::FileBrowser));
+    }
+
+    #[test]
+    fn opening_a_second_popup_is_a_noop() {
+        let mut app = App::new(&[]);
+        app.open_configure();
+        app.open_themes();
+        app.show_file_dialog(false);
+        app.compute_and_show_word_count();
+        app.open_help();
+        assert!(app.show_configure);
+        assert!(!app.show_themes);
+        assert!(!app.show_file_dialog);
+        assert!(!app.show_word_count);
+        assert!(!app.show_help);
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Configure));
+    }
+
+    #[test]
+    fn quit_confirm_opens_on_top_without_closing_underlying_popup() {
+        let mut app = App::new(&[]);
+        app.open_configure();
+        app.active_buffer_mut().insert("unsaved");
+        app.request_quit();
+        assert!(app.show_configure);
+        assert!(app.show_confirm);
+        assert_eq!(app.confirm_action.as_deref(), Some("quit"));
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Confirm));
+        app.close_confirm(false);
+        assert!(!app.show_confirm);
+        assert!(app.show_configure);
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Configure));
+    }
+
+    #[test]
+    fn file_browser_may_open_over_file_dialog_only() {
+        let mut app = App::new(&[]);
+        app.open_configure();
+        app.open_file_browser();
+        assert!(
+            !app.show_file_browser,
+            "browser must not stack on configure"
+        );
+        app.close_configure();
+        app.show_file_dialog(false);
+        app.open_file_browser();
+        assert!(app.show_file_dialog);
+        assert!(app.show_file_browser);
+        assert_eq!(app.popup_focus(), Some(PopupFocus::FileBrowser));
+    }
+
+    #[test]
+    fn open_menu_is_blocked_while_a_popup_is_focused() {
+        let mut app = App::new(&[]);
+        app.open_configure();
+        app.open_menu("File");
+        assert!(app.active_menu.is_none());
     }
 }
