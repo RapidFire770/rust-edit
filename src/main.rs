@@ -30,7 +30,7 @@ use ratatui::{
 use std::io::stdout;
 use std::time::{Duration, Instant};
 
-use crate::app::App;
+use crate::app::{App, PopupFocus};
 use crate::buffer::Buffer;
 use crate::ui::find::FindFocus;
 use crate::ui::popups;
@@ -357,12 +357,23 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                 match event {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            if app.popup_is_open() {
+                                if global_ctrl_allowed_during_popup(key.code, app) {
+                                    match key.code {
+                                        KeyCode::Char('q') => app.request_quit(),
+                                        KeyCode::Char('h') => app.browser_toggle_hidden(),
+                                        _ => {}
+                                    }
+                                }
+                                continue;
+                            }
                             match key.code {
                                 // Ctrl+H toggles hidden files in the browser. Must
-                                // live HERE, not in the browser key block below:
-                                // this outer CONTROL block swallows every Ctrl+char
-                                // via its `continue`, so a Ctrl+H arm further down
-                                // would be unreachable (it was — see git history).
+                                // live HERE, not in a later key block: this CONTROL
+                                // match swallows every Ctrl+char via `continue`, so
+                                // a Ctrl+H arm further down would be unreachable
+                                // (it was — see git history). Browser implies
+                                // popup_is_open, so this arm is defensive.
                                 KeyCode::Char('h') if app.show_file_browser => {
                                     app.browser_toggle_hidden();
                                 }
@@ -435,197 +446,26 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             continue;
                         }
 
+                        if let Some(focus) = app.popup_focus() {
+                            match focus {
+                                PopupFocus::Confirm => {
+                                    if handle_confirm_key(key.code, app) {
+                                        return Ok(());
+                                    }
+                                }
+                                PopupFocus::FileBrowser => handle_file_browser_key(key.code, app),
+                                PopupFocus::FileDialog => handle_file_dialog_key(key.code, app),
+                                PopupFocus::Help => handle_help_key(key.code, app),
+                                PopupFocus::Configure => handle_configure_key(key.code, app),
+                                PopupFocus::Themes => handle_themes_key(key.code, app),
+                                PopupFocus::WordCount => handle_word_count_key(key.code, app),
+                            }
+                            continue;
+                        }
+
                         match key.code {
-                            // ----- File browser popup keys (takes precedence over
-                            // everything else when open). -----
-                            //
-                            // Focus model: `browser_button_selected` holds either a
-                            // button index (0..=3) or the sentinel `4` meaning the
-                            // list area is focused. Tab cycles list -> 0 -> 1 -> 2
-                            // -> 3 -> list. Enter activates whichever is focused.
-                            //
-                            // NOTE: Ctrl+H (toggle hidden) is handled up in the
-                            // CONTROL block — adding it here would be dead code.
-                            KeyCode::Up | KeyCode::Char('k') if app.show_file_browser => {
-                                app.browser_move_cursor(-1);
-                                app.browser_button_selected = 4; // typing nav refocuses list
-                                continue;
-                            }
-                            KeyCode::Down | KeyCode::Char('j') if app.show_file_browser => {
-                                app.browser_move_cursor(1);
-                                app.browser_button_selected = 4;
-                                continue;
-                            }
-                            KeyCode::Char('g') if app.show_file_browser => {
-                                app.browser_jump(false);
-                                continue;
-                            }
-                            KeyCode::Char('G') if app.show_file_browser => {
-                                app.browser_jump(true);
-                                continue;
-                            }
-                            KeyCode::PageUp if app.show_file_browser => {
-                                let vh = app.editor_visible_lines.get().max(4);
-                                app.browser_page(true, vh);
-                                continue;
-                            }
-                            KeyCode::PageDown if app.show_file_browser => {
-                                let vh = app.editor_visible_lines.get().max(4);
-                                app.browser_page(false, vh);
-                                continue;
-                            }
-                            KeyCode::Tab if app.show_file_browser => {
-                                // list(4) -> 0 -> 1 -> 2 -> 3 -> list(4)
-                                app.browser_button_selected = match app.browser_button_selected {
-                                    4 => 0,
-                                    n if n < 3 => n + 1,
-                                    _ => 4,
-                                };
-                                continue;
-                            }
-                            KeyCode::Enter if app.show_file_browser => {
-                                match app.browser_button_selected {
-                                    0 => app.browser_go_up(),
-                                    1 => app.browser_toggle_mode(),
-                                    2 => app.browser_toggle_hidden(),
-                                    3 => app.close_file_browser(false),
-                                    _ => app.browser_enter_selected(),
-                                }
-                                continue;
-                            }
-                            // `l`/Right activate the focused thing (list entry or button).
-                            KeyCode::Char('l') | KeyCode::Right if app.show_file_browser => {
-                                match app.browser_button_selected {
-                                    0 => app.browser_go_up(),
-                                    1 => app.browser_toggle_mode(),
-                                    2 => app.browser_toggle_hidden(),
-                                    3 => app.close_file_browser(false),
-                                    _ => app.browser_enter_selected(),
-                                }
-                                continue;
-                            }
-                            // `h`/Left/Backspace/- go up one directory. (Plain `h`
-                            // only — Ctrl+H is handled up in the CONTROL block.)
-                            KeyCode::Backspace
-                            | KeyCode::Char('-')
-                            | KeyCode::Left
-                            | KeyCode::Char('h')
-                                if app.show_file_browser =>
-                            {
-                                app.browser_go_up();
-                                continue;
-                            }
-                            KeyCode::Esc | KeyCode::Char('q') if app.show_file_browser => {
-                                app.close_file_browser(false);
-                                continue;
-                            }
-                            // While the browser is open, swallow every other key so
-                            // unbound chars (e.g. 'x', 'f') don't leak into the
-                            // underlying file dialog's path field.
-                            _ if app.show_file_browser => {
-                                continue;
-                            }
-
-                            // File dialog button navigation
-                            KeyCode::Left if app.show_file_dialog => {
-                                // Cycle 0 -> 2 -> 1 -> 0 (right-to-left visual order).
-                                app.file_dialog_selected = match app.file_dialog_selected {
-                                    0 => 2,
-                                    2 => 1,
-                                    _ => 0,
-                                };
-                                continue;
-                            }
-                            KeyCode::Right if app.show_file_dialog => {
-                                // Cycle 0 -> 1 -> 2 -> 0.
-                                app.file_dialog_selected = match app.file_dialog_selected {
-                                    0 => 1,
-                                    1 => 2,
-                                    _ => 0,
-                                };
-                                continue;
-                            }
-
-                            // Confirm dialog button navigation
-                            KeyCode::Left if app.show_confirm => {
-                                app.confirm_selected = 0;
-                                continue;
-                            }
-                            KeyCode::Right if app.show_confirm => {
-                                app.confirm_selected = 1;
-                                continue;
-                            }
-
-                            // Modal popups take focus precedence over everything else
-                            // (find nav, editor typing). When a confirm or file dialog is
-                            // open, ONLY its keys are accepted — this fixes the bug where
-                            // the find bar's n/N/Y intercepted the confirm dialog.
-                            KeyCode::Char('y' | 'Y') if app.show_confirm => {
-                                let is_quit = app.confirm_action.as_deref() == Some("quit");
-                                app.close_confirm(true);
-                                if is_quit {
-                                    app.should_quit = true;
-                                    return Ok(());
-                                }
-                                continue;
-                            }
-                            KeyCode::Char('n' | 'N') if app.show_confirm => {
-                                app.close_confirm(false);
-                                continue;
-                            }
-                            KeyCode::Enter if app.show_confirm => {
-                                let confirmed = app.confirm_selected == 0; // 0 = Confirm
-                                let is_quit = app.confirm_action.as_deref() == Some("quit");
-                                app.close_confirm(confirmed);
-                                if confirmed && is_quit {
-                                    app.should_quit = true;
-                                }
-                                continue;
-                            }
-                            KeyCode::Esc if app.show_confirm => {
-                                app.close_confirm(false);
-                                continue;
-                            }
-                            KeyCode::Char(ch) if app.show_file_dialog => {
-                                app.file_dialog_input_char(ch);
-                                continue;
-                            }
-                            KeyCode::Backspace if app.show_file_dialog => {
-                                app.file_dialog_backspace();
-                                continue;
-                            }
-                            KeyCode::Enter if app.show_file_dialog => {
-                                // 0 = Save/Open, 1 = Browse…, 2 = Cancel
-                                app.close_file_dialog(app.file_dialog_selected);
-                                continue;
-                            }
-                            KeyCode::Esc if app.show_file_dialog => {
-                                app.close_file_dialog(2); // Cancel
-                                continue;
-                            }
-                            // Help popup: when open, Esc closes and 1/2/3/Tab switch tabs.
-                            KeyCode::Esc if app.show_help => {
-                                app.show_help = false;
-                                continue;
-                            }
-                            KeyCode::Tab if app.show_help => {
-                                app.help_tab = app.help_tab.next();
-                                continue;
-                            }
-                            KeyCode::Char('1') if app.show_help => {
-                                app.help_tab = popups::help::HelpTab::Shortcuts;
-                                continue;
-                            }
-                            KeyCode::Char('2') if app.show_help => {
-                                app.help_tab = popups::help::HelpTab::Languages;
-                                continue;
-                            }
-                            KeyCode::Char('3') if app.show_help => {
-                                app.help_tab = popups::help::HelpTab::About;
-                                continue;
-                            }
                             KeyCode::F(1) => {
-                                app.show_help = !app.show_help;
+                                app.open_help();
                             }
                             KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::ALT) => {
                                 app.toggle_word_wrap();
@@ -776,66 +616,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             KeyCode::Esc if app.is_find_active() => {
                                 app.clear_find();
                             }
-                            KeyCode::Esc if app.show_word_count => {
-                                app.close_word_count();
-                            }
-                            KeyCode::Esc if app.show_configure => {
-                                app.close_configure();
-                            }
-                            KeyCode::Char('j') | KeyCode::Down if app.show_configure => {
-                                let n = App::configure_row_count();
-                                app.configure_selected = (app.configure_selected + 1) % n;
-                            }
-                            KeyCode::Char('k') | KeyCode::Up if app.show_configure => {
-                                let n = App::configure_row_count();
-                                app.configure_selected = if app.configure_selected == 0 {
-                                    n - 1
-                                } else {
-                                    app.configure_selected - 1
-                                };
-                            }
-                            KeyCode::Left if app.show_configure => {
-                                app.configure_adjust(app.configure_selected, -1);
-                            }
-                            KeyCode::Right if app.show_configure => {
-                                app.configure_adjust(app.configure_selected, 1);
-                            }
-                            KeyCode::Enter if app.show_configure => {
-                                app.configure_toggle(app.configure_selected);
-                            }
-                            KeyCode::Esc if app.show_themes => {
-                                themes_popup_handle_esc(app);
-                            }
-                            KeyCode::Char('j') | KeyCode::Down if app.show_themes => {
-                                themes_popup_handle_vert(app, 1);
-                            }
-                            KeyCode::Char('k') | KeyCode::Up if app.show_themes => {
-                                themes_popup_handle_vert(app, -1);
-                            }
-                            KeyCode::Enter if app.show_themes => {
-                                themes_popup_handle_enter(app);
-                            }
-                            KeyCode::Char('e') if app.show_themes => {
-                                themes_popup_start_edit(app, /*copy_name=*/ false);
-                            }
-                            KeyCode::Char('n') if app.show_themes => {
-                                themes_popup_start_edit(app, /*copy_name=*/ true);
-                            }
-                            KeyCode::Char('d') if app.show_themes => {
-                                themes_popup_request_delete(app);
-                            }
-                            KeyCode::Char('s') if app.show_themes => {
-                                themes_popup_try_save(app);
-                            }
-                            KeyCode::Tab if app.show_themes => {
-                                themes_popup_handle_tab(app);
-                            }
-                            KeyCode::Backspace if app.show_themes => {
-                                themes_popup_handle_backspace(app);
-                            }
-                            KeyCode::Char(ch) if app.show_themes => {
-                                themes_popup_handle_char(app, ch);
-                            }
                             // Dropdown menu keyboard navigation
                             KeyCode::Esc if app.active_menu.is_some() => {
                                 app.close_menu();
@@ -866,10 +646,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 handle_menu_action(app);
                                 app.close_menu();
                             }
-                            // When a modal popup is open, swallow any key it doesn't
-                            // explicitly handle so background buffer/cursor state is
-                            // never mutated (e.g. Space in the Configure popup used to
-                            // insert a char into the buffer behind it).
+                            // Find bar and dropdown menus are not centered popups
+                            // (popup_focus is None). Swallow leftover keys so Space
+                            // cannot type into the buffer behind them.
                             _ if any_modal_open(app) => {}
                             KeyCode::Char(ch) => {
                                 app.active_buffer_mut().insert_char(ch);
@@ -1929,6 +1708,255 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
     }
 }
 
+/// Ctrl shortcuts that may run while a centered popup has focus.
+fn global_ctrl_allowed_during_popup(code: KeyCode, app: &App) -> bool {
+    match code {
+        KeyCode::Char('q') => true,
+        KeyCode::Char('h') if app.popup_focus() == Some(PopupFocus::FileBrowser) => true,
+        _ => false,
+    }
+}
+
+/// Returns true when the caller should leave `run_app` immediately (quit confirmed).
+fn handle_confirm_key(code: KeyCode, app: &mut App) -> bool {
+    match code {
+        KeyCode::Left => {
+            app.confirm_selected = 0;
+            false
+        }
+        KeyCode::Right => {
+            app.confirm_selected = 1;
+            false
+        }
+        KeyCode::Char('y' | 'Y') => {
+            let is_quit = app.confirm_action.as_deref() == Some("quit");
+            app.close_confirm(true);
+            if is_quit {
+                app.should_quit = true;
+                return true;
+            }
+            false
+        }
+        KeyCode::Char('n' | 'N') => {
+            app.close_confirm(false);
+            false
+        }
+        KeyCode::Enter => {
+            let confirmed = app.confirm_selected == 0; // 0 = Confirm
+            let is_quit = app.confirm_action.as_deref() == Some("quit");
+            app.close_confirm(confirmed);
+            if confirmed && is_quit {
+                app.should_quit = true;
+            }
+            false
+        }
+        KeyCode::Esc => {
+            app.close_confirm(false);
+            false
+        }
+        _ => false,
+    }
+}
+
+fn handle_file_browser_key(code: KeyCode, app: &mut App) {
+    // Focus model: `browser_button_selected` holds either a button index
+    // (0..=3) or the sentinel `4` meaning the list area is focused. Tab
+    // cycles list -> 0 -> 1 -> 2 -> 3 -> list. Enter activates whichever
+    // is focused.
+    //
+    // NOTE: Ctrl+H (toggle hidden) is handled up in the CONTROL block —
+    // adding it here would be dead code.
+    match code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.browser_move_cursor(-1);
+            app.browser_button_selected = 4; // typing nav refocuses list
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.browser_move_cursor(1);
+            app.browser_button_selected = 4;
+        }
+        KeyCode::Char('g') => {
+            app.browser_jump(false);
+        }
+        KeyCode::Char('G') => {
+            app.browser_jump(true);
+        }
+        KeyCode::PageUp => {
+            let vh = app.editor_visible_lines.get().max(4);
+            app.browser_page(true, vh);
+        }
+        KeyCode::PageDown => {
+            let vh = app.editor_visible_lines.get().max(4);
+            app.browser_page(false, vh);
+        }
+        KeyCode::Tab => {
+            // list(4) -> 0 -> 1 -> 2 -> 3 -> list(4)
+            app.browser_button_selected = match app.browser_button_selected {
+                4 => 0,
+                n if n < 3 => n + 1,
+                _ => 4,
+            };
+        }
+        KeyCode::Enter => match app.browser_button_selected {
+            0 => app.browser_go_up(),
+            1 => app.browser_toggle_mode(),
+            2 => app.browser_toggle_hidden(),
+            3 => app.close_file_browser(false),
+            _ => app.browser_enter_selected(),
+        },
+        // `l`/Right activate the focused thing (list entry or button).
+        KeyCode::Char('l') | KeyCode::Right => match app.browser_button_selected {
+            0 => app.browser_go_up(),
+            1 => app.browser_toggle_mode(),
+            2 => app.browser_toggle_hidden(),
+            3 => app.close_file_browser(false),
+            _ => app.browser_enter_selected(),
+        },
+        // `h`/Left/Backspace/- go up one directory. (Plain `h` only —
+        // Ctrl+H is handled up in the CONTROL block.)
+        KeyCode::Backspace | KeyCode::Char('-') | KeyCode::Left | KeyCode::Char('h') => {
+            app.browser_go_up();
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.close_file_browser(false);
+        }
+        // Swallow every other key so unbound chars (e.g. 'x', 'f') don't
+        // leak into the underlying file dialog's path field.
+        _ => {}
+    }
+}
+
+fn handle_file_dialog_key(code: KeyCode, app: &mut App) {
+    match code {
+        KeyCode::Left => {
+            // Cycle 0 -> 2 -> 1 -> 0 (right-to-left visual order).
+            app.file_dialog_selected = match app.file_dialog_selected {
+                0 => 2,
+                2 => 1,
+                _ => 0,
+            };
+        }
+        KeyCode::Right => {
+            // Cycle 0 -> 1 -> 2 -> 0.
+            app.file_dialog_selected = match app.file_dialog_selected {
+                0 => 1,
+                1 => 2,
+                _ => 0,
+            };
+        }
+        KeyCode::Char(ch) => {
+            app.file_dialog_input_char(ch);
+        }
+        KeyCode::Backspace => {
+            app.file_dialog_backspace();
+        }
+        KeyCode::Enter => {
+            // 0 = Save/Open, 1 = Browse…, 2 = Cancel
+            app.close_file_dialog(app.file_dialog_selected);
+        }
+        KeyCode::Esc => {
+            app.close_file_dialog(2); // Cancel
+        }
+        _ => {}
+    }
+}
+
+fn handle_help_key(code: KeyCode, app: &mut App) {
+    match code {
+        KeyCode::Esc | KeyCode::F(1) => {
+            app.close_help();
+        }
+        KeyCode::Tab => {
+            app.help_tab = app.help_tab.next();
+        }
+        KeyCode::Char('1') => {
+            app.help_tab = popups::help::HelpTab::Shortcuts;
+        }
+        KeyCode::Char('2') => {
+            app.help_tab = popups::help::HelpTab::Languages;
+        }
+        KeyCode::Char('3') => {
+            app.help_tab = popups::help::HelpTab::About;
+        }
+        _ => {}
+    }
+}
+
+fn handle_configure_key(code: KeyCode, app: &mut App) {
+    match code {
+        KeyCode::Esc => {
+            app.close_configure();
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            let n = App::configure_row_count();
+            app.configure_selected = (app.configure_selected + 1) % n;
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            let n = App::configure_row_count();
+            app.configure_selected = if app.configure_selected == 0 {
+                n - 1
+            } else {
+                app.configure_selected - 1
+            };
+        }
+        KeyCode::Left => {
+            app.configure_adjust(app.configure_selected, -1);
+        }
+        KeyCode::Right => {
+            app.configure_adjust(app.configure_selected, 1);
+        }
+        KeyCode::Enter => {
+            app.configure_toggle(app.configure_selected);
+        }
+        _ => {}
+    }
+}
+
+fn handle_themes_key(code: KeyCode, app: &mut App) {
+    match code {
+        KeyCode::Esc => {
+            themes_popup_handle_esc(app);
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            themes_popup_handle_vert(app, 1);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            themes_popup_handle_vert(app, -1);
+        }
+        KeyCode::Enter => {
+            themes_popup_handle_enter(app);
+        }
+        KeyCode::Char('e') => {
+            themes_popup_start_edit(app, /*copy_name=*/ false);
+        }
+        KeyCode::Char('n') => {
+            themes_popup_start_edit(app, /*copy_name=*/ true);
+        }
+        KeyCode::Char('d') => {
+            themes_popup_request_delete(app);
+        }
+        KeyCode::Char('s') => {
+            themes_popup_try_save(app);
+        }
+        KeyCode::Tab => {
+            themes_popup_handle_tab(app);
+        }
+        KeyCode::Backspace => {
+            themes_popup_handle_backspace(app);
+        }
+        KeyCode::Char(ch) => {
+            themes_popup_handle_char(app, ch);
+        }
+        _ => {}
+    }
+}
+
+fn handle_word_count_key(code: KeyCode, app: &mut App) {
+    if matches!(code, KeyCode::Esc) {
+        app.close_word_count();
+    }
+}
+
 /// True when any modal/popup is open and the editor (and its drag selection)
 /// should be suspended.
 fn any_modal_open(app: &App) -> bool {
@@ -2030,7 +2058,7 @@ fn handle_menu_action(app: &mut App) {
         ("Tools", 4) => app.toggle_word_wrap(),
         ("Settings", 0) => app.open_configure(),
         ("Settings", 1) => app.open_themes(),
-        ("Settings", 2) => app.show_help = !app.show_help, // Help (F1)
+        ("Settings", 2) => app.open_help(), // Help (F1)
         _ => {}
     }
 }
@@ -2307,5 +2335,35 @@ mod plus_button_hit_test_tests {
                 "with {n} tab(s), a click at column {click_x} (middle of [+]) must create a new tab"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod popup_focus_key_tests {
+    use super::*;
+    use crate::app::PopupFocus;
+    use crossterm::event::KeyCode;
+
+    #[test]
+    fn ctrl_q_allowed_when_configure_is_open() {
+        let mut app = App::new(&[]);
+        app.open_configure();
+        assert!(global_ctrl_allowed_during_popup(KeyCode::Char('q'), &app));
+        assert!(!global_ctrl_allowed_during_popup(KeyCode::Char('o'), &app));
+        assert!(!global_ctrl_allowed_during_popup(KeyCode::Char('f'), &app));
+        assert!(!global_ctrl_allowed_during_popup(KeyCode::Char('n'), &app));
+        assert!(!global_ctrl_allowed_during_popup(KeyCode::Char('w'), &app));
+    }
+
+    #[test]
+    fn ctrl_h_allowed_only_in_file_browser() {
+        let mut app = App::new(&[]);
+        app.open_configure();
+        assert!(!global_ctrl_allowed_during_popup(KeyCode::Char('h'), &app));
+        app.close_configure();
+        app.show_file_dialog(false);
+        app.open_file_browser();
+        assert!(global_ctrl_allowed_during_popup(KeyCode::Char('h'), &app));
+        assert_eq!(app.popup_focus(), Some(PopupFocus::FileBrowser));
     }
 }
