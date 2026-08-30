@@ -358,25 +358,17 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             if app.popup_is_open() {
-                                if global_ctrl_allowed_during_popup(key.code, app) {
-                                    match key.code {
-                                        KeyCode::Char('q') => app.request_quit(),
-                                        KeyCode::Char('h') => app.browser_toggle_hidden(),
-                                        _ => {}
+                                match popup_ctrl_action(key.code, app) {
+                                    Some(PopupCtrl::Quit) => app.request_quit(),
+                                    Some(PopupCtrl::BrowserToggleHidden) => {
+                                        app.browser_toggle_hidden()
                                     }
+                                    None => {}
                                 }
                                 continue;
                             }
                             match key.code {
-                                // Ctrl+H toggles hidden files in the browser. Must
-                                // live HERE, not in a later key block: this CONTROL
-                                // match swallows every Ctrl+char via `continue`, so
-                                // a Ctrl+H arm further down would be unreachable
-                                // (it was — see git history). Browser implies
-                                // popup_is_open, so this arm is defensive.
-                                KeyCode::Char('h') if app.show_file_browser => {
-                                    app.browser_toggle_hidden();
-                                }
+                                // Browser Ctrl+H is handled in popup_ctrl_action.
                                 KeyCode::Char('q') => {
                                     app.request_quit();
                                 }
@@ -1709,11 +1701,18 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
 }
 
 /// Ctrl shortcuts that may run while a centered popup has focus.
-fn global_ctrl_allowed_during_popup(code: KeyCode, app: &App) -> bool {
+enum PopupCtrl {
+    Quit,
+    BrowserToggleHidden,
+}
+
+fn popup_ctrl_action(code: KeyCode, app: &App) -> Option<PopupCtrl> {
     match code {
-        KeyCode::Char('q') => true,
-        KeyCode::Char('h') if app.popup_focus() == Some(PopupFocus::FileBrowser) => true,
-        _ => false,
+        KeyCode::Char('q') => Some(PopupCtrl::Quit),
+        KeyCode::Char('h') if app.popup_focus() == Some(PopupFocus::FileBrowser) => {
+            Some(PopupCtrl::BrowserToggleHidden)
+        }
+        _ => None,
     }
 }
 
@@ -2348,22 +2347,87 @@ mod popup_focus_key_tests {
     fn ctrl_q_allowed_when_configure_is_open() {
         let mut app = App::new(&[]);
         app.open_configure();
-        assert!(global_ctrl_allowed_during_popup(KeyCode::Char('q'), &app));
-        assert!(!global_ctrl_allowed_during_popup(KeyCode::Char('o'), &app));
-        assert!(!global_ctrl_allowed_during_popup(KeyCode::Char('f'), &app));
-        assert!(!global_ctrl_allowed_during_popup(KeyCode::Char('n'), &app));
-        assert!(!global_ctrl_allowed_during_popup(KeyCode::Char('w'), &app));
+        assert!(matches!(
+            popup_ctrl_action(KeyCode::Char('q'), &app),
+            Some(PopupCtrl::Quit)
+        ));
+        assert!(popup_ctrl_action(KeyCode::Char('o'), &app).is_none());
+        assert!(popup_ctrl_action(KeyCode::Char('f'), &app).is_none());
+        assert!(popup_ctrl_action(KeyCode::Char('n'), &app).is_none());
+        assert!(popup_ctrl_action(KeyCode::Char('w'), &app).is_none());
     }
 
     #[test]
     fn ctrl_h_allowed_only_in_file_browser() {
         let mut app = App::new(&[]);
         app.open_configure();
-        assert!(!global_ctrl_allowed_during_popup(KeyCode::Char('h'), &app));
+        assert!(popup_ctrl_action(KeyCode::Char('h'), &app).is_none());
         app.close_configure();
         app.show_file_dialog(false);
         app.open_file_browser();
-        assert!(global_ctrl_allowed_during_popup(KeyCode::Char('h'), &app));
+        assert!(matches!(
+            popup_ctrl_action(KeyCode::Char('h'), &app),
+            Some(PopupCtrl::BrowserToggleHidden)
+        ));
         assert_eq!(app.popup_focus(), Some(PopupFocus::FileBrowser));
+    }
+
+    fn confirm_quit_app() -> App {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("unsaved");
+        app.request_quit();
+        assert!(app.show_confirm);
+        assert_eq!(app.confirm_action.as_deref(), Some("quit"));
+        app
+    }
+
+    #[test]
+    fn handle_confirm_enter_on_quit_sets_should_quit_and_returns_false() {
+        let mut app = confirm_quit_app();
+        assert_eq!(app.confirm_selected, 0);
+        let leave_run_app = handle_confirm_key(KeyCode::Enter, &mut app);
+        assert!(app.should_quit);
+        assert!(!leave_run_app);
+    }
+
+    #[test]
+    fn handle_confirm_y_on_quit_sets_should_quit_and_returns_true() {
+        let mut app = confirm_quit_app();
+        let leave_run_app = handle_confirm_key(KeyCode::Char('y'), &mut app);
+        assert!(app.should_quit);
+        assert!(leave_run_app);
+    }
+
+    #[test]
+    fn handle_confirm_n_on_quit_cancels() {
+        let mut app = confirm_quit_app();
+        let leave_run_app = handle_confirm_key(KeyCode::Char('n'), &mut app);
+        assert!(!app.should_quit);
+        assert!(!app.show_confirm);
+        assert!(!leave_run_app);
+    }
+
+    #[test]
+    fn handle_help_f1_and_esc_close_help() {
+        let mut app = App::new(&[]);
+        app.open_help();
+        assert!(app.show_help);
+        handle_help_key(KeyCode::F(1), &mut app);
+        assert!(!app.show_help);
+
+        app.open_help();
+        assert!(app.show_help);
+        handle_help_key(KeyCode::Esc, &mut app);
+        assert!(!app.show_help);
+    }
+
+    #[test]
+    fn handle_file_browser_tab_from_list_focuses_first_button() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog(false);
+        app.open_file_browser();
+        app.browser_button_selected = 4;
+        handle_file_browser_key(KeyCode::Tab, &mut app);
+        assert_eq!(app.browser_button_selected, 0);
     }
 }
