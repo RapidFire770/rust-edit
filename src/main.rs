@@ -1121,32 +1121,37 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             let mut skip_editor = false;
 
             // === Dropdown menu clicks ===
-            if let Some(ref menu_name) = app.active_menu {
-                let (menu_x, num_items) = match menu_name.as_str() {
-                    "File" => (0usize, 6),
-                    "Tools" => (7, 5),
-                    "Settings" => (15, 2),
-                    _ => (0, 0),
-                };
-                let dy = crate::ui::layout::HEADER_ROWS as usize; // below header + rule
-                let dropdown_h = num_items + 2;
-                let in_dropdown_y = y >= dy && y < dy + dropdown_h;
-                let in_dropdown_x = x >= menu_x && x < menu_x + 30;
-                if in_dropdown_y && in_dropdown_x {
-                    let item_row = y.saturating_sub(dy).saturating_sub(1);
-                    if item_row < num_items {
-                        app.menu_selected = item_row;
-                        handle_menu_action(app);
-                        app.close_menu();
-                        skip_editor = true;
+            // Leftover open menus are ignored for input once a popup has focus.
+            // A menu action that *opens* a popup still runs here because
+            // popup_is_open is false until after handle_menu_action.
+            if !app.popup_is_open() {
+                if let Some(ref menu_name) = app.active_menu {
+                    let (menu_x, num_items) = match menu_name.as_str() {
+                        "File" => (0usize, 6),
+                        "Tools" => (7, 5),
+                        "Settings" => (15, 2),
+                        _ => (0, 0),
+                    };
+                    let dy = crate::ui::layout::HEADER_ROWS as usize; // below header + rule
+                    let dropdown_h = num_items + 2;
+                    let in_dropdown_y = y >= dy && y < dy + dropdown_h;
+                    let in_dropdown_x = x >= menu_x && x < menu_x + 30;
+                    if in_dropdown_y && in_dropdown_x {
+                        let item_row = y.saturating_sub(dy).saturating_sub(1);
+                        if item_row < num_items {
+                            app.menu_selected = item_row;
+                            handle_menu_action(app);
+                            app.close_menu();
+                            skip_editor = true;
+                        } else {
+                            app.close_menu();
+                            skip_editor = true;
+                        }
                     } else {
+                        // click outside the open dropdown -> close it
                         app.close_menu();
-                        skip_editor = true;
+                        // allow fallthrough for editor click etc.
                     }
-                } else {
-                    // click outside the open dropdown -> close it
-                    app.close_menu();
-                    // allow fallthrough for editor click etc.
                 }
             }
 
@@ -2147,20 +2152,12 @@ fn ui(f: &mut Frame, app: &mut App) {
         popups::word_count::render(f, area, app.current_theme(), &app.word_count_text);
     }
 
-    if let Some(ref menu) = app.active_menu {
-        crate::ui::header::render_dropdown(f, menu, area, app.current_theme(), app.menu_selected);
-    }
-
     if app.show_configure {
         popups::configure::render(f, area, app.current_theme(), app);
     }
 
     if app.show_themes {
         popups::themes::render(f, area, app.current_theme(), app);
-    }
-
-    if app.show_confirm {
-        popups::confirm::render_confirm(f, area, app.current_theme(), &app.confirm_message, app);
     }
 
     if app.show_file_dialog {
@@ -2178,6 +2175,15 @@ fn ui(f: &mut Frame, app: &mut App) {
     // Browser renders on top of the file dialog when open.
     if app.show_file_browser {
         popups::file_browser::render(f, area, app.current_theme(), app);
+    }
+
+    if let Some(ref menu) = app.active_menu {
+        crate::ui::header::render_dropdown(f, menu, area, app.current_theme(), app.menu_selected);
+    }
+
+    // Quit confirm always paints last so it stacks above every other popup.
+    if app.show_confirm {
+        popups::confirm::render_confirm(f, area, app.current_theme(), &app.confirm_message, app);
     }
 }
 
@@ -2511,5 +2517,24 @@ mod popup_mouse_focus_tests {
         assert!(!app.show_word_count);
         assert_eq!(app.active_buffer().cursor, cursor_before);
         assert!(!app.mouse_drag_active);
+    }
+
+    #[test]
+    fn leftover_menu_item_click_ignored_when_popup_focused() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("unsaved");
+        app.active_menu = Some("File".into());
+        app.menu_selected = 0;
+        app.request_quit();
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Confirm));
+        assert_eq!(app.buffers.len(), 1);
+
+        // File > New is item 0 at (menu_x=0, y just below the header).
+        handle_mouse(left_down(1, crate::ui::layout::HEADER_ROWS + 1), &mut app);
+
+        // Dropdown handling was skipped, so File > New did not run and the
+        // leftover menu was not closed by handle_menu_action.
+        assert_eq!(app.buffers.len(), 1);
+        assert_eq!(app.active_menu.as_deref(), Some("File"));
     }
 }
