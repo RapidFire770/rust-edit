@@ -152,6 +152,9 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
         || app.show_word_count
         || app.show_configure
         || app.show_themes
+        || app.show_file_dialog
+        || app.show_file_browser
+        || app.show_confirm
         || app.active_menu.is_some()
     {
         return None;
@@ -863,6 +866,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 handle_menu_action(app);
                                 app.close_menu();
                             }
+                            // When a modal popup is open, swallow any key it doesn't
+                            // explicitly handle so background buffer/cursor state is
+                            // never mutated (e.g. Space in the Configure popup used to
+                            // insert a char into the buffer behind it).
+                            _ if any_modal_open(app) => {}
                             KeyCode::Char(ch) => {
                                 app.active_buffer_mut().insert_char(ch);
                             }
