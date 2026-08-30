@@ -118,6 +118,26 @@ fn blink_is_due(last_blink: Instant, interval: Duration, should_blink: bool) -> 
     should_blink && last_blink.elapsed() >= interval
 }
 
+/// Where a vertical mouse-wheel burst should go. Help and the file browser
+/// scroll their own content; every other popup swallows the wheel so it
+/// cannot leak through to the editor underneath.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WheelTarget {
+    Editor,
+    Help,
+    FileBrowser,
+    Swallow,
+}
+
+fn wheel_target(app: &App) -> WheelTarget {
+    match app.popup_focus() {
+        Some(PopupFocus::Help) => WheelTarget::Help,
+        Some(PopupFocus::FileBrowser) => WheelTarget::FileBrowser,
+        Some(_) => WheelTarget::Swallow,
+        None => WheelTarget::Editor,
+    }
+}
+
 /// True for pointer motion that should not, by itself, force a redraw.
 fn event_is_idle_mouse_move(event: &Event) -> bool {
     matches!(
@@ -329,26 +349,32 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             // all wheel events so only key/click/other events remain for the dispatch.
             let wheel_delta = events.iter().filter_map(wheel_lines).sum::<isize>();
             if wheel_delta != 0 {
-                if app.show_file_browser {
-                    // Route wheel to the browser list, not the editor underneath.
-                    app.browser_move_cursor(wheel_delta as i32);
-                } else if app.show_help {
-                    // Route wheel to help popup content scroll instead of buffer.
-                    let new_row = (app.help_content_scroll.0 as isize + wheel_delta).max(0) as u16;
-                    app.help_content_scroll.0 = new_row;
-                } else if app.config.word_wrap {
-                    let buf = app.active_buffer();
-                    let total = crate::wrap::total_screen_rows(
-                        &buf.rope,
-                        buf.visible_width,
-                        app.config.tab_size,
-                    );
-                    let b = app.active_buffer_mut();
-                    b.scroll_wrapped(wheel_delta, total);
-                } else {
-                    let visible = app.editor_visible_lines.get().max(5);
-                    app.active_buffer_mut().scroll(wheel_delta);
-                    app.active_buffer_mut().clamp_scroll(visible);
+                match wheel_target(app) {
+                    WheelTarget::FileBrowser => {
+                        app.browser_move_cursor(wheel_delta as i32);
+                    }
+                    WheelTarget::Help => {
+                        let new_row =
+                            (app.help_content_scroll.0 as isize + wheel_delta).max(0) as u16;
+                        app.help_content_scroll.0 = new_row;
+                    }
+                    WheelTarget::Swallow => {}
+                    WheelTarget::Editor => {
+                        if app.config.word_wrap {
+                            let buf = app.active_buffer();
+                            let total = crate::wrap::total_screen_rows(
+                                &buf.rope,
+                                buf.visible_width,
+                                app.config.tab_size,
+                            );
+                            let b = app.active_buffer_mut();
+                            b.scroll_wrapped(wheel_delta, total);
+                        } else {
+                            let visible = app.editor_visible_lines.get().max(5);
+                            app.active_buffer_mut().scroll(wheel_delta);
+                            app.active_buffer_mut().clamp_scroll(visible);
+                        }
+                    }
                 }
             }
             events.retain(|e| wheel_lines(e).is_none());
@@ -775,141 +801,145 @@ fn wheel_lines(event: &Event) -> Option<isize> {
     }
 }
 
-/// Update hover states for all active popups based on mouse position
+/// Update hover states for the focused popup only. Buried popups must not
+/// highlight through the top layer, so their hover fields are cleared first.
 fn update_hover_states(x: u16, y: u16, app: &mut App) {
     let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
     let term_area = Rect::new(0, 0, tw, th);
 
-    if app.show_file_dialog {
-        let popup = popups::file_dialog::file_dialog_rect(term_area);
-        let btn_y = popups::file_dialog::file_dialog_button_row(popup) as usize;
+    // Clear unfocused hover so a confirm/dialog underneath cannot light up.
+    app.file_dialog_button_hover = None;
+    app.browser_button_hover = None;
+    app.browser_list_hover = None;
+    app.confirm_button_hover = None;
+    app.configure_row_hover = None;
+    app.configure_button_hover = None;
+    app.themes_list_hover = None;
+    app.themes_button_hover = None;
 
-        if y as usize == btn_y {
-            let labels = popups::file_dialog::button_labels(app.file_dialog_is_save);
-            let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x + 1, &labels);
-            let hit = ranges.iter().position(|(s, e)| x >= *s && x < *e);
-            // `file_dialog_button_hover` is the transient hit-test used by the
-            // click handler to know a button was actually clicked.
-            app.file_dialog_button_hover = hit;
-            // Hover steals the selection: the highlighted button follows the
-            // mouse and STAYS put when the mouse leaves the button row, rather
-            // than snapping back to the last keyboard-selected button. We do
-            // NOT reset `file_dialog_selected` in the else-branch — that reset
-            // is exactly the "jump back" behavior we're removing.
-            if let Some(idx) = hit {
-                app.file_dialog_selected = idx;
-            }
-        } else {
-            app.file_dialog_button_hover = None;
-        }
-    }
+    match app.popup_focus() {
+        Some(PopupFocus::FileDialog) => {
+            let popup = popups::file_dialog::file_dialog_rect(term_area);
+            let btn_y = popups::file_dialog::file_dialog_button_row(popup) as usize;
 
-    // File browser footer button hover (only meaningful when browser is open).
-    if app.show_file_browser {
-        let popup = popups::file_browser::file_browser_rect(term_area);
-        let btn_y = popups::file_browser::footer_button_row(popup) as usize;
-        if y as usize == btn_y {
-            let labels = app.browser_footer_labels();
-            let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x + 1, &labels);
-            let hit = ranges.iter().position(|(s, e)| x >= *s && x < *e);
-            // Transient hit-test used by the click handler.
-            app.browser_button_hover = hit;
-            // Hover steals the footer-button selection so the highlight stays
-            // on the last-hovered button when the mouse leaves the row, rather
-            // than snapping back to the keyboard-focused button.
-            if let Some(idx) = hit {
-                app.browser_button_selected = idx;
-            }
-        } else {
-            app.browser_button_hover = None;
-        }
-
-        // List-row hover preview. Uses the same row->index math as the click
-        // handler so the highlighted row is always the one that would activate
-        // on a click. Entries past the last row (blank padding) yield None.
-        let area = popups::file_browser::list_area(popup);
-        let list_hit = popups::file_browser::list_index_at(y as usize, area, app.browser_selected)
-            .filter(|&i| i < app.browser_entries.len());
-        app.browser_list_hover = list_hit;
-        // Mouse owns focus: being over the list means list focus (sentinel 4),
-        // so the previously-hovered footer button doesn't stay highlighted too.
-        if list_hit.is_some() {
-            app.browser_button_selected = 4;
-        }
-    }
-
-    if app.show_confirm {
-        let msg = app.confirm_message.clone();
-        let popup = popups::confirm::confirm_rect(term_area, &msg);
-        let btn_y = popups::confirm::confirm_button_row(popup) as usize;
-
-        if y as usize == btn_y {
-            let btn_x_start = popup.x + 2;
-            let confirm_len = "[ Y ] Confirm".chars().count() as u16;
-
-            if x >= btn_x_start && x < btn_x_start + confirm_len {
-                app.confirm_button_hover = Some(0);
-            } else if x >= btn_x_start + confirm_len + 3 && x < btn_x_start + confirm_len + 3 + 12 {
-                app.confirm_button_hover = Some(1);
-            } else {
-                app.confirm_button_hover = None;
-            }
-        } else {
-            app.confirm_button_hover = None;
-        }
-    }
-
-    if app.show_configure {
-        let term_area = Rect::new(0, 0, tw, th);
-        let popup = popups::configure::configure_rect(term_area);
-        let row_ys = popups::configure::row_ys(popup);
-        if y >= popup.y && y < popup.y + popup.height && x >= popup.x && x < popup.x + popup.width {
-            let mut on_row = None;
-            for (i, &ry) in row_ys.iter().enumerate() {
-                if y == ry {
-                    on_row = Some(i);
+            if y as usize == btn_y {
+                let labels = popups::file_dialog::button_labels(app.file_dialog_is_save);
+                let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x + 1, &labels);
+                let hit = ranges.iter().position(|(s, e)| x >= *s && x < *e);
+                // `file_dialog_button_hover` is the transient hit-test used by the
+                // click handler to know a button was actually clicked.
+                app.file_dialog_button_hover = hit;
+                // Hover steals the selection: the highlighted button follows the
+                // mouse and STAYS put when the mouse leaves the button row, rather
+                // than snapping back to the last keyboard-selected button. We do
+                // NOT reset `file_dialog_selected` in the else-branch — that reset
+                // is exactly the "jump back" behavior we're removing.
+                if let Some(idx) = hit {
+                    app.file_dialog_selected = idx;
                 }
             }
-            app.configure_row_hover = on_row;
-            // Footer button hover.
-            let fy = popups::configure::footer_row_y(popup);
-            if y == fy {
-                let labels = popups::configure::footer_labels();
-                let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x, &labels);
-                app.configure_button_hover = hit_button_row(x, &ranges);
-            } else {
-                app.configure_button_hover = None;
-            }
-        } else {
-            app.configure_row_hover = None;
-            app.configure_button_hover = None;
         }
-    }
+        Some(PopupFocus::FileBrowser) => {
+            let popup = popups::file_browser::file_browser_rect(term_area);
+            let btn_y = popups::file_browser::footer_button_row(popup) as usize;
+            if y as usize == btn_y {
+                let labels = app.browser_footer_labels();
+                let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x + 1, &labels);
+                let hit = ranges.iter().position(|(s, e)| x >= *s && x < *e);
+                // Transient hit-test used by the click handler.
+                app.browser_button_hover = hit;
+                // Hover steals the footer-button selection so the highlight stays
+                // on the last-hovered button when the mouse leaves the row, rather
+                // than snapping back to the keyboard-focused button.
+                if let Some(idx) = hit {
+                    app.browser_button_selected = idx;
+                }
+            }
 
-    if app.show_themes {
-        themes_popup_handle_hover(app, (x as usize, y as usize), (tw, th));
-    }
+            // List-row hover preview. Uses the same row->index math as the click
+            // handler so the highlighted row is always the one that would activate
+            // on a click. Entries past the last row (blank padding) yield None.
+            let area = popups::file_browser::list_area(popup);
+            let list_hit =
+                popups::file_browser::list_index_at(y as usize, area, app.browser_selected)
+                    .filter(|&i| i < app.browser_entries.len());
+            app.browser_list_hover = list_hit;
+            // Mouse owns focus: being over the list means list focus (sentinel 4),
+            // so the previously-hovered footer button doesn't stay highlighted too.
+            if list_hit.is_some() {
+                app.browser_button_selected = 4;
+            }
+        }
+        Some(PopupFocus::Confirm) => {
+            let msg = app.confirm_message.clone();
+            let popup = popups::confirm::confirm_rect(term_area, &msg);
+            let btn_y = popups::confirm::confirm_button_row(popup) as usize;
 
-    if let Some(menu_name) = app.active_menu.as_deref() {
-        let dropdown = crate::ui::header::dropdown_rect(term_area, menu_name);
+            if y as usize == btn_y {
+                let btn_x_start = popup.x + 2;
+                let confirm_len = "[ Y ] Confirm".chars().count() as u16;
 
-        if x >= dropdown.x
-            && x < dropdown.x + dropdown.width
-            && y >= dropdown.y
-            && y < dropdown.y + dropdown.height
-        {
-            let inner_y = y - dropdown.y;
-            let item_idx = (inner_y as usize).saturating_sub(1);
+                if x >= btn_x_start && x < btn_x_start + confirm_len {
+                    app.confirm_button_hover = Some(0);
+                } else if x >= btn_x_start + confirm_len + 3
+                    && x < btn_x_start + confirm_len + 3 + 12
+                {
+                    app.confirm_button_hover = Some(1);
+                }
+            }
+        }
+        Some(PopupFocus::Configure) => {
+            let popup = popups::configure::configure_rect(term_area);
+            let row_ys = popups::configure::row_ys(popup);
+            if y >= popup.y
+                && y < popup.y + popup.height
+                && x >= popup.x
+                && x < popup.x + popup.width
+            {
+                let mut on_row = None;
+                for (i, &ry) in row_ys.iter().enumerate() {
+                    if y == ry {
+                        on_row = Some(i);
+                    }
+                }
+                app.configure_row_hover = on_row;
+                // Footer button hover.
+                let fy = popups::configure::footer_row_y(popup);
+                if y == fy {
+                    let labels = popups::configure::footer_labels();
+                    let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x, &labels);
+                    app.configure_button_hover = hit_button_row(x, &ranges);
+                }
+            }
+        }
+        Some(PopupFocus::Themes) => {
+            themes_popup_handle_hover(app, (x as usize, y as usize), (tw, th));
+        }
+        Some(PopupFocus::Help | PopupFocus::WordCount) => {}
+        None => {
+            // Menus are not a PopupFocus; skip them entirely while a popup owns input.
+            if let Some(menu_name) = app.active_menu.as_deref() {
+                let dropdown = crate::ui::header::dropdown_rect(term_area, menu_name);
 
-            let item_count = match menu_name {
-                "File" => 6,
-                "Tools" => 5,
-                "Settings" => 2,
-                _ => 0,
-            };
+                if x >= dropdown.x
+                    && x < dropdown.x + dropdown.width
+                    && y >= dropdown.y
+                    && y < dropdown.y + dropdown.height
+                {
+                    let inner_y = y - dropdown.y;
+                    let item_idx = (inner_y as usize).saturating_sub(1);
 
-            if item_idx < item_count {
-                app.menu_selected = item_idx;
+                    let item_count = match menu_name {
+                        "File" => 6,
+                        "Tools" => 5,
+                        "Settings" => 2,
+                        _ => 0,
+                    };
+
+                    if item_idx < item_count {
+                        app.menu_selected = item_idx;
+                    }
+                }
             }
         }
     }
@@ -930,6 +960,152 @@ fn active_wrap_layout(app: &App) -> Option<crate::wrap::WrapLayout> {
         buf.visible_width.max(1),
         app.config.tab_size,
     ))
+}
+
+fn handle_confirm_click(x: usize, y: usize, app: &mut App) {
+    let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+    let term_area = Rect::new(0, 0, tw, th);
+    let msg = app.confirm_message.clone();
+    let popup = popups::confirm::confirm_rect(term_area, &msg);
+    if x >= popup.x as usize
+        && x < (popup.x + popup.width) as usize
+        && y >= popup.y as usize
+        && y < (popup.y + popup.height) as usize
+    {
+        let btn_y = popups::confirm::confirm_button_row(popup) as usize;
+        if y == btn_y {
+            if let Some(hovered) = app.confirm_button_hover {
+                let confirmed = hovered == 0;
+                let is_quit = app.confirm_action.as_deref() == Some("quit");
+                app.close_confirm(confirmed);
+                if confirmed && is_quit {
+                    app.should_quit = true;
+                }
+            }
+        }
+    } else {
+        app.close_confirm(false);
+    }
+}
+
+fn handle_file_browser_click(x: usize, y: usize, app: &mut App) {
+    let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+    let term_area = Rect::new(0, 0, tw, th);
+    let popup = popups::file_browser::file_browser_rect(term_area);
+    if x >= popup.x as usize
+        && x < (popup.x + popup.width) as usize
+        && y >= popup.y as usize
+        && y < (popup.y + popup.height) as usize
+    {
+        let footer_y = popups::file_browser::footer_button_row(popup) as usize;
+        let list_area = popups::file_browser::list_area(popup);
+        if y == footer_y {
+            if let Some(idx) = app.browser_button_hover {
+                match idx {
+                    0 => app.browser_go_up(),
+                    1 => app.browser_toggle_mode(),
+                    2 => app.browser_toggle_hidden(),
+                    3 => app.close_file_browser(false),
+                    _ => {}
+                }
+            }
+        } else if y >= list_area.0 && y < list_area.1 {
+            // List row click: select + activate (dir enters, file confirms).
+            // Shares the row->index math with the hover preview so the clicked
+            // row is always the highlighted one.
+            let body_h = (list_area.1 - list_area.0).max(1);
+            if let Some(idx) =
+                popups::file_browser::list_index_at(y, list_area, app.browser_selected)
+                    .filter(|&i| i < app.browser_entries.len())
+            {
+                app.browser_select_index(idx);
+                app.browser_enter_selected();
+            }
+            app.editor_visible_lines.set(body_h);
+        }
+    } else {
+        app.close_file_browser(false);
+    }
+}
+
+fn handle_file_dialog_click(x: usize, y: usize, app: &mut App) {
+    let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+    let term_area = Rect::new(0, 0, tw, th);
+    let popup = popups::file_dialog::file_dialog_rect(term_area);
+    if x >= popup.x as usize
+        && x < (popup.x + popup.width) as usize
+        && y >= popup.y as usize
+        && y < (popup.y + popup.height) as usize
+    {
+        let btn_y = popups::file_dialog::file_dialog_button_row(popup) as usize;
+        if y == btn_y {
+            if let Some(hovered) = app.file_dialog_button_hover {
+                // 0 = Save/Open, 1 = Browse…, 2 = Cancel
+                app.close_file_dialog(hovered);
+            }
+        }
+    } else {
+        app.close_file_dialog(2); // Cancel
+    }
+}
+
+fn handle_configure_click(x: usize, y: usize, app: &mut App) {
+    let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+    let term_area = Rect::new(0, 0, tw, th);
+    let popup = popups::configure::configure_rect(term_area);
+    let in_popup = (y as u16 >= popup.y && (y as u16) < popup.y + popup.height)
+        && (x as u16 >= popup.x && (x as u16) < popup.x + popup.width);
+    if in_popup {
+        let row_ys = popups::configure::row_ys(popup);
+        for (i, &ry) in row_ys.iter().enumerate() {
+            if y as u16 == ry {
+                // Any row click toggles/steps that row (tab size steps +1).
+                app.configure_toggle(i);
+                app.configure_selected = i;
+            }
+        }
+        let fy = popups::configure::footer_row_y(popup);
+        if y as u16 == fy {
+            let labels = popups::configure::footer_labels();
+            let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x, &labels);
+            if let Some(idx) = hit_button_row(x as u16, &ranges) {
+                if idx == 0 {
+                    app.configure_toggle(app.configure_selected);
+                } else {
+                    app.close_configure();
+                }
+            }
+        }
+    } else {
+        app.close_configure();
+    }
+}
+
+fn handle_help_click(x: usize, y: usize, app: &mut App) {
+    let (h_tw, h_th) = crossterm::terminal::size().unwrap_or((80, 24));
+    let term_area = Rect::new(0, 0, h_tw, h_th);
+    let popup = popups::help::help_rect(term_area);
+    if x >= popup.x as usize
+        && x < (popup.x + popup.width) as usize
+        && y >= popup.y as usize
+        && y < (popup.y + popup.height) as usize
+    {
+        // Tab strip sits at inner row y = popup.y + 1.
+        let tab_row = (popup.y + 1) as usize;
+        if y == tab_row {
+            let tabs = popups::help::help_tab_rects();
+            for (_label, tab, x_start, x_end) in tabs {
+                let sx = (popup.x + *x_start) as usize;
+                let ex = (popup.x + *x_end) as usize;
+                if x >= sx && x < ex {
+                    app.help_tab = *tab;
+                    break;
+                }
+            }
+        }
+    } else {
+        app.close_help();
+    }
 }
 
 fn handle_mouse(mouse: MouseEvent, app: &mut App) {
@@ -974,191 +1150,25 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 }
             }
 
-            // === Confirm popup: clickable [Y]/[N] buttons + outside-click cancel ===
-            if app.show_confirm && !skip_editor {
-                let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
-                let term_area = Rect::new(0, 0, tw, th);
-                let msg = app.confirm_message.clone();
-                let popup = popups::confirm::confirm_rect(term_area, &msg);
-                if x >= popup.x as usize
-                    && x < (popup.x + popup.width) as usize
-                    && y >= popup.y as usize
-                    && y < (popup.y + popup.height) as usize
-                {
-                    let btn_y = popups::confirm::confirm_button_row(popup) as usize;
-                    if y == btn_y {
-                        if let Some(hovered) = app.confirm_button_hover {
-                            let confirmed = hovered == 0;
-                            let is_quit = app.confirm_action.as_deref() == Some("quit");
-                            app.close_confirm(confirmed);
-                            if confirmed && is_quit {
-                                app.should_quit = true;
-                            }
+            // Only the focused popup receives the click. A menu action that
+            // just opened a popup must not be treated as an outside-dismiss.
+            if !skip_editor {
+                if let Some(focus) = app.popup_focus() {
+                    match focus {
+                        PopupFocus::Confirm => handle_confirm_click(x, y, app),
+                        PopupFocus::FileBrowser => handle_file_browser_click(x, y, app),
+                        PopupFocus::FileDialog => handle_file_dialog_click(x, y, app),
+                        PopupFocus::Configure => handle_configure_click(x, y, app),
+                        PopupFocus::Themes => {
+                            themes_popup_handle_click(app, (x, y), &mut skip_editor)
+                        }
+                        PopupFocus::Help => handle_help_click(x, y, app),
+                        PopupFocus::WordCount => {
+                            app.close_word_count();
                         }
                     }
-                    skip_editor = true;
-                } else {
-                    app.close_confirm(false);
                     skip_editor = true;
                 }
-            }
-
-            // === File dialog: clickable Open/Save & Cancel buttons + outside close ===
-            if app.show_file_browser && !skip_editor {
-                let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
-                let term_area = Rect::new(0, 0, tw, th);
-                let popup = popups::file_browser::file_browser_rect(term_area);
-                if x >= popup.x as usize
-                    && x < (popup.x + popup.width) as usize
-                    && y >= popup.y as usize
-                    && y < (popup.y + popup.height) as usize
-                {
-                    let footer_y = popups::file_browser::footer_button_row(popup) as usize;
-                    let list_area = popups::file_browser::list_area(popup);
-                    if y == footer_y {
-                        // Footer button click.
-                        if let Some(idx) = app.browser_button_hover {
-                            match idx {
-                                0 => app.browser_go_up(),
-                                1 => app.browser_toggle_mode(),
-                                2 => app.browser_toggle_hidden(),
-                                3 => app.close_file_browser(false),
-                                _ => {}
-                            }
-                        }
-                    } else if y >= list_area.0 && y < list_area.1 {
-                        // List row click: select + activate (dir enters, file
-                        // confirms). Shares the row->index math with the hover
-                        // preview so the clicked row is always the highlighted one.
-                        let body_h = (list_area.1 - list_area.0).max(1);
-                        if let Some(idx) =
-                            popups::file_browser::list_index_at(y, list_area, app.browser_selected)
-                                .filter(|&i| i < app.browser_entries.len())
-                        {
-                            app.browser_select_index(idx);
-                            app.browser_enter_selected();
-                        }
-                        // Touch viewport height so subsequent PgUp/PgDn feels right.
-                        app.editor_visible_lines.set(body_h);
-                    }
-                    skip_editor = true;
-                } else {
-                    app.close_file_browser(false);
-                    skip_editor = true;
-                }
-            }
-
-            if app.show_file_dialog && !skip_editor {
-                let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
-                let term_area = Rect::new(0, 0, tw, th);
-                let popup = popups::file_dialog::file_dialog_rect(term_area);
-                if x >= popup.x as usize
-                    && x < (popup.x + popup.width) as usize
-                    && y >= popup.y as usize
-                    && y < (popup.y + popup.height) as usize
-                {
-                    let btn_y = popups::file_dialog::file_dialog_button_row(popup) as usize;
-                    if y == btn_y {
-                        if let Some(hovered) = app.file_dialog_button_hover {
-                            // 0 = Save/Open, 1 = Browse…, 2 = Cancel
-                            app.close_file_dialog(hovered);
-                        }
-                    }
-                    skip_editor = true;
-                } else {
-                    app.close_file_dialog(2); // Cancel
-                    skip_editor = true;
-                }
-            }
-
-            // === Interactive popup clicks (Configure + Themes) + outside close ===
-            if app.show_configure && !skip_editor {
-                let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
-                let term_area = Rect::new(0, 0, tw, th);
-                let popup = popups::configure::configure_rect(term_area);
-                let in_popup = (y as u16 >= popup.y && (y as u16) < popup.y + popup.height)
-                    && (x as u16 >= popup.x && (x as u16) < popup.x + popup.width);
-                if in_popup {
-                    let row_ys = popups::configure::row_ys(popup);
-                    // Row click → toggle/step that row.
-                    for (i, &ry) in row_ys.iter().enumerate() {
-                        if y as u16 == ry {
-                            // Left-click the tab-size value cell steps down; right-click
-                            // or a click on the label steps up. We treat any row
-                            // click as a toggle for simplicity (tab size steps +1).
-                            app.configure_toggle(i);
-                            app.configure_selected = i;
-                        }
-                    }
-                    // Footer buttons.
-                    let fy = popups::configure::footer_row_y(popup);
-                    if y as u16 == fy {
-                        let labels = popups::configure::footer_labels();
-                        let ranges =
-                            crate::ui::button::ButtonRow::button_x_ranges(popup.x, &labels);
-                        if let Some(idx) = hit_button_row(x as u16, &ranges) {
-                            if idx == 0 {
-                                app.configure_toggle(app.configure_selected);
-                            } else {
-                                app.close_configure();
-                            }
-                        }
-                    }
-                    // Any click inside the popup (row, footer, or padding) consumes
-                    // the event so it never falls through to the editor.
-                    skip_editor = true;
-                } else {
-                    app.close_configure();
-                    skip_editor = true;
-                }
-            }
-
-            if app.show_themes && !skip_editor {
-                themes_popup_handle_click(app, (x, y), &mut skip_editor);
-            }
-
-            // === Help popup: clickable tabs + inside-click ignore + outside-click close ===
-            if app.show_help && !skip_editor {
-                let (h_tw, h_th) = crossterm::terminal::size().unwrap_or((80, 24));
-                let term_area = Rect::new(0, 0, h_tw, h_th);
-                let popup = popups::help::help_rect(term_area);
-                if x >= popup.x as usize
-                    && x < (popup.x + popup.width) as usize
-                    && y >= popup.y as usize
-                    && y < (popup.y + popup.height) as usize
-                {
-                    // Tab strip sits at inner row y = popup.y + 1.
-                    let tab_row = (popup.y + 1) as usize;
-                    if y == tab_row {
-                        let tabs = popups::help::help_tab_rects();
-                        for (_label, tab, x_start, x_end) in tabs {
-                            let sx = (popup.x + *x_start) as usize;
-                            let ex = (popup.x + *x_end) as usize;
-                            if x >= sx && x < ex {
-                                app.help_tab = *tab;
-                                skip_editor = true;
-                                break;
-                            }
-                        }
-                        if !skip_editor {
-                            // clicked inside popup but not on a tab -> ignore
-                            skip_editor = true;
-                        }
-                    } else {
-                        // clicked inside popup body -> ignore (don't close)
-                        skip_editor = true;
-                    }
-                } else {
-                    // clicked outside help popup -> close
-                    app.show_help = false;
-                    skip_editor = true;
-                }
-            }
-
-            // Close other non-interactive popups on outside click
-            if !skip_editor && app.show_word_count {
-                app.show_word_count = false;
-                skip_editor = false; // allow the click to still place cursor
             }
 
             if !skip_editor {
@@ -1272,7 +1282,9 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
         }
         // Horizontal mouse-wheel (Shift+wheel on most terminals) scrolls the
         // view sideways. Vertical wheel is coalesced in run_app, but horizontal
-        // events pass through here since wheel_lines ignores them.
+        // events pass through here since wheel_lines ignores them. Swallow
+        // while a popup owns focus so the editor underneath cannot pan.
+        MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight if app.popup_is_open() => {}
         MouseEventKind::ScrollLeft => {
             app.active_buffer_mut().scroll_offset.1 =
                 app.active_buffer_mut().scroll_offset.1.saturating_sub(4);
@@ -2429,5 +2441,75 @@ mod popup_focus_key_tests {
         app.browser_button_selected = 4;
         handle_file_browser_key(KeyCode::Tab, &mut app);
         assert_eq!(app.browser_button_selected, 0);
+    }
+}
+
+#[cfg(test)]
+mod wheel_target_tests {
+    use super::*;
+
+    #[test]
+    fn wheel_target_is_focused_popup_not_editor() {
+        let mut app = App::new(&[]);
+        assert_eq!(wheel_target(&app), WheelTarget::Editor);
+        app.open_configure();
+        assert_eq!(wheel_target(&app), WheelTarget::Swallow);
+        app.close_configure();
+        app.open_help();
+        assert_eq!(wheel_target(&app), WheelTarget::Help);
+        app.close_help();
+        app.show_file_dialog(false);
+        app.open_file_browser();
+        assert_eq!(wheel_target(&app), WheelTarget::FileBrowser);
+        app.show_confirm = true;
+        assert_eq!(wheel_target(&app), WheelTarget::Swallow);
+    }
+}
+
+#[cfg(test)]
+mod popup_mouse_focus_tests {
+    use super::*;
+    use crate::app::PopupFocus;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    fn left_down(column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn update_hover_clears_buried_popup_fields() {
+        let mut app = App::new(&[]);
+        app.open_configure();
+        app.configure_row_hover = Some(0);
+        app.configure_button_hover = Some(1);
+        app.show_confirm = true;
+        app.confirm_button_hover = Some(0);
+
+        update_hover_states(0, 0, &mut app);
+
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Confirm));
+        assert_eq!(app.configure_row_hover, None);
+        assert_eq!(app.configure_button_hover, None);
+    }
+
+    #[test]
+    fn word_count_click_consumes_and_does_not_move_editor_cursor() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("hello world");
+        let cursor_before = app.active_buffer().cursor;
+        app.editor_visible_lines.set(40);
+        app.compute_and_show_word_count();
+        assert_eq!(app.popup_focus(), Some(PopupFocus::WordCount));
+
+        handle_mouse(left_down(8, crate::ui::layout::HEADER_ROWS), &mut app);
+
+        assert!(!app.show_word_count);
+        assert_eq!(app.active_buffer().cursor, cursor_before);
+        assert!(!app.mouse_drag_active);
     }
 }
