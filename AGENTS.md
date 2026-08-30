@@ -10,7 +10,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
 **IMPORTANT:**
 
 - Always check available skills and invoke them when relevant to the user's request.
-- For large tasks always use the subagent-driven-development skill, if a git worktree is not setup, configure one in a .worktree folder before handoff to the subagent.
+- For large tasks always use the subagent-driven-development skill, if a git worktree is not setup, configure one in a .worktrees folder before handoff to the subagent.
 - For smaller tasks and code exploration use subagents and work preform work on the the main git branch. Use a code reviewer subagent to review the work afterward. Create a commit once work is validated.
 - Keep this AGENTS.md file updated with information about the project that other AI agents would need to know to keep the project consistent from session to session. (Project layout/structure, technology stack, tool chain, coding standards & style, testing, pitfalls and conflicts to avoid, features, etc.)
 
