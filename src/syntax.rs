@@ -184,6 +184,19 @@ impl SyntaxHighlighter {
         }
         self.highlight_window(lines[start_line..end].iter().copied(), lang)
     }
+
+    /// Highlight `count` lines starting at `start`, resuming parse state from
+    /// the lines before `start`. Stub: real implementation lands in a later task.
+    pub fn highlight_range(
+        &self,
+        lines: &[&str],
+        start: usize,
+        count: usize,
+        lang: Language,
+    ) -> Option<Vec<Vec<Span<'static>>>> {
+        let _ = (lines, start, count, lang);
+        None
+    }
 }
 
 #[cfg(test)]
@@ -271,5 +284,40 @@ mod tests {
                 joined
             );
         }
+    }
+
+    #[test]
+    fn mid_file_window_matches_full_file_slice() {
+        let sh = SyntaxHighlighter::new();
+        let lines = [
+            "fn before() {}",
+            "/* comment opener",
+            "still inside the block comment",
+            "closer */",
+            "fn after() {}",
+        ];
+        let joined = lines.join("\n");
+        let full = sh.highlight(&joined, Language::Rust);
+        assert_eq!(full.len(), 5);
+
+        // Fresh HighlightLines at line 2 is the CURRENT (buggy) window behavior.
+        let isolated = sh.highlight_window(std::iter::once(lines[2]), Language::Rust);
+        let full_mid_fg = full[2].first().and_then(|s| s.style.fg);
+        let isolated_fg = isolated[0].first().and_then(|s| s.style.fg);
+        assert_ne!(
+            full_mid_fg, isolated_fg,
+            "precondition: starting HighlightLines at the continuation line loses comment state"
+        );
+
+        // The new API must resume from state after lines 0..2.
+        let resumed = sh
+            .highlight_range(lines.as_slice(), 2, 1, Language::Rust)
+            .expect("range in bounds");
+        assert_eq!(resumed.len(), 1);
+        let resumed_fg = resumed[0].first().and_then(|s| s.style.fg);
+        assert_eq!(
+            resumed_fg, full_mid_fg,
+            "resuming from prior parse state must keep the block-comment color"
+        );
     }
 }
