@@ -6,14 +6,22 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{FontStyle, ThemeSet};
-use syntect::parsing::SyntaxSet;
+use syntect::highlighting::{FontStyle, HighlightState, ThemeSet};
+use syntect::parsing::{ParseState, SyntaxSet};
 
 use crate::buffer::Language;
 
 pub struct SyntaxHighlighter {
     pub syntax_set: SyntaxSet,
     pub theme_set: ThemeSet,
+}
+
+/// Syntect parse + highlight state at a line boundary. Callers cache these so a
+/// mid-file window can resume without replaying the whole buffer.
+#[derive(Clone, Debug)]
+pub struct HighlightSnapshot {
+    pub highlight: HighlightState,
+    pub parse: ParseState,
 }
 
 /// Convert one line's syntect `(Style, &str)` ranges into ratatui `Span`s.
@@ -185,8 +193,18 @@ impl SyntaxHighlighter {
         self.highlight_window(lines[start_line..end].iter().copied(), lang)
     }
 
-    /// Highlight `count` lines starting at `start`, resuming parse state from
-    /// the lines before `start`. Stub: real implementation lands in a later task.
+    /// Fresh parse/highlight state for `lang` (before any lines are consumed).
+    pub fn initial_snapshot(&self, lang: Language) -> HighlightSnapshot {
+        let (syntax, theme) = self.syntax_and_theme(lang);
+        let h = HighlightLines::new(syntax, theme);
+        let (highlight, parse) = h.state();
+        HighlightSnapshot { highlight, parse }
+    }
+
+    /// Highlight `lines[start..start+count]`, carrying parse state from `lines[0..start]`.
+    ///
+    /// Returns `None` if `start` is past the end of `lines`. `start == lines.len()`
+    /// (including `count == 0`) yields `Some(vec![])`.
     pub fn highlight_range(
         &self,
         lines: &[&str],
@@ -194,8 +212,47 @@ impl SyntaxHighlighter {
         count: usize,
         lang: Language,
     ) -> Option<Vec<Vec<Span<'static>>>> {
-        let _ = (lines, start, count, lang);
-        None
+        if start > lines.len() {
+            return None;
+        }
+        let end = start.saturating_add(count).min(lines.len());
+        let snap = self.initial_snapshot(lang);
+        // Drive from line 0 so prefix state is applied; collect only `[start, end)`.
+        let (spans, _end_state) = self.highlight_slice_from_state(lines, start, 0, end, lang, snap);
+        Some(spans)
+    }
+
+    /// Drive syntect from `from_line` through `end_line` (exclusive).
+    /// Spans are collected only for `[span_start, end_line)`.
+    /// Checkpoints are the caller's problem; this helper only returns the end snapshot.
+    pub fn highlight_slice_from_state(
+        &self,
+        lines: &[&str],
+        span_start: usize,
+        from_line: usize,
+        end_line: usize,
+        lang: Language,
+        start_state: HighlightSnapshot,
+    ) -> (Vec<Vec<Span<'static>>>, HighlightSnapshot) {
+        if from_line >= end_line {
+            return (Vec::new(), start_state);
+        }
+        let (_syntax, theme) = self.syntax_and_theme(lang);
+        let mut h = HighlightLines::from_state(theme, start_state.highlight, start_state.parse);
+        let mut out = Vec::new();
+        let end = end_line.min(lines.len());
+        for (i, line) in lines.iter().enumerate().take(end).skip(from_line) {
+            let stripped = line.trim_end_matches(['\n', '\r']);
+            let highlighted_line = format!("{}\n", stripped);
+            let ranges = h
+                .highlight_line(&highlighted_line, &self.syntax_set)
+                .unwrap_or_else(|_| vec![(syntect::highlighting::Style::default(), stripped)]);
+            if i >= span_start {
+                out.push(ranges_to_spans(ranges));
+            }
+        }
+        let (highlight, parse) = h.state();
+        (out, HighlightSnapshot { highlight, parse })
     }
 }
 
