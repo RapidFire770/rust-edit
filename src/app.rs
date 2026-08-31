@@ -544,6 +544,11 @@ impl App {
             Some(fs) => fs.replace.clone(),
             None => return,
         };
+        // An empty replacement would just delete the matched word, which is
+        // almost always a mistake. Treat it as a no-op instead.
+        if repl.is_empty() {
+            return;
+        }
 
         // Determine target range from current selection (preferred) or matches list.
         // Read using shared borrows first.
@@ -600,6 +605,11 @@ impl App {
             Some(fs) if !fs.query.is_empty() => fs.clone(),
             _ => return,
         };
+        // An empty replacement would delete every match. Treat it as a no-op
+        // to avoid an accidental delete-all.
+        if fs.replace.is_empty() {
+            return;
+        }
         let buf = self.active_buffer_mut();
         let text = buf.text();
         let path = buf.path.clone();
@@ -1516,6 +1526,57 @@ mod tests {
             "Hello",
             "byte range must slice the original"
         );
+    }
+
+    // ----- Empty-replace no-op regressions -----
+
+    /// Build an App with one buffer holding `text` and a find state carrying
+    /// `query`/`replace`, with matches already computed. Lets us exercise the
+    /// replace paths without a live event loop.
+    fn app_with_find(text: &str, query: &str, replace: &str) -> App {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().rope = ropey::Rope::from_str(text);
+        let mut fs = FindState::new();
+        fs.query = query.to_string();
+        fs.replace = replace.to_string();
+        app.find_state = Some(fs);
+        app.update_find_matches();
+        app
+    }
+
+    #[test]
+    fn replace_current_empty_replace_is_noop() {
+        // Regression: an empty Replace field used to delete the matched word.
+        let mut app = app_with_find("Test Testing", "Test", "");
+        let before = app.active_buffer().text();
+        app.replace_current();
+        assert_eq!(
+            app.active_buffer().text(),
+            before,
+            "empty replace must not alter the buffer"
+        );
+    }
+
+    #[test]
+    fn replace_all_empty_replace_is_noop() {
+        // Regression: empty Replace + replace-all used to delete every match.
+        let mut app = app_with_find("Test Testing", "Test", "");
+        let before = app.active_buffer().text();
+        app.replace_all();
+        assert_eq!(
+            app.active_buffer().text(),
+            before,
+            "empty replace-all must not alter the buffer"
+        );
+    }
+
+    #[test]
+    fn replace_current_nonempty_replace_still_works() {
+        // Sanity: a non-empty replacement still performs the replace.
+        let mut app = app_with_find("Test Testing", "Test", "Hello");
+        app.replace_current();
+        // First match ("Test") is replaced; "Testing" is untouched (substring).
+        assert_eq!(app.active_buffer().text(), "Hello Testing");
     }
 
     // ----- File browser navigation regressions -----

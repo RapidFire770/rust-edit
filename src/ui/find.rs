@@ -122,13 +122,18 @@ pub fn render_bar(f: &mut Frame, area: Rect, state: &FindState) {
         bg,
     ));
 
-    let case_c = if state.case_sensitive { 'C' } else { 'c' };
-    let re_x = if state.use_regex { 'X' } else { 'x' };
-    let word_w = if state.whole_word { 'W' } else { 'w' };
-    spans.push(Span::styled(
-        format!("| [{case_c}]case [{re_x}]regex [{word_w}]word "),
-        dim,
-    ));
+    // Render each toggle on its own so an active one stands out (accent) while
+    // inactive ones stay dim — makes the c/x/w options easier to discover.
+    spans.push(Span::styled("| ", dim));
+    for (ch, on, label) in [
+        ('c', state.case_sensitive, "case "),
+        ('x', state.use_regex, "regex "),
+        ('w', state.whole_word, "word "),
+    ] {
+        let ch = if on { ch.to_ascii_uppercase() } else { ch };
+        let style = if on { accent } else { dim };
+        spans.push(Span::styled(format!("[{ch}]{label}"), style));
+    }
 
     // Right-side focus/hint depends on mode. In Command mode the nav keys are live.
     match state.focus {
