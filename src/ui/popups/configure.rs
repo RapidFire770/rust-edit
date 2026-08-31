@@ -118,9 +118,8 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
         if i > 0 {
             spans.push(Span::raw("   "));
         }
-        let selected = i == 0; // Enter=Toggle is the default-focused button
         let hovered = app.configure_button_hover == Some(i);
-        let style = if selected || hovered { accent } else { dim };
+        let style = if hovered { accent } else { dim };
         spans.push(Span::styled(*l, style));
     }
     lines.push(Line::from(spans));
