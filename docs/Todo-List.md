@@ -1,17 +1,8 @@
 ### Fixes & Bugs:
-- [x] The text cursor does not blink properly, it only blinks/flashes slightly when the mouse moves around the window.
-- [x] Mouse movment is slightly interupting the cursor blink causing an oddly blink/flashing effect on the cursor.
-- [x] When opening a file and the default untitled document is open and not modified, it should be closed/replaced on the tab bar unless it has been typed in/modified by the user.
-  - [x] Not allowing the duplicate tabs is also preventing the user from opening multiple blank/new untitled files when they hit the + button. This prevents the program from functioning as a user would expect from a typical text editing program. Duplicate tabs should only prevent opening of the same named file from the users disk and not prevent creating new empty files for the user to start typing into.
-- [x] When a popup modal is visible such as the Settings Configure popup, hitting the space bar is moving the cursor position in the background, the column indicator is updating and when leaving the popup the cursor position on screen has moved.
-- [x] Not all popup modals are hiding the cursor in the background when they are visible. Specifically seeing this from the Open and Save As popups.
-- [x] When a popup is visible it should have focus until closed, other popups should not be able to open and shortcuts should not be interacting with things in the background, only shortcuts that relate to the usability of the current popup should be accepted. Ctrl+Q for quit should still be allowed, its popup for unsaved changes should display on top of any other popup and take focus, currently it displays behind whatever other popup is on screen.
-- [ ] For find and replace there is an issue with how it finds words. For example the word "Test" should not be equal to "Testing" but when finding or replacing the word "Test" with something like "Hello" the word "Testing" would become "Helloing"
-- [ ] When the file name is to long it pushes the other information on the bottom bar off the screen depending on the current window size. The file name should be shortened/partially hidden if it to long so that the other information stays visible on the screen.
+- [ ] For find and replace there is an issue with how it finds words. For example the word "Test" should not be equal to "Testing" but when finding or replacing the word "Test" with something like "Hello" the word "Testing" would become "Helloing". Capitalization of words is also not taken into account for words, this should probably be a user toggle. If the replace box is blank and the user hits enter it should not delete/remove/replace the word with a blank/empty space.
+- [x] When the file name is to long it pushes the other information on the bottom bar off the screen depending on the current window size. The file name should be shortened/partially hidden if it to long so that the other information stays visible on the screen.
 - [ ] The setttings configure popup window toggle and close buttons highlighting does not function as intended. When hovering over the close button it highlights properly and unhighlights when the mouse moves off. The toggle button stays constantly highlighted red no matter if the mouse is over it or not.
-- [ ] Themes popup is to small, bottom row buttons are cut off.
-- [ ] Themes popup buttons only highlight when mouse is below the button.
-- [ ] Configure popup tab size can be increased with the mouse but not decreased.
+- [ ] Configure popup tab size option can be increased with the mouse but not decreased.
 - [ ] Edit / new theme not working. Cannot select any colors to change or type color values.
 - [ ] Browser Window when mouse is outside the popup it still scrolls the files list.
 - [ ] Scrollbar to display in the help menu to indicate to the user that the content is scrollable.
