@@ -1,22 +1,24 @@
 ### Fixes & Bugs:
-- [ ] For find and replace there is an issue with how it finds words. For example the word "Test" should not be equal to "Testing" but when finding or replacing the word "Test" with something like "Hello" the word "Testing" would become "Helloing". Capitalization of words is also not taken into account for words, this should probably be a user toggle. If the replace box is blank and the user hits enter it should not delete/remove/replace the word with a blank/empty space.
+
+- [ ] For find and replace there is an issue with how it finds words. For example the word "Test" should not be equal to "Testing" but when finding or replacing the word "Test" with something like "Hello" the word "Testing" would become "Helloing". Capitalization of words is also not taken into account for words, this should probably be a user toggle. If the replace box is blank/empty and the user hits enter it should not delete/remove/replace the word with a blank/empty space.
 - [x] When the file name is to long it pushes the other information on the bottom bar off the screen depending on the current window size. The file name should be shortened/partially hidden if it to long so that the other information stays visible on the screen.
-- [ ] The setttings configure popup window toggle and close buttons highlighting does not function as intended. When hovering over the close button it highlights properly and unhighlights when the mouse moves off. The toggle button stays constantly highlighted red no matter if the mouse is over it or not.
+- [ ] In the setting’s configure popup window toggle and close buttons highlighting does not function as intended. When hovering over the close button it highlights properly and un-highlights when the mouse moves off. The toggle button stays constantly highlighted red no matter if the mouse is over it or not.
 - [ ] Configure popup tab size option can be increased with the mouse but not decreased.
 - [ ] Edit / new theme not working. Cannot select any colors to change or type color values.
-- [ ] Browser Window when mouse is outside the popup it still scrolls the files list.
-- [ ] Scrollbar to display in the help menu to indicate to the user that the content is scrollable.
-- [ ] Scrolling long files hits the cpu rather hard. See if this can be optimized in some fashion. I personally believe it could be related to the syntax highlighting but cannot confirm.
+    - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value.
+- [ ] In the file browser window when mouse is outside the popup it still scrolls the files list.
+- [ ] Scrollbar should display in the help menu to indicate to the user that the content is scrollable.
+- [ ] Scrolling long files hits the CPU rather hard and has some very minor slowdown on scrolling and needs to be optimized in some fashion. I personally believe it could be related to the syntax highlighting trying to constantly update as the window is trying to scroll because as the window scrolls the text turns white and tries to catchup highlighting as I am still scrolling instead of the all the text already being highlighted before I scroll up or down. Possibly need to use syntect’s caching and parallelizing listed on the crates.io page if this is the cause of the issues because highlighting should be instant, not noticeable to the user that it is happening and the CPU shouldn’t be spiking up a large amount as the user scrolls through the document/code file.
 
 ---
 
 ### Features:
 
-- [ ] When word wrap isn't on and a line is longer than the visible width of the window a horizontal scrollbar should be displayed along the bottom of the window to allow the user to scroll the line horizontally.
+- [ ] When word wrap isn't on and lines are longer than the visible width of the window a horizontal scrollbar should be displayed along the bottom of the window to allow the user to scroll the line horizontally.
+- [ ] If a file is modified outside of the editor while it is currently open the program should notice and ask the user if they would like to reload the file to see the new changes. Auto reload of the file without asking the user each time should be a selectable option when the program asks the user so it doesn’t have to keep asking them each time the file is modified.
 - [ ] Spellcheck for normal text files and markdown
-- [ ] ctrl+/ to comment lines in support programming languages
-- [x] Fully implemented settings with themes, tab spacing, help and other future configurable options. Themes will be its own separate popup window from the other settings. Configurable options will be its own option in the menu and the popup will be called "Configure" it will house the default settings like tab spacing, word wrap on or off and other configurable options that the user can change from within this popup.
+- [ ] ctrl+/ to comment out lines in support programming languages
 - [ ] Create an installer script for the program.
-- [x] Implement more color theme presets and an option for the user to make custom color themes. (Dark, Light, High Contrast, Solarized-inspired, Monochrome, Terminal Green)
-- [ ] Tool: function list, when in a code file you can open this side panel to show defined functions in that file and select them to quickly jump to that function in the editor window.
-- [ ] See if more config and coding languages support can be added to the syntect crate we are using. It uses sublime
+- [ ] Tools for code files: Function List and Variables List - when in a code file you can open these side panels on the left or right side of the window to show defined functions or variables in that file and select them to quickly jump to that function in the editor window.
+- [ ] See if more config file types and coding language support can be added to the syntect crate we are using. It uses sublime text definitions.
+- [ ] Possibly have it work on Mac and Windows as well.

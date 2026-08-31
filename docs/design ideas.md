@@ -2,7 +2,7 @@
 
 A feature rich text and code editor for use in a Linux terminal
 
-**Main Programming Language:** 
+**Main Programming Language:**
 
 - Rust
 

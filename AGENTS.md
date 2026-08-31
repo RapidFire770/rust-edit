@@ -2,16 +2,16 @@
 
 **Project:** Rust-Edit — Feature-rich terminal text & code editor (TUI)  
 **Primary Framework:** Ratatui v0.30+  
-**Status:** Phase 1 complete (June 2026). MVP + high-value additions shipped.  
-**Last Updated:** June 25, 2026
+**Status:** Phase 1 complete (June 2026). MVP + high-value additions shipped.   
+**Last Updated:** August 31, 2026
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
 
 **IMPORTANT:**
 
 - Always check available skills and invoke them when relevant to the user's request.
+- For smaller tasks, research, code exploration use subagents that will report their findings back to you. Preform small changes on the the main git branch instead of using a worktree. Use a code reviewer subagent to review the work afterward. Wait for subagents to complete and create a commit once work is validated.
 - For large tasks always use the subagent-driven-development skill, if a git worktree is not setup, configure one in a .worktrees folder before handoff to the subagent.
-- For smaller tasks and code exploration use subagents and preform work on the the main git branch. Use a code reviewer subagent to review the work afterward. Wait for subagents to complete and create a commit once work is validated.
 - Keep this AGENTS.md file updated with information about the project that other AI agents would need to know to keep the project consistent from session to session. (Project layout/structure, technology stack, tool chain, coding standards & style, testing, pitfalls and conflicts to avoid, features, etc.)
 
 **Mandatory first step for any task:** Read the full Design Specification (`docs/Rust-Edit-Design-Specification-2026-06-24.md` or the version provided with this task). It contains the prioritized scope, UI rules, tradeoffs, and data model.
@@ -30,6 +30,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
 3. **Incremental & shippable > perfect**
    - Phase 1 is complete. Phase 2 features (full LSP, split panes, git integration, plugins, session restore — see Design Spec §5.3) require explicit approval before starting.
    - Every change should leave the app in a runnable, testable state.
+   - If a major refactor would be the best choice for the future of the application give the user the option to approve or deny refactoring vs the small change.
 4. **Explain tradeoffs**
    - When you have a choice (crate X vs Y, approach A vs B), briefly state the pros/cons in your reasoning or commit message. Cite terminal constraints, performance, complexity, or maintenance burden.
 5. **Respect the spec — with documented deviations**
@@ -42,23 +43,23 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
 
 ---
 
-## 2. Tech Stack & Pinned Dependencies (June 2026)
+## 2. Tech Stack & Pinned Dependencies
 
 Use these exact versions (or compatible patch releases) unless a compelling reason exists:
 
 ```toml
 [dependencies]
 ratatui = "0.30.2"
-crossterm = "0.28"
+crossterm = "0.29"
 ropey = "1.6.1"
 syntect = "5.3.0"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6.6", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
-directories = "5.0"
-arboard = "3.4"
+toml = "1.1.4"
+directories = "6.0.0"
+arboard = "3.6.1"
 anyhow = "1.0"
-regex = "1.10"
+regex = "1.13.1"
 ```
 
 > `pulldown-cmark` was removed when the markdown preview feature was deleted.
@@ -144,11 +145,7 @@ rust-edit/
 - `FindState.focus: FindFocus` — a 3-state model (Query → Replace → Command) so letters like `n`/`N` type normally into the boxes and navigate only in Command mode.
 - Syntax highlighting: `app.refresh_highlight_cache()` recomputes a visible window only on edit/scroll/language change; `editor.rs` reads the cache. One `HighlightLines` per window (multi-line constructs stay correct).
 - Event coalescing: `run_app` drains queued events and sums consecutive mouse-wheel deltas into one scroll → one redraw per burst.
-- Popup focus: at most one centered popup owns input (`App::popup_focus`).
-  Other popups cannot open. Global shortcuts are swallowed except Ctrl+Q.
-  Quit confirm paints last and stacks on top of the current popup without
-  dismissing it. File browser may stack only on the file dialog (Browse…).
-  Mouse and wheel follow `popup_focus`, not independent `show_*` flags.
+- Popup focus: at most one centered popup owns input (`App::popup_focus`). Other popups cannot open. Global shortcuts are swallowed except Ctrl+Q. Quit confirm paints last and stacks on top of the current popup without dismissing it. File browser may stack only on the file dialog (Browse…). Mouse and wheel follow `popup_focus`, not independent `show_*` flags.
 
 ---
 
