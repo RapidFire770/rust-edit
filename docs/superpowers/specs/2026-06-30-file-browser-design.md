@@ -22,8 +22,9 @@ full path. Also keep a small recent-files list for quick reopening.
 2. The popup now has three buttons: `[ Open/Save ]  [ Browse… ]  [ Cancel ]`.
 3. Clicking `[ Browse… ]` (or arrow-keying to it and pressing Enter) opens a
    larger directory-listing popup centered on screen.
-4. The user navigates the listing (keyboard or mouse), optionally switches to
-   the Recent view, and selects a file.
+4. The user navigates the listing (keyboard or mouse). From Open they may
+   switch to the Recent view and pick a file. From Save As they pick a file
+   to overwrite, or `[ Use folder ]` to confirm the current directory.
 5. The browser closes; the selected absolute path populates the path field of
    the original dialog. The user can still edit the path or press Open/Save.
 
@@ -52,6 +53,8 @@ Pure functions (unit-tested):
 - `read_directory(cwd: &Path, show_hidden: bool) -> std::io::Result<Vec<BrowserEntry>>`
   — wraps `fs::read_dir`, follows symlinks via `metadata()`, inserts the pinned
   `..` entry at index 0 when the cwd has a parent.
+- `compose_save_path(dir, current_input, fallback_filename) -> PathBuf` —
+  Save As folder pick: `dir` + basename of `current_input`, else fallback.
 
 ## New `App` state
 
@@ -66,7 +69,8 @@ Pure functions (unit-tested):
 - `browser_origin_is_save: bool`
 
 Methods: `open_file_browser()`, `close_file_browser(confirmed: bool)`,
-`browser_enter_selected()`, `browser_go_up()`, `browser_refresh()`,
+`browser_use_current_folder()`, `browser_activate_footer(idx)`,
+`browser_enter_selected()`, `browser_go_up()`, `refresh_browser()`,
 `browser_toggle_hidden()`, `browser_toggle_mode()`, `browser_move_cursor(i64)`,
 `browser_page(up: bool)`, `browser_select_index(usize)`.
 
@@ -100,6 +104,8 @@ Called on successful open **and** save inside `App::close_file_dialog`.
 Centered rect ~80% × 70% (clamped to min 50 × 16). Title shows the mode and
 (for Dir mode) the current absolute path.
 
+Open (unchanged):
+
 ```
 ┌─ Browse — /home/josh/Documents  ───────────────┐
 │ ../                                            │
@@ -110,6 +116,19 @@ Centered rect ~80% × 70% (clamped to min 50 × 16). Title shows the mode and
 │                                                │
 │ [ Up ]  [ Recent ]  [ Hidden: off ]  [ Cancel ]│
 └────────────────────────────────────────────────┘
+```
+
+Save As — title `Save to — {cwd}`, Recent omitted, extra folder action:
+
+```
+┌─ Save to — /home/josh/Documents  ───────────────┐
+│ ../                                             │
+│ src/                                            │
+│ README.md                                       │
+│ ...                                             │
+│                                                 │
+│ [ Use folder ]  [ Up ]  [ Hidden: off ]  [ Cancel ]│
+└─────────────────────────────────────────────────┘
 ```
 
 Directories styled in accent + bold; the selected row gets an inverted/accent
@@ -124,8 +143,9 @@ Keyboard:
 - `g` top, `G` bottom
 - `PgUp` / `PgDn` page
 - `Ctrl+H` toggle hidden files (Dir mode only)
-- `Tab` cycles button focus (Up/Recent/Hidden/Cancel) — mirrors the existing
-  arrow-key navigation pattern used elsewhere
+- `Tab` cycles button focus (Open: Up/Recent/Hidden/Cancel; Save As: Use
+  folder/Up/Hidden/Cancel) — mirrors the existing arrow-key navigation
+  pattern used elsewhere
 - `Esc` `q` cancel
 
 Mouse:
@@ -133,14 +153,22 @@ Mouse:
   and close browser). Single-click activates because ratatui has no robust
   double-click and picker UX favors immediacy.
 - Wheel scrolls the list.
-- Click footer buttons: `[ Up ]`, `[ Recent/Browse ]`, `[ Hidden ]`, `[ Cancel ]`.
+- Click footer buttons. Open: `[ Up ]`, `[ Recent/Browse ]`, `[ Hidden ]`,
+  `[ Cancel ]`. Save As: `[ Use folder ]`, `[ Up ]`, `[ Hidden ]`, `[ Cancel ]`.
 
 ## Confirm action
 
-On confirm in Dir mode: the selected entry must be a file (directories are
+**Open:** In Dir mode the selected entry must be a file (directories are
 entered, not confirmed). The file's absolute path is written to
 `app.file_path_input`, `show_file_browser` is set false, and focus returns to
-the path dialog. In Recent mode: selecting any entry confirms immediately.
+the path dialog (action button selected). In Recent mode: selecting any entry
+confirms immediately.
+
+**Save As:** `[ Use folder ]` confirms `browser_cwd` joined with the current
+filename via `compose_save_path` (basename of the typed path, else the buffer
+name, else `untitled`) and returns to the Save As dialog. File rows still
+confirm a full path (overwrite). Directory rows still enter. Recent view is
+Open-only.
 
 ## Tests (pure logic)
 

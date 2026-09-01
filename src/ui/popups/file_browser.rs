@@ -135,6 +135,19 @@ pub fn read_directory(cwd: &Path, show_hidden: bool) -> std::io::Result<Vec<Brow
     Ok(sorted)
 }
 
+/// Build a save target: `dir` + filename taken from `current_input`'s
+/// last component, or `fallback_filename` if the input is empty / has none.
+/// Pure — does not touch the filesystem.
+pub fn compose_save_path(dir: &Path, current_input: &str, fallback_filename: &str) -> PathBuf {
+    let trimmed = current_input.trim();
+    let name = Path::new(trimmed)
+        .file_name()
+        .filter(|n| !n.is_empty())
+        .map(|n| n.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from(fallback_filename));
+    dir.join(name)
+}
+
 /// Compute the centered popup rect for the browser, mirroring the geometry
 /// helpers used by the other popups. Kept in one place so the render and the
 /// mouse handler agree.
@@ -184,6 +197,9 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
     let popup = file_browser_rect(area);
 
     let title = match app.browser_mode {
+        BrowserMode::Dir if app.browser_origin_is_save => {
+            format!(" Save to — {} ", app.browser_cwd.display())
+        }
         BrowserMode::Dir => format!(" Browse — {} ", app.browser_cwd.display()),
         BrowserMode::Recent => " Recent Files ".to_string(),
     };
@@ -209,6 +225,9 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
 
     // Header hint line.
     let hint = match app.browser_mode {
+        BrowserMode::Dir if app.browser_origin_is_save => {
+            "Enter dir: Enter/→/l   Use folder: Tab to [Use folder]   Esc: back"
+        }
         BrowserMode::Dir => {
             "Enter dir: Enter/→/l   Up: Backspace/←/h/-   \
                              Toggle hidden: Ctrl+H   Tab: footer buttons"
@@ -282,7 +301,11 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
 
     // Footer buttons.
     let labels = app.browser_footer_labels();
-    let is_primary = [false, true, false, false];
+    let is_primary = if app.browser_origin_is_save {
+        [true, false, false, false] // Use folder
+    } else {
+        [false, true, false, false] // Recent/Browse toggle
+    };
     let mut row = ButtonRow::new(&labels, &is_primary);
     // 0..=3 are buttons; 4 is the list sentinel → no button selected.
     if app.browser_button_selected < 4 {
@@ -487,6 +510,35 @@ mod tests {
                                       // end is the exclusive upper bound; footer begins at end.
         assert_eq!(end, (popup.y + popup.height - 2) as usize);
         assert_eq!(end, footer_button_row(popup) as usize);
+    }
+
+    #[test]
+    fn compose_save_path_uses_basename_of_typed_path() {
+        let out = compose_save_path(
+            Path::new("/tmp/dest"),
+            "/home/josh/project/main.rs",
+            "untitled",
+        );
+        assert_eq!(out, PathBuf::from("/tmp/dest/main.rs"));
+    }
+
+    #[test]
+    fn compose_save_path_uses_plain_filename() {
+        let out = compose_save_path(Path::new("/tmp/dest"), "notes.md", "untitled");
+        assert_eq!(out, PathBuf::from("/tmp/dest/notes.md"));
+    }
+
+    #[test]
+    fn compose_save_path_falls_back_when_input_empty() {
+        let out = compose_save_path(Path::new("/tmp/dest"), "  ", "untitled");
+        assert_eq!(out, PathBuf::from("/tmp/dest/untitled"));
+    }
+
+    #[test]
+    fn compose_save_path_falls_back_when_input_has_no_filename() {
+        // Path::new("/").file_name() is None
+        let out = compose_save_path(Path::new("/tmp/dest"), "/", "untitled");
+        assert_eq!(out, PathBuf::from("/tmp/dest/untitled"));
     }
 
     #[test]

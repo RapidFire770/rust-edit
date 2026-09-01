@@ -9,7 +9,7 @@
 
 ### Major:
 
-- [ ] In the Save As popup when using the browser function there is no way to select the folder/directory to save the file into. It appears to be an exact copy of the browse function from the open dialog that is not adapted to function for a save as feature making it impossible to select a directory to save a file into.
+- [x] In the Save As popup when using the browser function there is no way to select the folder/directory to save the file into. It appears to be an exact copy of the browse function from the open dialog that is not adapted to function for a save as feature making it impossible to select a directory to save a file into.
 - [x] When hitting the tab button it does not work as expected of a text and code editor. When hitting tab anywhere on a line of text it inputs the tab at the beginning of the line pushing the line over 4 spaces like an indent instead of moving the text at the cursor over the tab amount. If the cursor is at the end of the line, instead of moving the cursor over the tab amount it moves the whole line over 4 spaces. Also the configured tab amount in the configure menu does not change the tab amount input in the editor window.
 
 ---

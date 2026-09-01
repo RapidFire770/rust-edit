@@ -93,7 +93,7 @@ pub struct App {
     /// Which view the browser is showing: the live directory or the persisted
     /// recent-files list.
     pub browser_mode: crate::ui::popups::file_browser::BrowserMode,
-    /// Hovered footer button index in the browser (0=Up,1=Recent/Browse,2=Hidden,3=Cancel).
+    /// Hovered footer button index in the browser (matches `browser_footer_labels()`).
     pub browser_button_hover: Option<usize>,
     /// Keyboard-selected footer button index in the browser.
     pub browser_button_selected: usize,
@@ -1072,16 +1072,66 @@ impl App {
     /// Close the browser. When `confirmed` is true the currently-selected
     /// entry's path is written into `file_path_input` (file dialog reopens
     /// focused on the action button so the user can hit Save/Open directly).
+    /// Directories are never confirmed here — use `browser_use_current_folder`
+    /// for the Save As "use this directory" path.
     pub fn close_file_browser(&mut self, confirmed: bool) {
         if confirmed {
             if let Some(entry) = self.browser_entries.get(self.browser_selected) {
                 if !entry.is_dir {
                     self.file_path_input = entry.path.to_string_lossy().to_string();
+                    self.file_dialog_selected = 0;
                 }
             }
         }
         self.show_file_browser = false;
         self.browser_list_hover = None;
+    }
+
+    /// Confirm the current directory as the Save As destination.
+    /// No-op if the browser was launched from Open (folder pick is Save-only).
+    pub fn browser_use_current_folder(&mut self) {
+        if !self.browser_origin_is_save {
+            return;
+        }
+        let fallback = self
+            .active_buffer()
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "untitled".to_string());
+        self.file_path_input = crate::ui::popups::file_browser::compose_save_path(
+            &self.browser_cwd,
+            &self.file_path_input,
+            &fallback,
+        )
+        .to_string_lossy()
+        .into_owned();
+        self.show_file_browser = false;
+        self.browser_list_hover = None;
+        self.file_dialog_selected = 0;
+    }
+
+    /// Activate a footer button by index. Indices match `browser_footer_labels()`.
+    pub fn browser_activate_footer(&mut self, idx: usize) {
+        if self.browser_origin_is_save {
+            match idx {
+                0 => self.browser_use_current_folder(),
+                1 => self.browser_go_up(),
+                2 => self.browser_toggle_hidden(),
+                3 => self.close_file_browser(false),
+                _ => {}
+            }
+        } else {
+            match idx {
+                0 => self.browser_go_up(),
+                1 => self.browser_toggle_mode(),
+                2 => self.browser_toggle_hidden(),
+                3 => self.close_file_browser(false),
+                _ => {}
+            }
+        }
     }
 
     /// Re-read `browser_cwd` into `browser_entries` (Dir mode only). IO errors
@@ -1265,19 +1315,24 @@ impl App {
         self.browser_selected = idx.min(self.browser_entries.len() - 1);
     }
 
-    /// Footer button labels for the current mode. Order: Up, Recent/Browse,
-    /// Hidden, Cancel.
+    /// Footer button labels. Open: Up / Recent-toggle / Hidden / Cancel.
+    /// Save As: Use folder / Up / Hidden / Cancel (no Recent — folder pick is
+    /// the extra action, and five buttons overflow the 50-col min width).
     pub fn browser_footer_labels(&self) -> [&'static str; 4] {
-        let mode_btn = match self.browser_mode {
-            crate::ui::popups::file_browser::BrowserMode::Dir => "[ Browse ]",
-            crate::ui::popups::file_browser::BrowserMode::Recent => "[ Recent ]",
-        };
         let hidden_btn = if self.browser_show_hidden {
             "[ Hidden: on ]"
         } else {
             "[ Hidden: off ]"
         };
-        ["[ Up ]", mode_btn, hidden_btn, "[ Cancel ]"]
+        if self.browser_origin_is_save {
+            ["[ Use folder ]", "[ Up ]", hidden_btn, "[ Cancel ]"]
+        } else {
+            let mode_btn = match self.browser_mode {
+                crate::ui::popups::file_browser::BrowserMode::Dir => "[ Browse ]",
+                crate::ui::popups::file_browser::BrowserMode::Recent => "[ Recent ]",
+            };
+            ["[ Up ]", mode_btn, hidden_btn, "[ Cancel ]"]
+        }
     }
 
     pub fn wrap_selection_or_cursor(&mut self, before: &str, after: &str) {
@@ -1989,5 +2044,195 @@ mod tests {
         app.open_configure();
         app.open_menu("File");
         assert!(app.active_menu.is_none());
+    }
+
+    #[test]
+    fn save_browser_use_folder_fills_cwd_plus_basename() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog = true;
+        app.file_dialog_is_save = true;
+        app.file_path_input = "/old/path/widget.rs".into();
+        app.browser_origin_is_save = true;
+        app.browser_cwd = PathBuf::from("/tmp/outdir");
+        app.show_file_browser = true;
+
+        app.browser_use_current_folder();
+
+        assert!(!app.show_file_browser);
+        assert_eq!(app.file_path_input, "/tmp/outdir/widget.rs");
+        assert_eq!(app.file_dialog_selected, 0);
+    }
+
+    #[test]
+    fn save_browser_use_folder_falls_back_to_untitled_when_empty() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog = true;
+        app.file_dialog_is_save = true;
+        app.file_path_input.clear();
+        app.browser_origin_is_save = true;
+        app.browser_cwd = PathBuf::from("/tmp/outdir");
+        app.show_file_browser = true;
+
+        app.browser_use_current_folder();
+
+        assert!(!app.show_file_browser);
+        assert_eq!(app.file_path_input, "/tmp/outdir/untitled");
+        assert_eq!(app.file_dialog_selected, 0);
+    }
+
+    #[test]
+    fn save_browser_use_folder_uses_buffer_filename_when_input_empty() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut()
+            .set_path(PathBuf::from("/old/main.rs"));
+        app.file_path_input.clear();
+        app.browser_origin_is_save = true;
+        app.browser_cwd = PathBuf::from("/tmp/outdir");
+        app.show_file_browser = true;
+
+        app.browser_use_current_folder();
+
+        assert_eq!(app.file_path_input, "/tmp/outdir/main.rs");
+    }
+
+    #[test]
+    fn open_browser_confirm_still_ignores_directories() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog = true;
+        app.file_dialog_is_save = false;
+        app.file_path_input.clear();
+        app.browser_origin_is_save = false;
+        app.browser_selected = 0;
+        app.browser_entries = vec![crate::ui::popups::file_browser::BrowserEntry {
+            name: "src".into(),
+            is_dir: true,
+            path: PathBuf::from("/tmp/src"),
+        }];
+        app.show_file_browser = true;
+
+        app.close_file_browser(true);
+
+        assert!(
+            app.file_path_input.is_empty(),
+            "Open must not confirm a directory"
+        );
+        assert!(!app.show_file_browser);
+    }
+
+    #[test]
+    fn open_browser_footer_unchanged() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = false;
+        // Dir mode: index 1 is the toggle *to* Recent, labelled "[ Browse ]"
+        // (existing convention — keep it).
+        assert_eq!(
+            app.browser_footer_labels(),
+            ["[ Up ]", "[ Browse ]", "[ Hidden: off ]", "[ Cancel ]"]
+        );
+    }
+
+    #[test]
+    fn save_browser_footer_is_use_folder_up_hidden_cancel() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = true;
+        assert_eq!(
+            app.browser_footer_labels(),
+            ["[ Use folder ]", "[ Up ]", "[ Hidden: off ]", "[ Cancel ]"]
+        );
+    }
+
+    #[test]
+    fn browser_use_current_folder_is_noop_for_open() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = false;
+        app.file_path_input = "keep-me".into();
+        app.browser_cwd = PathBuf::from("/tmp");
+        app.show_file_browser = true;
+        app.browser_use_current_folder();
+        assert!(app.show_file_browser);
+        assert_eq!(app.file_path_input, "keep-me");
+    }
+
+    #[test]
+    fn save_browser_activate_footer_zero_uses_folder() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = true;
+        app.file_path_input = "notes.md".into();
+        app.browser_cwd = PathBuf::from("/tmp/outdir");
+        app.show_file_browser = true;
+        app.browser_activate_footer(0);
+        assert!(!app.show_file_browser);
+        assert_eq!(app.file_path_input, "/tmp/outdir/notes.md");
+    }
+
+    #[test]
+    fn open_browser_activate_footer_zero_goes_up() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = false;
+        app.browser_cwd = PathBuf::from("/tmp/outdir");
+        app.browser_activate_footer(0);
+        assert_eq!(app.browser_cwd, PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn open_browser_activate_footer_one_toggles_recent() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = false;
+        assert_eq!(
+            app.browser_mode,
+            crate::ui::popups::file_browser::BrowserMode::Dir
+        );
+        app.browser_activate_footer(1);
+        assert_eq!(
+            app.browser_mode,
+            crate::ui::popups::file_browser::BrowserMode::Recent
+        );
+    }
+
+    #[test]
+    fn open_browser_activate_footer_three_cancels() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = false;
+        app.show_file_browser = true;
+        app.file_path_input = "keep".into();
+        app.browser_activate_footer(3);
+        assert!(!app.show_file_browser);
+        assert_eq!(app.file_path_input, "keep");
+    }
+
+    #[test]
+    fn save_browser_activate_footer_one_goes_up() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = true;
+        app.browser_cwd = PathBuf::from("/tmp/outdir");
+        app.browser_activate_footer(1);
+        assert_eq!(app.browser_cwd, PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn save_browser_activate_footer_three_cancels() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = true;
+        app.show_file_browser = true;
+        app.file_path_input = "keep".into();
+        app.browser_activate_footer(3);
+        assert!(!app.show_file_browser);
+        assert_eq!(app.file_path_input, "keep");
+    }
+
+    #[test]
+    fn close_file_browser_file_confirm_focuses_action_button() {
+        let mut app = App::new(&[]);
+        app.file_dialog_selected = 2;
+        app.browser_entries = vec![crate::ui::popups::file_browser::BrowserEntry {
+            name: "a.rs".into(),
+            is_dir: false,
+            path: PathBuf::from("/tmp/a.rs"),
+        }];
+        app.browser_selected = 0;
+        app.show_file_browser = true;
+        app.close_file_browser(true);
+        assert_eq!(app.file_path_input, "/tmp/a.rs");
+        assert_eq!(app.file_dialog_selected, 0);
     }
 }

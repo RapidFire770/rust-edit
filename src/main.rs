@@ -1008,13 +1008,7 @@ fn handle_file_browser_click(x: usize, y: usize, app: &mut App) {
         let list_area = popups::file_browser::list_area(popup);
         if y == footer_y {
             if let Some(idx) = app.browser_button_hover {
-                match idx {
-                    0 => app.browser_go_up(),
-                    1 => app.browser_toggle_mode(),
-                    2 => app.browser_toggle_hidden(),
-                    3 => app.close_file_browser(false),
-                    _ => {}
-                }
+                app.browser_activate_footer(idx);
             }
         } else if y >= list_area.0 && y < list_area.1 {
             // List row click: select + activate (dir enters, file confirms).
@@ -1835,18 +1829,12 @@ fn handle_file_browser_key(code: KeyCode, app: &mut App) {
             };
         }
         KeyCode::Enter => match app.browser_button_selected {
-            0 => app.browser_go_up(),
-            1 => app.browser_toggle_mode(),
-            2 => app.browser_toggle_hidden(),
-            3 => app.close_file_browser(false),
+            0..=3 => app.browser_activate_footer(app.browser_button_selected),
             _ => app.browser_enter_selected(),
         },
         // `l`/Right activate the focused thing (list entry or button).
         KeyCode::Char('l') | KeyCode::Right => match app.browser_button_selected {
-            0 => app.browser_go_up(),
-            1 => app.browser_toggle_mode(),
-            2 => app.browser_toggle_hidden(),
-            3 => app.close_file_browser(false),
+            0..=3 => app.browser_activate_footer(app.browser_button_selected),
             _ => app.browser_enter_selected(),
         },
         // `h`/Left/Backspace/- go up one directory. (Plain `h` only —

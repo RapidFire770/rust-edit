@@ -46,12 +46,16 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Ctrl+W", "Close tab"),
                 ("Ctrl+Q", "Quit"),
                 ("[ Browse… ]", "Open the file browser from Open/Save As"),
-                ("↑/↓ Enter", "Browse: navigate / enter dir or pick file"),
+                (
+                    "[ Use folder ]",
+                    "Save As browse: use the current directory",
+                ),
+                ("↑/↓ Enter", "Browse: navigate / enter dir, or pick a file"),
                 ("Backspace/←/h", "Browse: go up one directory"),
                 ("Ctrl+H", "Browse: toggle hidden files"),
                 (
                     "Tab",
-                    "Browse: cycle footer buttons (Up/Recent/Hidden/Cancel)",
+                    "Browse: cycle footer (Open: Up/Recent; Save As: Use folder)",
                 ),
             ],
         ),
