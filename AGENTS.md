@@ -113,11 +113,13 @@ rust-edit/
 │   ├── buffer.rs              # Buffer struct + Ropey wrapper + editing ops + cursor/selection/scroll
 │   ├── config.rs              # Config loading/saving (toml + XDG)
 │   ├── theme.rs               # Theme struct + color roles + built-in themes + serde
-│   ├── syntax.rs              # Syntect wrapper, highlight_window (one HighlightLines per window)
+│   ├── highlight_cache.rs     # Parse-state checkpoints + overscan span window
+│   ├── syntax.rs              # Syntect wrapper, highlight_range / from_state resume
 │   ├── ui/
 │   │   ├── mod.rs
 │   │   ├── layout.rs          # Ratatui Layout helpers + HEADER_ROWS constant
 │   │   ├── header.rs          # Menu bar + file tabs + [+] button + separator rule + dropdown
+│   │   ├── spans.rs           # Batched paint_line_spans (selection / hscroll / wrap clip)
 │   │   ├── editor.rs          # Main editing view, line numbers, cursor, selection, hscroll
 │   │   ├── status.rs          # Status bar
 │   │   ├── find.rs            # Find/Replace bar (FindState + FindFocus 3-state model)
@@ -142,9 +144,9 @@ rust-edit/
 
 **Key types / established patterns (read before editing these areas):**
 
-- `Buffer` fields: `cursor` (byte offset), `selection` (normalized `Range`) + `selection_anchor` (fixed anchor for bidirectional extend), `scroll_offset` (row, col), `visible_lines`/`visible_width` (synced each frame), `generation` (invalidation key for the highlight cache), `is_initial` (true only for the auto-created untitled placeholder at startup or after closing the last tab; `[+]` tabs stay false). Auto-scroll lives in `adjust_scroll` (vertical+horizontal edge clamping) and `ensure_cursor_*`. File open goes through `App::open_file_in_tab` (duplicate-focus, then in-place placeholder replace, else append).
+- `Buffer` fields: `id` (unique `AtomicU64` identity for the highlight cache key), `cursor` (byte offset), `selection` (normalized `Range`) + `selection_anchor` (fixed anchor for bidirectional extend), `scroll_offset` (row, col), `visible_lines`/`visible_width` (synced each frame), `generation` (invalidation key for the highlight cache), `is_initial` (true only for the auto-created untitled placeholder at startup or after closing the last tab; `[+]` tabs stay false). Auto-scroll lives in `adjust_scroll` (vertical+horizontal edge clamping) and `ensure_cursor_*`. File open goes through `App::open_file_in_tab` (duplicate-focus, then in-place placeholder replace, else append).
 - `FindState.focus: FindFocus` — a 3-state model (Query → Replace → Command) so letters like `n`/`N` type normally into the boxes and navigate only in Command mode.
-- Syntax highlighting: `app.refresh_highlight_cache()` recomputes a visible window only on edit/scroll/language change; `editor.rs` reads the cache. One `HighlightLines` per window (multi-line constructs stay correct).
+- Syntax highlighting: `HighlightCache` (`src/highlight_cache.rs`) stores syntect `ParseState`/`HighlightState` checkpoints every 64 lines plus an overscanned span window and a frontier. `App::refresh_highlight_cache` is a cache fill, not a full viewport reparse. Scrolling inside the padded window is a hit. Mid-file multi-line constructs resume from the last checkpoint — never `HighlightLines::new` at the viewport. Cache key is `(language, generation, Buffer.id)` so two gen-0 tabs cannot alias. Syntect rayon-style parallel highlighting is not used for a single buffer (grammars are sequential). A background highlight thread is deferred until large-file *jumps* still hitch after checkpoints exist. `editor.rs` reads `line_spans` and paints via `ui::spans::paint_line_spans` (batched tokens, not per-character Spans).
 - Event coalescing: `run_app` drains queued events and sums consecutive mouse-wheel deltas into one scroll → one redraw per burst.
 - Popup focus: at most one centered popup owns input (`App::popup_focus`). Other popups cannot open. Global shortcuts are swallowed except Ctrl+Q. Quit confirm paints last and stacks on top of the current popup without dismissing it. File browser may stack only on the file dialog (Browse…). Mouse and wheel follow `popup_focus`, not independent `show_*` flags.
 

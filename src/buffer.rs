@@ -6,6 +6,13 @@
 use ropey::Rope;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_buffer_id() -> u64 {
+    NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
@@ -84,6 +91,9 @@ pub struct Buffer {
     /// Used as an invalidation key by the highlight cache so spans are only recomputed
     /// on edit or scroll into new lines (see AGENTS §6 "Syntax Highlighting").
     pub generation: u64,
+    /// Unique identity for this buffer instance. Used as the highlight-cache
+    /// `source` so two gen-0 files cannot alias each other.
+    pub id: u64,
 
     /// Undo stack (full state snapshots for robust undo of text + caret + view).
     #[allow(clippy::type_complexity)]
@@ -117,6 +127,7 @@ impl Buffer {
             visible_lines: 20,
             visible_width: 80,
             generation: 0,
+            id: next_buffer_id(),
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
             max_undo: 100,
@@ -149,6 +160,7 @@ impl Buffer {
             visible_lines: 20,
             visible_width: 80,
             generation: 0,
+            id: next_buffer_id(),
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
             max_undo: 100,
@@ -611,7 +623,7 @@ impl Buffer {
 
     /// Mark the buffer's text as changed so the highlight cache invalidates.
     /// Called from every mutation. Pure view/navigation ops must NOT call this.
-    fn bump_generation(&mut self) {
+    pub(crate) fn bump_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
     }
 
