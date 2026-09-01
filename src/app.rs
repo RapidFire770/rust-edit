@@ -612,6 +612,7 @@ impl App {
             buf.cursor = buf.cursor.min(buf.rope.len_bytes());
             buf.selection = None;
             buf.is_modified = true;
+            buf.bump_generation();
         }
         self.update_find_matches();
     }
@@ -1298,6 +1299,7 @@ impl App {
             buf.cursor += before.len();
             buf.is_modified = true;
         }
+        buf.bump_generation();
     }
 
     /// Shared logic for Quit (menu or Ctrl+Q): show confirm if unsaved, else set flag.
@@ -1542,6 +1544,50 @@ mod tests {
         app.replace_current();
         // First match ("Test") is replaced; "Testing" is untouched (substring).
         assert_eq!(app.active_buffer().text(), "Hello Testing");
+    }
+
+    #[test]
+    fn replace_all_bumps_generation_and_invalidates_highlights() {
+        // Regression: replace-all used to assign a new rope without bumping
+        // generation, so HighlightCache treated the fill as a hit and kept
+        // painting pre-replace Span content.
+        let mut app = app_with_find("foo foo", "foo", "bar");
+        let gen_before = app.active_buffer().generation;
+        app.refresh_highlight_cache(0, 5);
+        let old = app.highlight_cache.line_spans(0).map(|s| {
+            s.iter()
+                .map(|sp| sp.content.to_string())
+                .collect::<String>()
+        });
+        app.replace_all();
+        assert_ne!(app.active_buffer().generation, gen_before);
+        app.refresh_highlight_cache(0, 5);
+        let new = app.highlight_cache.line_spans(0).map(|s| {
+            s.iter()
+                .map(|sp| sp.content.to_string())
+                .collect::<String>()
+        });
+        assert!(
+            new.as_ref().is_some_and(|s| s.contains("bar")),
+            "highlight cache must show replaced text, got {new:?}"
+        );
+        assert!(
+            old.as_ref().is_some_and(|s| s.contains("foo")),
+            "pre-replace spans must still contain the original query, got {old:?}"
+        );
+    }
+
+    #[test]
+    fn markdown_wrap_bumps_generation() {
+        // Regression: wrap used insert_at_byte/remove_byte_range which do not
+        // bump generation (indent/newline bump once at the end instead).
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("hi");
+        let g = app.active_buffer().generation;
+        app.active_buffer_mut().selection = Some(0..2);
+        app.wrap_selection_or_cursor("**", "**");
+        assert_ne!(app.active_buffer().generation, g);
+        assert_eq!(app.active_buffer().text(), "**hi**");
     }
 
     // ----- File browser navigation regressions -----

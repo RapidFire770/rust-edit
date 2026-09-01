@@ -623,7 +623,7 @@ impl Buffer {
 
     /// Mark the buffer's text as changed so the highlight cache invalidates.
     /// Called from every mutation. Pure view/navigation ops must NOT call this.
-    fn bump_generation(&mut self) {
+    pub(crate) fn bump_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
     }
 
