@@ -2557,6 +2557,11 @@ mod popup_mouse_focus_tests {
     fn configure_tab_size_mouse_arrows_step_up_and_down() {
         let mut app = App::new(&[]);
         app.open_configure();
+        // Pin in-memory only: App::new() loads the user's XDG config, which may
+        // not be the crate default of 4. Clicks persist via set_tab_size; restore
+        // the original value when the test finishes.
+        let saved_tab = app.config.tab_size;
+        app.config.tab_size = 4;
         assert_eq!(app.config.tab_size, 4);
 
         // Default 80x24 terminal (crossterm::terminal::size() falls back to this
@@ -2589,5 +2594,7 @@ mod popup_mouse_focus_tests {
             handle_mouse(left_down(inc_x, row_y), &mut app);
         }
         assert_eq!(app.config.tab_size, 8);
+
+        app.config.set_tab_size(saved_tab);
     }
 }
