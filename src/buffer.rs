@@ -14,6 +14,10 @@ fn next_buffer_id() -> u64 {
     NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+fn indent_unit(tab_size: u8) -> String {
+    " ".repeat(tab_size.max(1) as usize)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
     #[default]
@@ -683,8 +687,40 @@ impl Buffer {
         }
     }
 
+    /// Display column of the caret on its line. Tabs advance to the next
+    /// multiple of `tab_size` (same rule as `wrap.rs`); every other char is 1.
+    fn display_col_at_cursor(&self, tab_size: u8) -> usize {
+        let tab = tab_size.max(1) as usize;
+        if self.rope.len_bytes() == 0 {
+            return 0;
+        }
+        let pos = self.cursor.min(self.rope.len_bytes());
+        let line = self.rope.byte_to_line(pos);
+        let start = self.rope.line_to_byte(line);
+        let mut col = 0usize;
+        for ch in self.rope.byte_slice(start..pos).chars() {
+            col += if ch == '\t' { tab - (col % tab) } else { 1 };
+        }
+        col
+    }
+
+    /// Insert spaces at the caret to the next tab stop of `tab_size`.
+    /// A non-empty selection indents every touched line instead.
+    pub fn insert_tab(&mut self, tab_size: u8) {
+        if let Some(sel) = &self.selection {
+            if sel.start != sel.end {
+                self.indent(tab_size);
+                return;
+            }
+        }
+        let tab = tab_size.max(1) as usize;
+        let col = self.display_col_at_cursor(tab_size);
+        let n = tab - (col % tab);
+        self.insert(&" ".repeat(n));
+    }
+
     /// Smart indent on newline: insert \n + copy leading ws from current line + extra indent if appropriate.
-    pub fn newline_with_indent(&mut self) {
+    pub fn newline_with_indent(&mut self, tab_size: u8) {
         self.push_undo();
         self.selection_anchor = None;
 
@@ -704,8 +740,7 @@ impl Buffer {
 
         let mut insert_text = String::from("\n") + &leading_ws;
         if increase {
-            // Use 4 spaces or tab? For now always 4 spaces (config driven later).
-            insert_text.push_str("    ");
+            insert_text.push_str(&indent_unit(tab_size));
         }
 
         if let Some(sel) = self.selection.take() {
@@ -723,8 +758,8 @@ impl Buffer {
         self.adjust_scroll();
     }
 
-    /// Indent current line or selection by one level (4 spaces).
-    pub fn indent(&mut self) {
+    /// Indent current line or selection by one level (`tab_size` spaces).
+    pub fn indent(&mut self, tab_size: u8) {
         self.push_undo();
         // Simplified: indent whole lines touched by selection or cursor line
         let cursor_line = if let Some(sel) = &self.selection {
@@ -741,25 +776,22 @@ impl Buffer {
             (cursor_line, cursor_line)
         };
 
-        let cursor_byte = self.cursor;
-        let cursor_line_start = self.rope.line_to_byte(cursor_line);
+        let unit = indent_unit(tab_size);
+        let n = unit.len();
 
         for l in (start_line..=end_line).rev() {
             let line_start = self.rope.line_to_byte(l);
-            self.insert_at_byte(line_start, "    ");
-        }
-
-        // Adjust cursor position: only move if cursor is on an indented line and after the insertion point
-        if cursor_line >= start_line && cursor_line <= end_line {
-            if cursor_byte > cursor_line_start {
-                // Cursor is after the line start, so it moved right by 4 chars per indented line
-                let num_indented = (end_line - start_line + 1) as isize;
-                self.cursor = cursor_byte + (4 * num_indented) as usize;
-            } else {
-                // Cursor is at or before line start (e.g., at beginning of line)
-                // It should stay at the new line start position
-                let num_indented = (end_line - start_line + 1) as isize;
-                self.cursor = cursor_line_start + (4 * num_indented) as usize;
+            self.insert_at_byte(line_start, &unit);
+            if self.cursor >= line_start {
+                self.cursor += n;
+            }
+            if let Some(sel) = &mut self.selection {
+                if sel.start >= line_start {
+                    sel.start += n;
+                }
+                if sel.end >= line_start {
+                    sel.end += n;
+                }
             }
         }
         self.is_modified = true;
@@ -767,8 +799,8 @@ impl Buffer {
         self.adjust_scroll();
     }
 
-    /// Dedent current line or selection (remove up to 4 leading spaces).
-    pub fn dedent(&mut self) {
+    /// Dedent current line or selection (remove up to `tab_size` leading spaces).
+    pub fn dedent(&mut self, tab_size: u8) {
         self.push_undo();
         let cursor_line = if let Some(sel) = &self.selection {
             self.rope.byte_to_line(sel.start)
@@ -789,7 +821,11 @@ impl Buffer {
         for l in (start_line..=end_line).rev() {
             let line_start = self.rope.line_to_byte(l);
             let line_text = self.line(l);
-            let leading = line_text.chars().take_while(|c| *c == ' ').count().min(4);
+            let leading = line_text
+                .chars()
+                .take_while(|c| *c == ' ')
+                .count()
+                .min(tab_size.max(1) as usize);
             if leading > 0 {
                 let remove_end = line_start + leading;
                 self.remove_byte_range(line_start, remove_end);
@@ -1120,9 +1156,95 @@ mod tests {
     fn smart_indent_basic() {
         let mut b = Buffer::from_str("def foo():", None);
         b.cursor = b.rope.len_bytes();
-        b.newline_with_indent();
+        b.newline_with_indent(4);
         assert!(b.text().starts_with("def foo():\n    "));
         assert!(b.cursor_position().1 >= 4);
+    }
+
+    #[test]
+    fn insert_tab_at_caret_mid_line_uses_tab_stop() {
+        let mut b = Buffer::from_str("abcd", None);
+        b.cursor = 2; // "ab|cd"
+        b.insert_tab(4);
+        assert_eq!(b.text(), "ab  cd");
+        assert_eq!(b.cursor, 4);
+    }
+
+    #[test]
+    fn insert_tab_at_eol_extends_line() {
+        let mut b = Buffer::from_str("abcd", None);
+        b.cursor = 4; // "abcd|"
+        b.insert_tab(4);
+        assert_eq!(b.text(), "abcd    ");
+        assert_eq!(b.cursor, 8);
+    }
+
+    #[test]
+    fn insert_tab_honors_configured_width() {
+        let mut b = Buffer::from_str("ab", None);
+        b.cursor = 2;
+        b.insert_tab(2);
+        assert_eq!(b.text(), "ab  ");
+        assert_eq!(b.cursor, 4);
+    }
+
+    #[test]
+    fn insert_tab_at_col_zero_inserts_at_start() {
+        let mut b = Buffer::from_str("hello", None);
+        b.cursor = 0;
+        b.insert_tab(4);
+        assert_eq!(b.text(), "    hello");
+        assert_eq!(b.cursor, 4);
+    }
+
+    #[test]
+    fn indent_and_smart_newline_use_tab_size() {
+        let mut b = Buffer::from_str("hello", None);
+        b.cursor = 0;
+        b.indent(2);
+        assert_eq!(b.text(), "  hello");
+
+        let mut b = Buffer::from_str("def foo():", None);
+        b.cursor = b.rope.len_bytes();
+        b.newline_with_indent(2);
+        assert!(b.text().starts_with("def foo():\n  "));
+    }
+
+    #[test]
+    fn insert_tab_with_multiline_selection_indents_lines() {
+        let mut b = Buffer::from_str("one\ntwo\n", None);
+        b.selection = Some(0..7); // both lines
+        b.cursor = 7;
+        b.insert_tab(4);
+        assert_eq!(b.text(), "    one\n    two\n");
+    }
+
+    #[test]
+    fn insert_tab_with_single_line_selection_indents_not_replaces() {
+        let mut b = Buffer::from_str("hello", None);
+        b.selection = Some(0..5);
+        b.cursor = 5;
+        b.insert_tab(4);
+        assert_eq!(b.text(), "    hello");
+    }
+
+    #[test]
+    fn insert_tab_selection_ending_on_newline_still_indents() {
+        // Shift+Down from col 0 on "one\ntwo" selects "one\n" (still one
+        // logical end-line after saturating_sub(1)). Must indent, not join.
+        let mut b = Buffer::from_str("one\ntwo", None);
+        b.selection = Some(0..4);
+        b.cursor = 4;
+        b.insert_tab(4);
+        assert_eq!(b.text(), "    one\ntwo");
+    }
+
+    #[test]
+    fn dedent_strips_up_to_tab_size() {
+        let mut b = Buffer::from_str("      hello", None);
+        b.cursor = 6;
+        b.dedent(4);
+        assert_eq!(b.text(), "  hello");
     }
 
     #[test]
@@ -1304,11 +1426,11 @@ mod tests {
         assert_eq!(b.generation, g0 + 1, "insert bumps generation");
         b.backspace();
         assert_eq!(b.generation, g0 + 2, "backspace bumps generation");
-        b.newline_with_indent();
+        b.newline_with_indent(4);
         assert_eq!(b.generation, g0 + 3, "newline bumps generation");
-        b.indent();
+        b.indent(4);
         assert_eq!(b.generation, g0 + 4, "indent bumps generation");
-        b.dedent();
+        b.dedent(4);
         assert_eq!(b.generation, g0 + 5, "dedent bumps generation");
 
         // delete bumps only when it actually removes something.

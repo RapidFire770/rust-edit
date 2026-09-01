@@ -59,7 +59,8 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
             "Edit",
             vec![
                 ("Enter", "Newline + smart indent"),
-                ("Tab / Shift+Tab", "Indent / dedent"),
+                ("Tab", "Insert spaces at cursor (to next tab stop)"),
+                ("Shift+Tab", "Dedent line / selection"),
                 ("Backspace / Delete", "Delete char"),
                 ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
                 ("Ctrl+X / Ctrl+C / Ctrl+V", "Cut / copy / paste"),

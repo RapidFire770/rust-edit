@@ -38,6 +38,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
    - The Design Spec is the historical source of intent; this AGENTS.md reflects the *current* agreed scope. Where they differ, AGENTS.md wins:
      - **Markdown rendered preview was removed.** Markdown files keep source syntax highlighting and the `Ctrl+B/I/\`` formatting inserters, but the pulldown-cmark split-preview pane was deleted (the rendering was incomplete and editing in the source pane was awkward). Re-adding a preview requires a new design decision.
      - **Single Find/Replace shortcut (**`Ctrl+F`**)** — the bar has query/replace fields reachable via Tab, so a separate `Ctrl+H` was dropped.
+     - **Tab at caret inserts spaces** — Design Spec §7 said Tab/Shift+Tab indent/dedent the line. Caret Tab now inserts spaces at the cursor to the next tab stop of `config.tab_size`. Multi-line selections still indent; Shift+Tab still dedents. Smart-indent extra width on Enter also uses `tab_size` (no more hardcoded 4).
    - LSP is Phase 2+ only.
    - Printing/PDF export is future-only.
    - If the spec is unclear, ask before coding.
@@ -250,7 +251,7 @@ Do **not** ask for every tiny decision. Propose and note the reasoning.
 ### Smart Indent on Enter
 
 - In `buffer.rs`: on newline, copy leading whitespace from previous line.
-- Then apply simple language-aware rules (increase after `{`, `:` for Python, etc.).
+- Then apply simple language-aware rules (increase after `{`, `:` for Python, etc.) using `config.tab_size` spaces.
 - Use the detected `Language` enum. Keep rules small and testable.
 - Do **not** implement full tree-sitter indent queries in MVP unless the `ratatui-code-editor` route is taken.
 

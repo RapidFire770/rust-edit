@@ -673,7 +673,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 app.active_buffer_mut().insert_char(ch);
                             }
                             KeyCode::Enter => {
-                                app.active_buffer_mut().newline_with_indent();
+                                let tab = app.config.tab_size;
+                                app.active_buffer_mut().newline_with_indent(tab);
                             }
                             KeyCode::Backspace => {
                                 app.active_buffer_mut().backspace();
@@ -750,7 +751,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 }
                             }
                             KeyCode::Tab => {
-                                app.active_buffer_mut().indent();
+                                let tab = app.config.tab_size;
+                                app.active_buffer_mut().insert_tab(tab);
+                            }
+                            KeyCode::BackTab => {
+                                let tab = app.config.tab_size;
+                                app.active_buffer_mut().dedent(tab);
                             }
                             KeyCode::Esc => {
                                 app.active_buffer_mut().selection = None;
