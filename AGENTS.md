@@ -38,7 +38,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
    - The Design Spec is the historical source of intent; this AGENTS.md reflects the *current* agreed scope. Where they differ, AGENTS.md wins:
      - **Markdown rendered preview was removed.** Markdown files keep source syntax highlighting and the `Ctrl+B/I/\`` formatting inserters, but the pulldown-cmark split-preview pane was deleted (the rendering was incomplete and editing in the source pane was awkward). Re-adding a preview requires a new design decision.
      - **Single Find/Replace shortcut (**`Ctrl+F`**)** — the bar has query/replace fields reachable via Tab, so a separate `Ctrl+H` was dropped.
-     - **Tab at caret inserts spaces** — Design Spec §7 said Tab/Shift+Tab indent/dedent the line. Caret Tab now inserts spaces at the cursor to the next tab stop of `config.tab_size`. Multi-line selections still indent; Shift+Tab still dedents. Smart-indent extra width on Enter also uses `tab_size` (no more hardcoded 4).
+     - **Tab at caret inserts spaces** — Design Spec §7 said Tab/Shift+Tab indent/dedent the line. Caret Tab now inserts `config.tab_size` spaces at the cursor (always the full width, not a remainder to the next tab stop). Non-empty selections still indent; Shift+Tab still dedents. Smart-indent extra width on Enter also uses `tab_size` (no more hardcoded 4).
    - LSP is Phase 2+ only.
    - Printing/PDF export is future-only.
    - If the spec is unclear, ask before coding.

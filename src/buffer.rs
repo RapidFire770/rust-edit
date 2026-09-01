@@ -687,25 +687,8 @@ impl Buffer {
         }
     }
 
-    /// Display column of the caret on its line. Tabs advance to the next
-    /// multiple of `tab_size` (same rule as `wrap.rs`); every other char is 1.
-    fn display_col_at_cursor(&self, tab_size: u8) -> usize {
-        let tab = tab_size.max(1) as usize;
-        if self.rope.len_bytes() == 0 {
-            return 0;
-        }
-        let pos = self.cursor.min(self.rope.len_bytes());
-        let line = self.rope.byte_to_line(pos);
-        let start = self.rope.line_to_byte(line);
-        let mut col = 0usize;
-        for ch in self.rope.byte_slice(start..pos).chars() {
-            col += if ch == '\t' { tab - (col % tab) } else { 1 };
-        }
-        col
-    }
-
-    /// Insert spaces at the caret to the next tab stop of `tab_size`.
-    /// A non-empty selection indents every touched line instead.
+    /// Insert `tab_size` spaces at the caret. A non-empty selection indents
+    /// every touched line instead.
     pub fn insert_tab(&mut self, tab_size: u8) {
         if let Some(sel) = &self.selection {
             if sel.start != sel.end {
@@ -713,10 +696,7 @@ impl Buffer {
                 return;
             }
         }
-        let tab = tab_size.max(1) as usize;
-        let col = self.display_col_at_cursor(tab_size);
-        let n = tab - (col % tab);
-        self.insert(&" ".repeat(n));
+        self.insert(&indent_unit(tab_size));
     }
 
     /// Smart indent on newline: insert \n + copy leading ws from current line + extra indent if appropriate.
@@ -1162,12 +1142,21 @@ mod tests {
     }
 
     #[test]
-    fn insert_tab_at_caret_mid_line_uses_tab_stop() {
+    fn insert_tab_at_caret_mid_line_inserts_full_tab_size() {
         let mut b = Buffer::from_str("abcd", None);
         b.cursor = 2; // "ab|cd"
         b.insert_tab(4);
-        assert_eq!(b.text(), "ab  cd");
-        assert_eq!(b.cursor, 4);
+        assert_eq!(b.text(), "ab    cd");
+        assert_eq!(b.cursor, 6);
+    }
+
+    #[test]
+    fn insert_tab_at_odd_column_still_inserts_full_width() {
+        let mut b = Buffer::from_str("abc", None);
+        b.cursor = 1; // "a|bc"
+        b.insert_tab(4);
+        assert_eq!(b.text(), "a    bc");
+        assert_eq!(b.cursor, 5);
     }
 
     #[test]
