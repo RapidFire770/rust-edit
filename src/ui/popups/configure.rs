@@ -30,6 +30,15 @@ pub const ROW_MOUSE: usize = 3;
 pub const POPUP_W: u16 = 46;
 pub const POPUP_H: u16 = 11;
 
+// Row content geometry, shared by the render loop and the mouse hit-test so
+// they cannot drift apart. Each row is: prefix + padded label + value.
+const PREFIX_LEN: u16 = 2; // "> " (active) / "  " (inactive)
+const LABEL_LEN: u16 = 14; // fixed padded label width
+                           // The tab-size value is "< N >" (N is 1..=8, always one digit). Offsets from
+                           // the value's start column.
+const TAB_DEC_OFFSET: u16 = 0; // "<"
+const TAB_INC_OFFSET: u16 = 4; // ">"
+
 /// Centered popup rect. Exposed for the mouse handler.
 pub fn configure_rect(area: Rect) -> Rect {
     let x = (area.width.saturating_sub(POPUP_W)) / 2;
@@ -54,6 +63,14 @@ pub fn footer_row_y(popup: Rect) -> u16 {
 pub fn row_ys(popup: Rect) -> [u16; ROW_COUNT] {
     let start = popup.y + 1 + 1 + 1; // border + title + blank
     [start, start + 1, start + 2, start + 3]
+}
+
+/// Screen x of the tab-size row's "<" (decrease) and ">" (increase) arrows.
+/// Returns `(decrease_x, increase_x)`.
+pub fn tab_size_arrow_xs(popup: Rect) -> (u16, u16) {
+    let inner_x = popup.x + 1; // 1-cell border
+    let value_x = inner_x + PREFIX_LEN + LABEL_LEN;
+    (value_x + TAB_DEC_OFFSET, value_x + TAB_INC_OFFSET)
 }
 
 pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
@@ -100,7 +117,7 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
         let label_style = if active { accent } else { dim };
         let value_style = if active { accent } else { dim };
         // Pad label to align the value column at a fixed x.
-        let label_padded = format!("{:<14}", label);
+        let label_padded = format!("{:width$}", label, width = LABEL_LEN as usize);
         lines.push(Line::from(vec![
             Span::styled(if active { "> " } else { "  " }, label_style),
             Span::styled(label_padded, label_style),

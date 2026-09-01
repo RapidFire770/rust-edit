@@ -129,6 +129,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Click + drag", "Place cursor / select text"),
                 ("Scroll wheel", "Scroll vertically"),
                 ("Click buttons", "Click any [ button ] in popups"),
+                ("Click < / >", "Step tab size in Configure"),
             ],
         ),
     ]

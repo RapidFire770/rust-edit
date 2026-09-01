@@ -1059,8 +1059,22 @@ fn handle_configure_click(x: usize, y: usize, app: &mut App) {
         let row_ys = popups::configure::row_ys(popup);
         for (i, &ry) in row_ys.iter().enumerate() {
             if y as u16 == ry {
-                // Any row click toggles/steps that row (tab size steps +1).
-                app.configure_toggle(i);
+                if i == popups::configure::ROW_TAB_SIZE {
+                    // Tab size: click "<" to decrease, ">" to increase.
+                    let (dec_x, inc_x) = popups::configure::tab_size_arrow_xs(popup);
+                    let delta = if x as u16 == dec_x {
+                        -1
+                    } else if x as u16 == inc_x {
+                        1
+                    } else {
+                        0
+                    };
+                    if delta != 0 {
+                        app.configure_adjust(i, delta);
+                    }
+                } else {
+                    app.configure_toggle(i);
+                }
                 app.configure_selected = i;
             }
         }
@@ -2536,5 +2550,43 @@ mod popup_mouse_focus_tests {
         // leftover menu was not closed by handle_menu_action.
         assert_eq!(app.buffers.len(), 1);
         assert_eq!(app.active_menu.as_deref(), Some("File"));
+    }
+
+    #[test]
+    fn configure_tab_size_mouse_arrows_step_up_and_down() {
+        let mut app = App::new(&[]);
+        app.open_configure();
+        assert_eq!(app.config.tab_size, 4);
+
+        // Default 80x24 terminal (crossterm::terminal::size() falls back to this
+        // in tests), matching handle_configure_click's own lookup.
+        let term_area = Rect::new(0, 0, 80, 24);
+        let popup = popups::configure::configure_rect(term_area);
+        let (dec_x, inc_x) = popups::configure::tab_size_arrow_xs(popup);
+        let row_y = popups::configure::row_ys(popup)[popups::configure::ROW_TAB_SIZE];
+
+        // Click ">" -> increase.
+        handle_mouse(left_down(inc_x, row_y), &mut app);
+        assert_eq!(app.config.tab_size, 5);
+
+        // Click "<" -> decrease.
+        handle_mouse(left_down(dec_x, row_y), &mut app);
+        assert_eq!(app.config.tab_size, 4);
+
+        // Click the number (between the arrows) -> no change.
+        handle_mouse(left_down((dec_x + inc_x) / 2, row_y), &mut app);
+        assert_eq!(app.config.tab_size, 4);
+
+        // Clamp low: click "<" until it bottoms out at 1.
+        for _ in 0..10 {
+            handle_mouse(left_down(dec_x, row_y), &mut app);
+        }
+        assert_eq!(app.config.tab_size, 1);
+
+        // Clamp high: click ">" until it tops out at 8.
+        for _ in 0..10 {
+            handle_mouse(left_down(inc_x, row_y), &mut app);
+        }
+        assert_eq!(app.config.tab_size, 8);
     }
 }

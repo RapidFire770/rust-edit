@@ -3,7 +3,7 @@
 - [x] For find and replace there is an issue with how it finds words. For example the word "Test" should not be equal to "Testing" but when finding or replacing the word "Test" with something like "Hello" the word "Testing" would become "Helloing". Capitalization of words is also not taken into account for words, this should probably be a user toggle. If the replace box is blank/empty and the user hits enter it should not delete/remove/replace the word with a blank/empty space.
 - [x] When the file name is to long it pushes the other information on the bottom bar off the screen depending on the current window size. The file name should be shortened/partially hidden if it to long so that the other information stays visible on the screen.
 - [x] In the setting’s configure popup window toggle and close buttons highlighting does not function as intended. When hovering over the close button it highlights properly and un-highlights when the mouse moves off. The toggle button stays constantly highlighted red no matter if the mouse is over it or not.
-- [ ] Configure popup tab size option can be increased with the mouse but not decreased.
+- [x] Configure popup tab size option can be increased with the mouse but not decreased.
 - [ ] Edit / new theme not working. Cannot select any colors to change or type color values.
     - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value.
 - [ ] In the file browser window when mouse is outside the popup it still scrolls the files list.
