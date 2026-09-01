@@ -99,6 +99,8 @@ pub struct App {
     pub browser_button_selected: usize,
     /// Remembers whether the browser was launched from Save As (true) or Open.
     pub browser_origin_is_save: bool,
+    /// Save As only: filename typed in the browser Name field (not a path).
+    pub browser_filename: String,
     /// Mouse position tracking
     pub last_mouse_pos: Option<(u16, u16)>,
     /// True while the left mouse button is held down in the editor area after
@@ -206,6 +208,7 @@ impl App {
             browser_button_hover: None,
             browser_button_selected: 0,
             browser_origin_is_save: false,
+            browser_filename: String::new(),
             last_mouse_pos: None,
             mouse_drag_active: false,
             scrollbar_drag_active: false,
@@ -1037,8 +1040,22 @@ impl App {
         self.browser_selected = 0;
         self.browser_list_hover = None;
         self.browser_error = None;
-        self.browser_button_selected = 4; // 4 = "list area" sentinel (see main.rs keys)
+        self.browser_button_selected = crate::ui::popups::file_browser::FOCUS_LIST;
         self.browser_button_hover = None;
+        self.browser_filename = Path::new(self.file_path_input.trim())
+            .file_name()
+            .filter(|n| !n.is_empty())
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|s| crate::ui::popups::file_browser::is_valid_save_filename(s))
+            .or_else(|| {
+                self.active_buffer()
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .filter(|s| crate::ui::popups::file_browser::is_valid_save_filename(s))
+            })
+            .unwrap_or_default();
 
         let start_dir = self
             .active_buffer()
@@ -1087,30 +1104,36 @@ impl App {
         self.browser_list_hover = None;
     }
 
-    /// Confirm the current directory as the Save As destination.
-    /// No-op if the browser was launched from Open (folder pick is Save-only).
+    /// Confirm the current directory as the Save As destination, joined with
+    /// the Name field. No-op if launched from Open. Empty / invalid names stay
+    /// in the browser and focus the Name field — never invent "untitled".
     pub fn browser_use_current_folder(&mut self) {
         if !self.browser_origin_is_save {
             return;
         }
-        let fallback = self
-            .active_buffer()
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "untitled".to_string());
-        self.file_path_input = crate::ui::popups::file_browser::compose_save_path(
-            &self.browser_cwd,
-            &self.file_path_input,
-            &fallback,
-        )
-        .to_string_lossy()
-        .into_owned();
+        let name = self.browser_filename.trim();
+        if !crate::ui::popups::file_browser::is_valid_save_filename(name) {
+            self.browser_error = Some("Enter a filename in the Name field".to_string());
+            self.browser_button_selected = crate::ui::popups::file_browser::FOCUS_FILENAME;
+            return;
+        }
+        self.file_path_input = self.browser_cwd.join(name).to_string_lossy().into_owned();
         self.show_file_browser = false;
         self.browser_list_hover = None;
         self.file_dialog_selected = 0;
+    }
+
+    pub fn browser_filename_push(&mut self, ch: char) {
+        if ch.is_control() || ch == '/' || ch == '\\' {
+            return;
+        }
+        self.browser_filename.push(ch);
+        self.browser_error = None;
+    }
+
+    pub fn browser_filename_backspace(&mut self) {
+        self.browser_filename.pop();
+        self.browser_error = None;
     }
 
     /// Activate a footer button by index. Indices match `browser_footer_labels()`.
@@ -2051,9 +2074,9 @@ mod tests {
         let mut app = App::new(&[]);
         app.show_file_dialog = true;
         app.file_dialog_is_save = true;
-        app.file_path_input = "/old/path/widget.rs".into();
         app.browser_origin_is_save = true;
         app.browser_cwd = PathBuf::from("/tmp/outdir");
+        app.browser_filename = "widget.rs".into();
         app.show_file_browser = true;
 
         app.browser_use_current_folder();
@@ -2064,35 +2087,58 @@ mod tests {
     }
 
     #[test]
-    fn save_browser_use_folder_falls_back_to_untitled_when_empty() {
+    fn save_browser_use_folder_empty_name_stays_open_without_untitled() {
         let mut app = App::new(&[]);
         app.show_file_dialog = true;
         app.file_dialog_is_save = true;
         app.file_path_input.clear();
         app.browser_origin_is_save = true;
         app.browser_cwd = PathBuf::from("/tmp/outdir");
+        app.browser_filename.clear();
         app.show_file_browser = true;
 
         app.browser_use_current_folder();
 
-        assert!(!app.show_file_browser);
-        assert_eq!(app.file_path_input, "/tmp/outdir/untitled");
-        assert_eq!(app.file_dialog_selected, 0);
+        assert!(
+            app.show_file_browser,
+            "empty Name field must not confirm the folder"
+        );
+        assert!(
+            !app.file_path_input.contains("untitled"),
+            "must not invent untitled; got {:?}",
+            app.file_path_input
+        );
+        assert_eq!(
+            app.browser_button_selected,
+            crate::ui::popups::file_browser::FOCUS_FILENAME
+        );
+        assert!(app
+            .browser_error
+            .as_deref()
+            .is_some_and(|e| e.contains("filename")));
     }
 
     #[test]
-    fn save_browser_use_folder_uses_buffer_filename_when_input_empty() {
+    fn save_browser_open_seeds_filename_from_path_input() {
         let mut app = App::new(&[]);
-        app.active_buffer_mut()
-            .set_path(PathBuf::from("/old/main.rs"));
-        app.file_path_input.clear();
-        app.browser_origin_is_save = true;
-        app.browser_cwd = PathBuf::from("/tmp/outdir");
-        app.show_file_browser = true;
+        app.show_file_dialog(true);
+        app.file_path_input = "/old/path/widget.rs".into();
+        app.open_file_browser();
+        assert_eq!(app.browser_filename, "widget.rs");
+    }
 
-        app.browser_use_current_folder();
-
-        assert_eq!(app.file_path_input, "/tmp/outdir/main.rs");
+    #[test]
+    fn save_browser_open_seeds_empty_filename_for_untitled_buffer() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog(true);
+        assert!(app.active_buffer().path.is_none());
+        assert!(app.file_path_input.is_empty());
+        app.open_file_browser();
+        assert!(
+            app.browser_filename.is_empty(),
+            "new buffers must not seed untitled; got {:?}",
+            app.browser_filename
+        );
     }
 
     #[test]
@@ -2157,7 +2203,7 @@ mod tests {
     fn save_browser_activate_footer_zero_uses_folder() {
         let mut app = App::new(&[]);
         app.browser_origin_is_save = true;
-        app.file_path_input = "notes.md".into();
+        app.browser_filename = "notes.md".into();
         app.browser_cwd = PathBuf::from("/tmp/outdir");
         app.show_file_browser = true;
         app.browser_activate_footer(0);

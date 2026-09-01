@@ -849,6 +849,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
         Some(PopupFocus::FileBrowser) => {
             let popup = popups::file_browser::file_browser_rect(term_area);
             let btn_y = popups::file_browser::footer_button_row(popup) as usize;
+            let name_y = popups::file_browser::filename_row(popup) as usize;
             if y as usize == btn_y {
                 let labels = app.browser_footer_labels();
                 let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x + 1, &labels);
@@ -861,12 +862,15 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
                 if let Some(idx) = hit {
                     app.browser_button_selected = idx;
                 }
+            } else if app.browser_origin_is_save && y as usize == name_y {
+                app.browser_button_selected = popups::file_browser::FOCUS_FILENAME;
+                app.browser_list_hover = None;
             }
 
             // List-row hover preview. Uses the same row->index math as the click
             // handler so the highlighted row is always the one that would activate
             // on a click. Entries past the last row (blank padding) yield None.
-            let area = popups::file_browser::list_area(popup);
+            let area = popups::file_browser::list_area(popup, app.browser_origin_is_save);
             let list_hit =
                 popups::file_browser::list_index_at(y as usize, area, app.browser_selected)
                     .filter(|&i| i < app.browser_entries.len());
@@ -874,7 +878,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
             // Mouse owns focus: being over the list means list focus (sentinel 4),
             // so the previously-hovered footer button doesn't stay highlighted too.
             if list_hit.is_some() {
-                app.browser_button_selected = 4;
+                app.browser_button_selected = popups::file_browser::FOCUS_LIST;
             }
         }
         Some(PopupFocus::Confirm) => {
@@ -1005,11 +1009,14 @@ fn handle_file_browser_click(x: usize, y: usize, app: &mut App) {
         && y < (popup.y + popup.height) as usize
     {
         let footer_y = popups::file_browser::footer_button_row(popup) as usize;
-        let list_area = popups::file_browser::list_area(popup);
+        let name_y = popups::file_browser::filename_row(popup) as usize;
+        let list_area = popups::file_browser::list_area(popup, app.browser_origin_is_save);
         if y == footer_y {
             if let Some(idx) = app.browser_button_hover {
                 app.browser_activate_footer(idx);
             }
+        } else if app.browser_origin_is_save && y == name_y {
+            app.browser_button_selected = popups::file_browser::FOCUS_FILENAME;
         } else if y >= list_area.0 && y < list_area.1 {
             // List row click: select + activate (dir enters, file confirms).
             // Shares the row->index math with the hover preview so the clicked
@@ -1790,21 +1797,38 @@ fn handle_confirm_key(code: KeyCode, app: &mut App) -> bool {
 }
 
 fn handle_file_browser_key(code: KeyCode, app: &mut App) {
-    // Focus model: `browser_button_selected` holds either a button index
-    // (0..=3) or the sentinel `4` meaning the list area is focused. Tab
-    // cycles list -> 0 -> 1 -> 2 -> 3 -> list. Enter activates whichever
-    // is focused.
+    // Focus model: `browser_button_selected` holds a footer index (0..=3),
+    // FOCUS_LIST (list), or FOCUS_FILENAME (Save As Name field).
+    // Open Tab: list -> 0 -> 1 -> 2 -> 3 -> list
+    // Save As Tab: list -> Name -> 0 -> 1 -> 2 -> 3 -> list
     //
     // NOTE: Ctrl+H (toggle hidden) is handled up in the CONTROL block —
     // adding it here would be dead code.
+    use popups::file_browser::{FOCUS_FILENAME, FOCUS_LIST};
+
+    let name_focused = app.browser_origin_is_save && app.browser_button_selected == FOCUS_FILENAME;
+    if name_focused {
+        match code {
+            KeyCode::Char(ch) if !ch.is_control() => app.browser_filename_push(ch),
+            KeyCode::Backspace => app.browser_filename_backspace(),
+            KeyCode::Enter => app.browser_use_current_folder(),
+            KeyCode::Tab => app.browser_button_selected = 0,
+            KeyCode::Esc => app.close_file_browser(false),
+            KeyCode::Up => app.browser_button_selected = FOCUS_LIST,
+            KeyCode::Down => app.browser_button_selected = 0,
+            _ => {}
+        }
+        return;
+    }
+
     match code {
         KeyCode::Up | KeyCode::Char('k') => {
             app.browser_move_cursor(-1);
-            app.browser_button_selected = 4; // typing nav refocuses list
+            app.browser_button_selected = FOCUS_LIST;
         }
         KeyCode::Down | KeyCode::Char('j') => {
             app.browser_move_cursor(1);
-            app.browser_button_selected = 4;
+            app.browser_button_selected = FOCUS_LIST;
         }
         KeyCode::Char('g') => {
             app.browser_jump(false);
@@ -1821,20 +1845,30 @@ fn handle_file_browser_key(code: KeyCode, app: &mut App) {
             app.browser_page(false, vh);
         }
         KeyCode::Tab => {
-            // list(4) -> 0 -> 1 -> 2 -> 3 -> list(4)
-            app.browser_button_selected = match app.browser_button_selected {
-                4 => 0,
-                n if n < 3 => n + 1,
-                _ => 4,
+            app.browser_button_selected = if app.browser_origin_is_save {
+                match app.browser_button_selected {
+                    FOCUS_LIST => FOCUS_FILENAME,
+                    FOCUS_FILENAME => 0,
+                    n if n < 3 => n + 1,
+                    _ => FOCUS_LIST,
+                }
+            } else {
+                match app.browser_button_selected {
+                    FOCUS_LIST => 0,
+                    n if n < 3 => n + 1,
+                    _ => FOCUS_LIST,
+                }
             };
         }
         KeyCode::Enter => match app.browser_button_selected {
             0..=3 => app.browser_activate_footer(app.browser_button_selected),
+            FOCUS_FILENAME => app.browser_use_current_folder(),
             _ => app.browser_enter_selected(),
         },
         // `l`/Right activate the focused thing (list entry or button).
         KeyCode::Char('l') | KeyCode::Right => match app.browser_button_selected {
             0..=3 => app.browser_activate_footer(app.browser_button_selected),
+            FOCUS_FILENAME => {}
             _ => app.browser_enter_selected(),
         },
         // `h`/Left/Backspace/- go up one directory. (Plain `h` only —
@@ -2453,9 +2487,27 @@ mod popup_focus_key_tests {
         let mut app = App::new(&[]);
         app.show_file_dialog(false);
         app.open_file_browser();
-        app.browser_button_selected = 4;
+        app.browser_button_selected = popups::file_browser::FOCUS_LIST;
         handle_file_browser_key(KeyCode::Tab, &mut app);
         assert_eq!(app.browser_button_selected, 0);
+    }
+
+    #[test]
+    fn handle_file_browser_tab_from_list_in_save_focuses_name_field() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog(true);
+        app.open_file_browser();
+        app.browser_button_selected = popups::file_browser::FOCUS_LIST;
+        handle_file_browser_key(KeyCode::Tab, &mut app);
+        assert_eq!(
+            app.browser_button_selected,
+            popups::file_browser::FOCUS_FILENAME
+        );
+        handle_file_browser_key(KeyCode::Char('n'), &mut app);
+        handle_file_browser_key(KeyCode::Char('o'), &mut app);
+        handle_file_browser_key(KeyCode::Char('t'), &mut app);
+        handle_file_browser_key(KeyCode::Char('e'), &mut app);
+        assert_eq!(app.browser_filename, "note");
     }
 }
 

@@ -164,11 +164,11 @@ entered, not confirmed). The file's absolute path is written to
 the path dialog (action button selected). In Recent mode: selecting any entry
 confirms immediately.
 
-**Save As:** `[ Use folder ]` confirms `browser_cwd` joined with the current
-filename via `compose_save_path` (basename of the typed path, else the buffer
-name, else `untitled`) and returns to the Save As dialog. File rows still
-confirm a full path (overwrite). Directory rows still enter. Recent view is
-Open-only.
+**Save As:** a `Name:` field sits above the footer. `[ Use folder ]` (or Enter
+in the Name field) confirms `browser_cwd` joined with that filename and
+returns to the Save As dialog. An empty or invalid Name stays in the browser
+and focuses the field — never invents `untitled`. File rows still confirm a
+full path (overwrite). Directory rows still enter. Recent view is Open-only.
 
 ## Tests (pure logic)
 

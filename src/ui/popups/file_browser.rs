@@ -23,6 +23,11 @@ use crate::ui::button::ButtonRow;
 /// hit-test and the rendered rows can never drift.
 pub const HEADER_LINES: usize = 2;
 
+/// `browser_button_selected` sentinel: the file list is focused.
+pub const FOCUS_LIST: usize = 4;
+/// `browser_button_selected` sentinel: the Save As Name field is focused.
+pub const FOCUS_FILENAME: usize = 5;
+
 /// Page-aligned scroll offset that keeps `sel` visible in a viewport of
 /// `body_h` rows. Shared by `render` and the mouse click handler so both agree
 /// on which absolute row corresponds to which entry index.
@@ -148,6 +153,13 @@ pub fn compose_save_path(dir: &Path, current_input: &str, fallback_filename: &st
     dir.join(name)
 }
 
+/// True when `name` is a single path component we can join onto a save dir.
+/// Rejects empty, `.` / `..`, and anything with a path separator.
+pub fn is_valid_save_filename(name: &str) -> bool {
+    let n = name.trim();
+    !n.is_empty() && n != "." && n != ".." && !n.contains('/') && !n.contains('\\')
+}
+
 /// Compute the centered popup rect for the browser, mirroring the geometry
 /// helpers used by the other popups. Kept in one place so the render and the
 /// mouse handler agree.
@@ -168,12 +180,25 @@ pub fn footer_button_row(popup: Rect) -> u16 {
     popup.y + popup.height.saturating_sub(2)
 }
 
-/// The list body occupies inner rows `(1 + HEADER_LINES) .. (height - 2)`.
+/// Screen y of the Save As `Name:` field — the inner line directly above
+/// the footer. Open-mode browsers do not render this row.
+pub fn filename_row(popup: Rect) -> u16 {
+    footer_button_row(popup).saturating_sub(1)
+}
+
+/// The list body occupies inner rows `(1 + HEADER_LINES) .. footer`.
+/// When `reserve_filename_row` is true the last inner line above the footer
+/// is the Name field, so the list ends one row earlier.
 /// Returns `(start_y, end_y)` in absolute screen coordinates; `end_y` is
-/// exclusive (the footer button row begins at `end_y`).
-pub fn list_area(popup: Rect) -> (usize, usize) {
+/// exclusive.
+pub fn list_area(popup: Rect, reserve_filename_row: bool) -> (usize, usize) {
     let start = (popup.y + 1 + HEADER_LINES as u16) as usize;
-    let end = (popup.y + popup.height.saturating_sub(2)) as usize;
+    let footer = (popup.y + popup.height.saturating_sub(2)) as usize;
+    let end = if reserve_filename_row {
+        footer.saturating_sub(1)
+    } else {
+        footer
+    };
     (start, end)
 }
 
@@ -226,7 +251,7 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
     // Header hint line.
     let hint = match app.browser_mode {
         BrowserMode::Dir if app.browser_origin_is_save => {
-            "Enter dir: Enter/→/l   Use folder: Tab to [Use folder]   Esc: back"
+            "Enter dir: Enter/→/l   Tab: Name field / buttons   Esc: back"
         }
         BrowserMode::Dir => {
             "Enter dir: Enter/→/l   Up: Backspace/←/h/-   \
@@ -240,10 +265,9 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
     lines.push(Line::from(Span::styled(hint, dim)));
     lines.push(Line::from(""));
 
-    let body_h = popup
-        .height
-        .saturating_sub(5) // border(2) + hint(1) + blank(1) + footer(1)
-        as usize;
+    let reserve_name = app.browser_origin_is_save;
+    let (list_start, list_end) = list_area(popup, reserve_name);
+    let body_h = list_end.saturating_sub(list_start).max(1);
 
     if let Some(err) = &app.browser_error {
         lines.push(Line::from(Span::styled(
@@ -278,8 +302,9 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
             // row is the only one highlighted. With no hover, the keyboard
             // selection (`browser_selected`, when the list is focused) shows.
             let is_hover = app.browser_list_hover == Some(i);
-            let is_sel =
-                i == sel && app.browser_button_selected == 4 && app.browser_list_hover.is_none();
+            let is_sel = i == sel
+                && app.browser_button_selected == FOCUS_LIST
+                && app.browser_list_hover.is_none();
             let style = if is_hover || is_sel {
                 selection_bg
             } else {
@@ -293,10 +318,21 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
         }
     }
 
-    // Pad up to the footer row so the buttons always sit at the bottom.
+    // Pad so the Name field (Save As) and footer sit on the last inner lines.
     let inner_h = popup.height.saturating_sub(2) as usize; // minus borders
-    while lines.len() < inner_h.saturating_sub(1) {
+    let name_pad = if reserve_name { 2 } else { 1 };
+    while lines.len() < inner_h.saturating_sub(name_pad) {
         lines.push(Line::from(""));
+    }
+
+    if reserve_name {
+        let focused = app.browser_button_selected == FOCUS_FILENAME;
+        let name_style = if focused { selection_bg } else { dim };
+        let caret = if focused { "█" } else { "" };
+        lines.push(Line::from(vec![
+            Span::styled(" Name: ", dim),
+            Span::styled(format!("{}{}", app.browser_filename, caret), name_style),
+        ]));
     }
 
     // Footer buttons.
@@ -307,7 +343,7 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
         [false, true, false, false] // Recent/Browse toggle
     };
     let mut row = ButtonRow::new(&labels, &is_primary);
-    // 0..=3 are buttons; 4 is the list sentinel → no button selected.
+    // 0..=3 are buttons; FOCUS_LIST/FOCUS_FILENAME → no button selected.
     if app.browser_button_selected < 4 {
         row.select(Some(app.browser_button_selected));
     }
@@ -504,12 +540,34 @@ mod tests {
         // HEADER_LINES (0-indexed) inside the bordered block, i.e. at screen
         // y = popup.y + 1 + HEADER_LINES. list_area.0 must equal that.
         let popup = Rect::new(10, 5, 80, 20);
-        let (start, end) = list_area(popup);
+        let (start, end) = list_area(popup, false);
         assert_eq!(start, popup.y as usize + 1 + HEADER_LINES);
         assert_eq!(start, 5 + 1 + 2); // = 8
                                       // end is the exclusive upper bound; footer begins at end.
         assert_eq!(end, (popup.y + popup.height - 2) as usize);
         assert_eq!(end, footer_button_row(popup) as usize);
+    }
+
+    #[test]
+    fn list_area_with_filename_row_ends_one_above_footer() {
+        let popup = Rect::new(10, 5, 80, 20);
+        let (start, end) = list_area(popup, true);
+        assert_eq!(start, popup.y as usize + 1 + HEADER_LINES);
+        assert_eq!(end, footer_button_row(popup) as usize - 1);
+        assert_eq!(filename_row(popup), footer_button_row(popup) - 1);
+        assert_eq!(filename_row(popup) as usize, end);
+    }
+
+    #[test]
+    fn is_valid_save_filename_rejects_empty_dots_and_separators() {
+        assert!(!is_valid_save_filename(""));
+        assert!(!is_valid_save_filename("  "));
+        assert!(!is_valid_save_filename("."));
+        assert!(!is_valid_save_filename(".."));
+        assert!(!is_valid_save_filename("a/b"));
+        assert!(!is_valid_save_filename("a\\b"));
+        assert!(is_valid_save_filename("notes.md"));
+        assert!(is_valid_save_filename("untitled"));
     }
 
     #[test]
