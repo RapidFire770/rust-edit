@@ -1,22 +1,19 @@
-### Fixes & Bugs:
+# Fixes & Bugs:
 
-- [x] For find and replace there is an issue with how it finds words. For example the word "Test" should not be equal to "Testing" but when finding or replacing the word "Test" with something like "Hello" the word "Testing" would become "Helloing". Capitalization of words is also not taken into account for words, this should probably be a user toggle. If the replace box is blank/empty and the user hits enter it should not delete/remove/replace the word with a blank/empty space.
-- [x] When the file name is to long it pushes the other information on the bottom bar off the screen depending on the current window size. The file name should be shortened/partially hidden if it to long so that the other information stays visible on the screen.
-- [x] In the setting’s configure popup window toggle and close buttons highlighting does not function as intended. When hovering over the close button it highlights properly and un-highlights when the mouse moves off. The toggle button stays constantly highlighted red no matter if the mouse is over it or not.
-- [x] Configure popup tab size option can be increased with the mouse but not decreased.
+### Minor:
 - [ ] Edit / new theme not working. Cannot select any colors to change or type color values.
     - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value.
 - [ ] In the file browser window when mouse is outside the popup it still scrolls the files list.
 - [ ] Scrollbar should display in the help menu to indicate to the user that the content is scrollable.
-- [ ] In the Save As popup when using the browser function there is no way to select the folder/directory to save the file into.
+### Major:
+- [ ] In the Save As popup when using the browser function there is no way to select the folder/directory to save the file into. It appears to be an exact copy of the browse function from the open dialog that is not adapted to function for a save as feature making it impossible to select a directory to save a file into.
 - [ ] When hitting the tab button it does not work as expected. When hitting tab anywhere on a line of text it inputs the tab at the beginning of the line instead of moving the text at the cursor over the tab amount or if its the end of the line instead of moving the cursor over the tab amount it moves the whole line over. Also the configured tab amount in the configure menu does not change the tab amount input in the editor window.
-- [x] Scrolling long files seems to somewhat hit the CPU rather hard and has some very minor slowdown on scrolling, it needs to be optimized in some fashion. I personally believe it could be related to the syntax highlighting trying to constantly update as the window is trying to scroll because as the window scrolls the text can sometimes turns white and it tries to catchup highlighting as I am still scrolling instead of the all the text already being highlighted before I scroll up or down. Also sometimes the highlighting just disappears into plain white text depending on where I am scrolled to on the document. Possibly need to use syntect’s caching and parallelizing listed on the crates.io page if this is the cause of the issues because highlighting should be instant, not noticeable to the user that it is happening and the CPU shouldn’t be spiking up a noticable amount as the user scrolls through the document/code file.
 
 ---
 
-### Features:
+# Features:
 
-- [ ] If there are to many tabs open that span wider than the terminal window they push off the screen and there is no way to scroll the open tabs with the mouse or click on the + button anymore. We need some arrows ( < / > ) to appear and let the tabs be scrolled.
+- [ ] If there are to many tabs open that span wider than the terminal window they push off the screen and there is no way to scroll the open tabs with the mouse or click on the + button anymore. We need some arrows ( [<] / [>] ) to appear and let the tabs be scrolled.
 - [ ] When word wrap isn't on and lines are longer than the visible width of the window a horizontal scrollbar should be displayed along the bottom of the window to allow the user to scroll the line horizontally.
 - [ ] If a file is modified outside of the editor while it is currently open the program should notice and ask the user if they would like to reload the file to see the new changes. Auto reload of the file without asking the user each time should be a selectable option when the program asks the user so it doesn’t have to keep asking them each time the file is modified.
 - [ ] Spellcheck for normal text files and markdown
