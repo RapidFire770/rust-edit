@@ -16,14 +16,6 @@ pub fn paint_line_spans(
     selection_style: Style,
     byte_clip: Option<Range<usize>>,
 ) -> Vec<Span<'static>> {
-    if highlight.is_empty() {
-        let covered = selection.is_some_and(|sel| sel.contains(&line_start_byte));
-        if covered && hscroll_chars == 0 {
-            return vec![Span::styled(" ", selection_style)];
-        }
-        return Vec::new();
-    }
-
     let mut out: Vec<Span<'static>> = Vec::new();
     let mut run = String::new();
     let mut run_style: Option<Style> = None;
@@ -65,6 +57,19 @@ pub fn paint_line_spans(
         if !run.is_empty() {
             out.push(Span::styled(run, style));
         }
+    }
+
+    // Syntect yields `[Span { content: "" }]` for blank lines, so treat "no
+    // visible chars produced" the same as an empty highlight: emit a space
+    // when selection covers this line's start (skip wrapped continuation rows).
+    if out.is_empty()
+        && hscroll_chars == 0
+        && selection.is_some_and(|sel| sel.contains(&line_start_byte))
+        && byte_clip
+            .as_ref()
+            .is_none_or(|clip| clip.contains(&line_start_byte))
+    {
+        out.push(Span::styled(" ", selection_style));
     }
     out
 }
@@ -145,6 +150,35 @@ mod tests {
         let sel = 0..1;
         let style = Style::default().bg(Color::Blue);
         let out = paint_line_spans(&[], 0, 0, Some(&sel), style, None);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].content, " ");
+        assert_eq!(out[0].style, style);
+    }
+
+    #[test]
+    fn empty_content_span_still_emits_selection_space() {
+        let sel = 0..1;
+        let style = Style::default().bg(Color::Blue);
+        let out = paint_line_spans(&[Span::raw("")], 0, 0, Some(&sel), style, None);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].content, " ");
+        assert_eq!(out[0].style, style);
+    }
+
+    #[test]
+    fn empty_content_span_skips_selection_space_on_wrapped_continuation() {
+        // Continuation rows: clip does not contain line_start_byte.
+        let sel = 0..1;
+        let style = Style::default().bg(Color::Blue);
+        let out = paint_line_spans(&[Span::raw("")], 0, 0, Some(&sel), style, Some(1..5));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn empty_content_span_emits_when_clip_contains_line_start() {
+        let sel = 0..1;
+        let style = Style::default().bg(Color::Blue);
+        let out = paint_line_spans(&[Span::raw("")], 0, 0, Some(&sel), style, Some(0..1));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].content, " ");
         assert_eq!(out[0].style, style);
