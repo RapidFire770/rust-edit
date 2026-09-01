@@ -10,7 +10,7 @@ Inspired by the UI mockup in `docs/ui-design-sample-2.jpg`.
 
 - **Tabbed multi-file editing** — open many files as tabs, switch with the mouse, `Alt+1..9`, or the tab bar.
 - **Rope-backed buffer** — efficient editing of large files (powered by [ropey](https://github.com/cessen/ropey)).
-- **Syntax highlighting** for Rust, Python, Markdown, JSON, TOML, YAML, Bash/Shell, C, C++, JavaScript, and TypeScript (via [syntect](https://github.com/trishume/syntect)), with a cached, single-pass highlighter so large files scroll smoothly.
+- **Syntax highlighting** for Rust, Python, Markdown, JSON, TOML, YAML, Bash/Shell, C, C++, JavaScript, and TypeScript (via [syntect](https://github.com/trishume/syntect)), with parse-state checkpoints and an overscanned span window so large files scroll smoothly without re-parsing the viewport on every scroll.
 - **Smart indentation** on Enter (copies leading whitespace, adds a level after `{`, `[`, `(`, `:`).
 - **Bidirectional selection** — extend a selection in either direction with `Shift+arrows`/`Home`/`End`, or click-and-drag with the mouse.
 - **Find & Replace** with case-sensitive, regex, and whole-word toggles; a three-state focus model (query → replace → commands) so you can type any letter (including `n`) and still navigate matches.
