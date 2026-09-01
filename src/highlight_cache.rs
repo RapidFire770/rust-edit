@@ -18,7 +18,7 @@ pub struct HighlightCache {
     start_line: usize,
     spans: Vec<Vec<Span<'static>>>,
     /// `None` after `invalidate` / construction so the next fill cannot match.
-    keys: Option<(Language, u64)>,
+    keys: Option<(Language, u64 /* generation */, u64 /* source */)>,
     /// Snapshots of the state that *starts* highlighting `line`. Always includes 0.
     checkpoints: Vec<(usize, HighlightSnapshot)>,
     /// Snapshot at `start_line + spans.len()`, used to append when scrolling down.
@@ -47,6 +47,7 @@ impl HighlightCache {
 
     /// Ensure spans exist for `[view_start, view_start + view_count)`.
     /// May highlight extra overscan around that window. Cheap no-op on hit.
+    /// `source` is a caller-chosen buffer identity so two gen-0 files cannot alias.
     #[allow(clippy::too_many_arguments)] // public API takes highlighter, lines, window, and cache key
     pub fn ensure_window(
         &mut self,
@@ -57,8 +58,9 @@ impl HighlightCache {
         view_count: usize,
         language: Language,
         generation: u64,
+        source: u64,
     ) {
-        if self.keys != Some((language, generation)) {
+        if self.keys != Some((language, generation, source)) {
             self.invalidate();
         }
 
@@ -67,7 +69,7 @@ impl HighlightCache {
             self.start_line = 0;
             self.frontier = None;
             self.checkpoints.clear();
-            self.keys = Some((language, generation));
+            self.keys = Some((language, generation, source));
             return;
         }
 
@@ -83,7 +85,7 @@ impl HighlightCache {
             self.spans.clear();
             self.start_line = desired_start.min(n_lines);
             self.frontier = None;
-            self.keys = Some((language, generation));
+            self.keys = Some((language, generation, source));
             return;
         }
 
@@ -98,7 +100,7 @@ impl HighlightCache {
         }
 
         self.trim_to_desired(desired_start, desired_end);
-        self.keys = Some((language, generation));
+        self.keys = Some((language, generation, source));
     }
 
     pub fn start_line(&self) -> usize {
@@ -329,11 +331,11 @@ mod tests {
         let lines = rust_lines();
         let n = lines.len();
         let mut cache = HighlightCache::new();
-        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 1);
+        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 1, 1);
         assert_eq!(cache.start_line(), 0);
         assert!(!cache.spans().is_empty());
         cache.reset_parse_counter();
-        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 1);
+        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 1, 1);
         assert_eq!(cache.lines_parsed(), 0);
     }
 
@@ -343,10 +345,9 @@ mod tests {
         let lines = rust_lines();
         let n = lines.len();
         let mut cache = HighlightCache::new();
-        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 1);
+        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 1, 1);
         cache.reset_parse_counter();
-        cache.ensure_window(&sh, line_at(&lines), n, 1, 20, Language::Rust, 1);
-        eprintln!("scroll_down_one_line lines_parsed={}", cache.lines_parsed());
+        cache.ensure_window(&sh, line_at(&lines), n, 1, 20, Language::Rust, 1, 1);
         assert!(
             cache.lines_parsed() < 20,
             "scrolled one line but parsed {} lines",
@@ -363,7 +364,16 @@ mod tests {
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let full = sh.highlight(&refs.join("\n"), Language::Rust);
         let mut cache = HighlightCache::new();
-        cache.ensure_window(&sh, line_at(&lines), lines.len(), 2, 2, Language::Rust, 1);
+        cache.ensure_window(
+            &sh,
+            line_at(&lines),
+            lines.len(),
+            2,
+            2,
+            Language::Rust,
+            1,
+            1,
+        );
         let cached = cache.line_spans(2).expect("line 2 cached");
         assert_eq!(
             cached.first().and_then(|s| s.style.fg),
@@ -377,9 +387,9 @@ mod tests {
         let lines = rust_lines();
         let n = lines.len();
         let mut cache = HighlightCache::new();
-        cache.ensure_window(&sh, line_at(&lines), n, 0, 10, Language::Rust, 1);
+        cache.ensure_window(&sh, line_at(&lines), n, 0, 10, Language::Rust, 1, 1);
         cache.reset_parse_counter();
-        cache.ensure_window(&sh, line_at(&lines), n, 0, 10, Language::Rust, 2);
+        cache.ensure_window(&sh, line_at(&lines), n, 0, 10, Language::Rust, 2, 1);
         assert!(cache.lines_parsed() > 0);
     }
 
@@ -390,7 +400,16 @@ mod tests {
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let full = sh.highlight(&refs.join("\n"), Language::Rust);
         let mut cache = HighlightCache::new();
-        cache.ensure_window(&sh, line_at(&lines), lines.len(), 0, 20, Language::Rust, 1);
+        cache.ensure_window(
+            &sh,
+            line_at(&lines),
+            lines.len(),
+            0,
+            20,
+            Language::Rust,
+            1,
+            1,
+        );
         cache.reset_parse_counter();
         // After the first fill, overscan covers [0, 84). view_start=150 yields
         // desired_start=86, past cache_end, so we must resume from a checkpoint.
@@ -401,6 +420,7 @@ mod tests {
             150,
             20,
             Language::Rust,
+            1,
             1,
         );
         let cached = cache.line_spans(150).expect("line 150 cached");
@@ -414,6 +434,115 @@ mod tests {
             "checkpoint resume parsed {} of {} lines",
             cache.lines_parsed(),
             lines.len()
+        );
+    }
+
+    fn first_fg(spans: &[Span<'_>]) -> Option<ratatui::style::Color> {
+        spans.first().and_then(|s| s.style.fg)
+    }
+
+    fn joined_text(spans: &[Span<'_>]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// Block comment opener sits on line 63 so checkpoint 64 is *inside* the
+    /// comment; the body continues through line 99 with `*/` on 100, then filler.
+    fn comment_across_checkpoint_lines() -> Vec<String> {
+        let mut v: Vec<String> = (0..63).map(|i| format!("let a{i} = {i};")).collect();
+        v.push("/*".to_string());
+        v.extend((64..100).map(|i| format!("comment body {i}")));
+        v.push("*/".to_string());
+        v.extend((101..300).map(|i| format!("let z{i} = {i};")));
+        v
+    }
+
+    #[test]
+    fn resume_from_checkpoint_keeps_block_comment_color() {
+        let sh = SyntaxHighlighter::new();
+        let lines = comment_across_checkpoint_lines();
+        let n = lines.len();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let full = sh.highlight(&refs.join("\n"), Language::Rust);
+        let isolated = sh.highlight_window(std::iter::once(lines[86].as_str()), Language::Rust);
+
+        let mut cache = HighlightCache::new();
+        // First fill: overscan covers [0, 84) and stores checkpoint 64 (inside comment).
+        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 1, 1);
+        cache.reset_parse_counter();
+        // Jump past cache_end: desired_start=86 is still inside the comment (63..=100).
+        cache.ensure_window(&sh, line_at(&lines), n, 150, 20, Language::Rust, 1, 1);
+
+        let cached = cache.line_spans(86).expect("line 86 cached after jump");
+        let cached_fg = first_fg(cached);
+        let full_fg = first_fg(&full[86]);
+        let comment_fg = first_fg(&full[64]);
+        let isolated_fg = first_fg(&isolated[0]);
+
+        assert_eq!(
+            cached_fg, full_fg,
+            "resumed spans must match a full-file parse"
+        );
+        assert_eq!(
+            cached_fg, comment_fg,
+            "line 86 must keep the in-comment color from before checkpoint 64"
+        );
+        assert_ne!(
+            isolated_fg, cached_fg,
+            "an isolated HighlightLines at line 86 would treat the body as code"
+        );
+        assert_eq!(joined_text(cached), joined_text(&full[86]));
+        assert!(cache.lines_parsed() > 0);
+        assert!(
+            cache.lines_parsed() < n,
+            "checkpoint resume parsed {} of {} lines",
+            cache.lines_parsed(),
+            n
+        );
+    }
+
+    #[test]
+    fn trim_prefix_drops_lines_before_desired_start() {
+        let sh = SyntaxHighlighter::new();
+        let lines = rust_lines();
+        let n = lines.len();
+        let mut cache = HighlightCache::new();
+        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 1, 1);
+        // After first fill cache is [0, 84). view_start=80 → desired [16, 164).
+        cache.ensure_window(&sh, line_at(&lines), n, 80, 20, Language::Rust, 1, 1);
+        assert_eq!(cache.start_line(), 16);
+        assert!(cache.line_spans(80).is_some());
+        assert!(cache.line_spans(0).is_none());
+    }
+
+    #[test]
+    fn scroll_up_out_of_window_refills_from_checkpoint_zero() {
+        let sh = SyntaxHighlighter::new();
+        let lines = rust_lines();
+        let n = lines.len();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let full = sh.highlight(&refs.join("\n"), Language::Rust);
+        let mut cache = HighlightCache::new();
+        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 1, 1);
+        cache.ensure_window(&sh, line_at(&lines), n, 150, 20, Language::Rust, 1, 1);
+        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 1, 1);
+        assert!(cache.line_spans(0).is_some());
+        let cached = cache.line_spans(2).expect("line 2 cached after scroll-up");
+        assert_eq!(first_fg(cached), first_fg(&full[2]));
+        assert_eq!(joined_text(cached), joined_text(&full[2]));
+    }
+
+    #[test]
+    fn different_source_does_not_reuse_spans() {
+        let sh = SyntaxHighlighter::new();
+        let lines = rust_lines();
+        let n = lines.len();
+        let mut cache = HighlightCache::new();
+        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 0, 1);
+        cache.reset_parse_counter();
+        cache.ensure_window(&sh, line_at(&lines), n, 0, 20, Language::Rust, 0, 2);
+        assert!(
+            cache.lines_parsed() > 0,
+            "same language/generation with a different source must not reuse spans"
         );
     }
 }
