@@ -13,6 +13,7 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::buffer::Buffer;
 use crate::theme::Theme;
+use crate::ui::spans::paint_line_spans;
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let buf = app.active_buffer();
@@ -77,66 +78,36 @@ fn render_unwrapped(
     let start_line = buf.scroll_offset.0;
     let n_lines = buf.line_count();
 
-    // Use the cached spans computed by app.refresh_highlight_cache (AGENTS §6).
-    // Span::raw fallback is temporary until Task 5 batches uncached lines.
-    let mut highlighted: Vec<Vec<Span<'static>>> = Vec::new();
-    for ii in 0..visible_lines.max(1) {
-        let lidx = start_line + ii;
-        if lidx >= n_lines {
-            break;
-        }
-        let hl = cache
-            .line_spans(lidx)
-            .map(|s| s.to_vec())
-            .unwrap_or_else(|| vec![Span::raw(buf.line(lidx))]);
-        highlighted.push(hl);
-    }
-
     let mut lines: Vec<Line<'static>> = Vec::new();
     let hscroll = buf.scroll_offset.1;
-    for (i, hline) in highlighted.iter().enumerate() {
-        let line_idx = start_line + i;
+    for ii in 0..visible_lines.max(1) {
+        let line_idx = start_line + ii;
+        if line_idx >= n_lines {
+            break;
+        }
         // Gutter MUST be pure ASCII: `│` (U+2502) is East-Asian-Width Ambiguous
         // and renders as 2 cells in some terminals/fonts, which shifts content
         // right by 1 vs GUTTER_WIDTH and desyncs the hardware cursor. AGENTS §1.
         let gutter = format!("{:>4}| ", line_idx + 1);
-        let mut spans = vec![Span::styled(gutter, theme.line_number_style())];
-
+        let Some(hline) = cache.line_spans(line_idx) else {
+            debug_assert!(false, "highlight cache must cover visible line {line_idx}");
+            // still emit gutter so the row exists; do NOT Span::raw the whole line
+            lines.push(Line::from(vec![Span::styled(
+                gutter,
+                theme.line_number_style(),
+            )]));
+            continue;
+        };
         let line_start_byte = buf.rope.line_to_byte(line_idx);
-        let mut byte_in_line = 0usize;
-        let mut char_in_line = 0usize;
-
-        for sp in hline {
-            let txt = sp.content.clone();
-            for ch in txt.chars() {
-                let ch_len = ch.len_utf8();
-                let abs_byte = line_start_byte + byte_in_line;
-                let is_selected = if let Some(sel) = &buf.selection {
-                    abs_byte >= sel.start && abs_byte < sel.end
-                } else {
-                    false
-                };
-                let mut ch_style = sp.style;
-                if is_selected {
-                    ch_style = ch_style.patch(theme.selection_style());
-                }
-                if char_in_line >= hscroll {
-                    spans.push(Span::styled(ch.to_string(), ch_style));
-                }
-                byte_in_line += ch_len;
-                char_in_line += 1;
-            }
-        }
-        // If entire empty line (or start) is covered by selection, add a space
-        // to show the bg highlight.
-        if hline.is_empty() {
-            if let Some(sel) = &buf.selection {
-                let line_start = buf.rope.line_to_byte(line_idx);
-                if sel.start <= line_start && sel.end > line_start && char_in_line >= hscroll {
-                    spans.push(Span::styled(" ", theme.selection_style()));
-                }
-            }
-        }
+        let mut spans = vec![Span::styled(gutter, theme.line_number_style())];
+        spans.extend(paint_line_spans(
+            hline,
+            line_start_byte,
+            hscroll,
+            buf.selection.as_ref(),
+            theme.selection_style(),
+            None,
+        ));
         lines.push(Line::from(spans));
     }
     lines
@@ -195,11 +166,10 @@ fn render_wrapped(
             buf.rope.len_bytes()
         };
 
-        // Fetch highlighted spans for this line (cache or Span::raw fallback).
-        let hline: Vec<Span<'static>> = cache
-            .line_spans(lidx)
-            .map(|s| s.to_vec())
-            .unwrap_or_else(|| vec![Span::raw(buf.line(lidx))]);
+        let hline = cache.line_spans(lidx);
+        if hline.is_none() {
+            debug_assert!(false, "highlight cache must cover visible line {lidx}");
+        }
 
         // Sub-row byte boundaries. sub_starts[0] = line_start_byte; sub_starts[k]
         // = breaks[k-1]. sub_ends[k] = breaks[k] (or line_end_byte for the last).
@@ -229,37 +199,15 @@ fn render_wrapped(
                 Span::raw("      ") // 6 spaces, aligned with the gutter
             };
             let mut spans = vec![gutter];
-            // Walk hline, slicing chars whose absolute byte is in this sub-row.
-            let mut byte_in_line = 0usize;
-            for sp in &hline {
-                let txt = &sp.content;
-                for ch in txt.chars() {
-                    let abs_byte = line_start_byte + byte_in_line;
-                    if abs_byte >= sub_start_byte && abs_byte < sub_end_byte {
-                        let is_selected = if let Some(sel) = &buf.selection {
-                            abs_byte >= sel.start && abs_byte < sel.end
-                        } else {
-                            false
-                        };
-                        let mut ch_style = sp.style;
-                        if is_selected {
-                            ch_style = ch_style.patch(theme.selection_style());
-                        }
-                        spans.push(Span::styled(ch.to_string(), ch_style));
-                    }
-                    byte_in_line += ch.len_utf8();
-                }
-            }
-            // If an empty line is covered by selection, push a styled space so
-            // the selection background is visible. Mirrors `render_unwrapped`,
-            // minus the hscroll check (wrap has no hscroll). Only the first
-            // sub-row needs it (an empty line has a single sub-row).
-            if hline.is_empty() && sub == 0 {
-                if let Some(sel) = &buf.selection {
-                    if sel.start <= line_start_byte && sel.end > line_start_byte {
-                        spans.push(Span::styled(" ", theme.selection_style()));
-                    }
-                }
+            if let Some(hline) = hline {
+                spans.extend(paint_line_spans(
+                    hline,
+                    line_start_byte,
+                    0,
+                    buf.selection.as_ref(),
+                    theme.selection_style(),
+                    Some(sub_start_byte..sub_end_byte),
+                ));
             }
             lines.push(Line::from(spans));
         }
