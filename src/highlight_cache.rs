@@ -1,7 +1,5 @@
 // Parse-state checkpoint cache for syntax highlighting.
 // Visible windows resume from the nearest snapshot instead of restarting at line 0.
-// Allow unused items until Task 4 wires this into App/editor.
-#![allow(dead_code)]
 
 use ratatui::text::Span;
 
@@ -103,10 +101,12 @@ impl HighlightCache {
         self.keys = Some((language, generation, source));
     }
 
+    #[allow(dead_code)] // exercised by highlight_cache unit tests
     pub fn start_line(&self) -> usize {
         self.start_line
     }
 
+    #[allow(dead_code)] // exercised by highlight_cache unit tests
     pub fn spans(&self) -> &[Vec<Span<'static>>] {
         &self.spans
     }

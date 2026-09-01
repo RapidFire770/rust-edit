@@ -71,40 +71,24 @@ fn render_unwrapped(
     buf: &Buffer,
     app: &App,
     visible_lines: usize,
-    cache: Option<&crate::app::CachedHighlights>,
+    cache: &crate::highlight_cache::HighlightCache,
 ) -> Vec<Line<'static>> {
     let theme = app.current_theme();
     let start_line = buf.scroll_offset.0;
     let n_lines = buf.line_count();
 
-    // Use the cached spans computed once per edit/scroll/language change by
-    // app.refresh_highlight_cache (AGENTS §6). Fall back to a single-window
-    // highlight if the cache is missing/stale.
+    // Use the cached spans computed by app.refresh_highlight_cache (AGENTS §6).
+    // Span::raw fallback is temporary until Task 5 batches uncached lines.
     let mut highlighted: Vec<Vec<Span<'static>>> = Vec::new();
     for ii in 0..visible_lines.max(1) {
         let lidx = start_line + ii;
         if lidx >= n_lines {
             break;
         }
-        let hl = if let Some(c) = cache {
-            if c.start_line <= lidx {
-                let rel = lidx - c.start_line;
-                if let Some(line_spans) = c.spans.get(rel) {
-                    line_spans.clone()
-                } else {
-                    vec![Span::raw(buf.line(lidx))]
-                }
-            } else {
-                vec![Span::raw(buf.line(lidx))]
-            }
-        } else {
-            let h = app.highlighter.highlight(&buf.line(lidx), buf.language);
-            if h.is_empty() {
-                vec![Span::raw(buf.line(lidx))]
-            } else {
-                h.into_iter().next().unwrap_or_default()
-            }
-        };
+        let hl = cache
+            .line_spans(lidx)
+            .map(|s| s.to_vec())
+            .unwrap_or_else(|| vec![Span::raw(buf.line(lidx))]);
         highlighted.push(hl);
     }
 
@@ -165,7 +149,7 @@ fn render_wrapped(
     buf: &Buffer,
     app: &App,
     visible_lines: usize,
-    cache: Option<&crate::app::CachedHighlights>,
+    cache: &crate::highlight_cache::HighlightCache,
 ) -> Vec<Line<'static>> {
     let theme = app.current_theme();
     let n_lines = buf.line_count();
@@ -211,25 +195,11 @@ fn render_wrapped(
             buf.rope.len_bytes()
         };
 
-        // Fetch highlighted spans for this line (cache or fallback).
-        let hline: Vec<Span<'static>> = if let Some(c) = cache {
-            if c.start_line <= lidx {
-                let rel = lidx - c.start_line;
-                c.spans
-                    .get(rel)
-                    .cloned()
-                    .unwrap_or_else(|| vec![Span::raw(buf.line(lidx))])
-            } else {
-                vec![Span::raw(buf.line(lidx))]
-            }
-        } else {
-            let h = app.highlighter.highlight(&buf.line(lidx), buf.language);
-            if h.is_empty() {
-                vec![Span::raw(buf.line(lidx))]
-            } else {
-                h.into_iter().next().unwrap_or_default()
-            }
-        };
+        // Fetch highlighted spans for this line (cache or Span::raw fallback).
+        let hline: Vec<Span<'static>> = cache
+            .line_spans(lidx)
+            .map(|s| s.to_vec())
+            .unwrap_or_else(|| vec![Span::raw(buf.line(lidx))]);
 
         // Sub-row byte boundaries. sub_starts[0] = line_start_byte; sub_starts[k]
         // = breaks[k-1]. sub_ends[k] = breaks[k] (or line_end_byte for the last).

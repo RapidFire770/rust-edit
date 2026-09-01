@@ -3,30 +3,13 @@
 
 #![allow(dead_code)]
 
-use crate::buffer::{Buffer, Language};
+use crate::buffer::Buffer;
 use crate::config::Config;
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use crate::ui::find::{FindFocus, FindState};
 use crate::utils::clipboard::ClipboardWrapper;
-use ratatui::text::Span;
 use std::path::{Path, PathBuf};
-
-/// Cached syntax-highlight spans for the currently visible editor window.
-///
-/// Recomputed only when one of its keys changes — the buffer's `generation`
-/// (bumped on every edit/undo/redo), the active `language` (tab switch or
-/// re-detect), or the `start_line` of the visible region (scroll). Otherwise the
-/// spans are reused frame-to-frame, so rendering no longer re-highlights every
-/// visible line on every keystroke/scroll (AGENTS §6 "Syntax Highlighting").
-#[derive(Clone)]
-pub struct CachedHighlights {
-    pub language: Language,
-    pub generation: u64,
-    pub start_line: usize,
-    pub count: usize,
-    pub spans: Vec<Vec<Span<'static>>>,
-}
 
 #[derive(Default)] // Debug removed because SyntaxHighlighter doesn't impl it
 pub struct App {
@@ -133,9 +116,9 @@ pub struct App {
     /// Last known width (in columns) of the editor text area (excludes gutter +
     /// scrollbar). Used by horizontal auto-scroll to follow the cursor.
     pub editor_visible_width: std::cell::Cell<usize>,
-    /// Cached syntax spans for the active buffer's visible window. Refreshed each
-    /// frame by `refresh_highlight_cache` only when content/scroll/language changed.
-    pub cached_highlights: Option<CachedHighlights>,
+    /// Parse-state checkpoint cache for the active buffer. `refresh_highlight_cache`
+    /// ensures an overscanned window; the editor reads spans via `line_spans`.
+    pub highlight_cache: crate::highlight_cache::HighlightCache,
 }
 
 /// Which centered popup currently owns input. Highest z-order wins.
@@ -229,7 +212,7 @@ impl App {
             should_quit: false,
             editor_visible_lines: std::cell::Cell::new(20),
             editor_visible_width: std::cell::Cell::new(80),
-            cached_highlights: None,
+            highlight_cache: crate::highlight_cache::HighlightCache::new(),
         }
     }
 
@@ -241,57 +224,39 @@ impl App {
         &mut self.buffers[self.active]
     }
 
-    /// Ensure `cached_highlights` matches the active buffer's visible window.
+    /// Ensure the highlight cache covers the active buffer's visible window.
     ///
-    /// Recomputes (and rebuilds one shared `HighlightLines` for the whole window)
-    /// only when the cache key is stale: the buffer's text `generation`, its
-    /// `language`, or the visible region's `start_line`/`count`. On a steady
-    /// render (no edit, no scroll, no resize) this is a cheap key comparison and
-    /// the editor reuses the existing spans — eliminating the per-frame re-highlight
-    /// that caused lag on large files.
+    /// Delegates to `HighlightCache::ensure_window`, which is a cheap no-op on
+    /// a hit and otherwise resumes from the nearest parse checkpoint instead of
+    /// rebuilding `HighlightLines` from line 0 on every scroll.
     pub fn refresh_highlight_cache(&mut self, start_line: usize, count: usize) {
-        let buf = self.active_buffer();
+        let App {
+            highlighter,
+            highlight_cache,
+            buffers,
+            active,
+            ..
+        } = self;
+        let buf = &buffers[*active];
+        let n_lines = buf.line_count();
         let language = buf.language;
         let generation = buf.generation;
-
-        let needs_recompute = match &self.cached_highlights {
-            None => true,
-            Some(c) => {
-                c.language != language
-                    || c.generation != generation
-                    || c.start_line != start_line
-                    || c.count != count
-            }
-        };
-
-        if needs_recompute {
-            // Collect the visible lines (clamped to the buffer) without joining them
-            // into a single String — highlight_window feeds them one at a time to a
-            // single HighlightLines, preserving multi-line syntax state.
-            let n_lines = buf.line_count();
-            let end = (start_line + count).min(n_lines);
-            let lines: Vec<String> = if start_line < n_lines {
-                (start_line..end).map(|i| buf.line(i)).collect()
-            } else {
-                Vec::new()
-            };
-            let spans = self
-                .highlighter
-                .highlight_window(lines.iter().map(String::as_str), language);
-
-            self.cached_highlights = Some(CachedHighlights {
-                language,
-                generation,
-                start_line,
-                count,
-                spans,
-            });
-        }
+        let source = buf.id;
+        highlight_cache.ensure_window(
+            highlighter,
+            |i| buffers[*active].line(i),
+            n_lines,
+            start_line,
+            count,
+            language,
+            generation,
+            source,
+        );
     }
 
-    /// Read-only access to the cached visible-window spans (if any).
-    pub fn cached_visible_spans(&self) -> Option<&CachedHighlights> {
-        self.cached_highlights.as_ref()
+    /// Read-only access to the highlight cache for the active buffer.
+    pub fn cached_visible_spans(&self) -> &crate::highlight_cache::HighlightCache {
+        &self.highlight_cache
     }
 
     pub fn current_theme(&self) -> &Theme {
@@ -951,7 +916,7 @@ impl App {
         if let Some(idx) = self.index_of_open_path(path) {
             self.active = idx;
             self.config.record_recent_file(path);
-            self.cached_highlights = None;
+            self.highlight_cache.invalidate();
             return Ok(());
         }
 
@@ -964,7 +929,7 @@ impl App {
             self.active = self.buffers.len() - 1;
         }
         self.config.record_recent_file(path);
-        self.cached_highlights = None;
+        self.highlight_cache.invalidate();
         Ok(())
     }
 
@@ -1769,18 +1734,13 @@ mod tests {
     #[test]
     fn open_file_in_tab_invalidates_highlight_cache() {
         let mut app = App::new(&[]);
-        app.cached_highlights = Some(CachedHighlights {
-            language: Language::Plain,
-            generation: 0,
-            start_line: 0,
-            count: 1,
-            spans: vec![vec![Span::raw("dummy")]],
-        });
+        app.refresh_highlight_cache(0, 1);
+        assert!(app.highlight_cache.line_spans(0).is_some());
         let path = unique_temp_file("plain text");
         app.open_file_in_tab(&path).expect("open");
         assert!(
-            app.cached_highlights.is_none(),
-            "opening a Plain file must drop the generation-0 placeholder cache"
+            app.highlight_cache.line_spans(0).is_none(),
+            "opening a file must invalidate the previous buffer's highlight cache"
         );
         let _ = fs::remove_file(&path);
     }
