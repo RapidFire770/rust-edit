@@ -894,6 +894,12 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
             let popup = popups::file_browser::file_browser_rect(term_area);
             let btn_y = popups::file_browser::footer_button_row(popup) as usize;
             let name_y = popups::file_browser::filename_row(popup) as usize;
+            // Horizontal bounds of the popup. The list/Name hit-tests below check
+            // the mouse's row (y) but not its column (x); without this guard the
+            // row highlight and Name-field focus chase the cursor even when it is
+            // off to the side of the popup.
+            let in_popup_x =
+                x as usize >= popup.x as usize && (x as usize) < (popup.x + popup.width) as usize;
             if y as usize == btn_y {
                 let labels = app.browser_footer_labels();
                 let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x + 1, &labels);
@@ -906,7 +912,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
                 if let Some(idx) = hit {
                     app.browser_button_selected = idx;
                 }
-            } else if app.browser_origin_is_save && y as usize == name_y {
+            } else if app.browser_origin_is_save && in_popup_x && y as usize == name_y {
                 app.browser_button_selected = popups::file_browser::FOCUS_FILENAME;
                 app.browser_list_hover = None;
             }
@@ -929,7 +935,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
                 app.browser_origin_is_save,
                 overflowing,
             );
-            let list_hit = if on_sb {
+            let list_hit = if !in_popup_x || on_sb {
                 None
             } else {
                 popups::file_browser::list_index_at(y as usize, area, app.browser_selected)
