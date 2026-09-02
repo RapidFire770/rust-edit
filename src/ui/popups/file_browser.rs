@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use crate::theme::Theme;
 use crate::ui::button::ButtonRow;
+use crate::ui::scrollbar::{self, OverflowBar};
 
 /// Number of lines rendered above the list body (hint + blank separator).
 /// `list_area` and `render` both derive their layout from this so the click
@@ -217,6 +218,48 @@ pub fn list_index_at(y: usize, area: (usize, usize), sel: usize) -> Option<usize
     Some((y - area.0) + scroll)
 }
 
+/// Rightmost inner column of the list body — the overflow scrollbar track.
+pub fn list_scrollbar_rect(popup: Rect, reserve_filename_row: bool) -> Rect {
+    let (start, end) = list_area(popup, reserve_filename_row);
+    let h = end.saturating_sub(start) as u16;
+    Rect::new(popup.x + popup.width.saturating_sub(2), start as u16, 1, h)
+}
+
+/// True when `(x, y)` is on the list-body overflow track. Always false when
+/// the listing fits the viewport so the last filename column stays clickable.
+pub fn list_click_is_scrollbar(
+    x: usize,
+    y: usize,
+    popup: Rect,
+    reserve_filename_row: bool,
+    overflowing: bool,
+) -> bool {
+    if !overflowing {
+        return false;
+    }
+    let sb = list_scrollbar_rect(popup, reserve_filename_row);
+    sb.width > 0
+        && x >= sb.x as usize
+        && x < (sb.x + sb.width) as usize
+        && y >= sb.y as usize
+        && y < (sb.y + sb.height) as usize
+}
+
+pub fn list_overflow_bar(
+    entry_count: usize,
+    sel: usize,
+    popup: Rect,
+    reserve_filename_row: bool,
+) -> OverflowBar {
+    let (start, end) = list_area(popup, reserve_filename_row);
+    let body_h = end.saturating_sub(start).max(1);
+    OverflowBar {
+        total: entry_count,
+        position: compute_scroll(sel, body_h),
+        viewport: body_h,
+    }
+}
+
 /// Render the browser popup. Pure presentation — all state is read from `app`.
 pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
     let popup = file_browser_rect(area);
@@ -292,11 +335,22 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
 
         let show_from = scroll;
         let show_to = (show_from + body_h).min(app.browser_entries.len());
+        let overflowing =
+            list_overflow_bar(app.browser_entries.len(), sel, popup, reserve_name).overflowing();
+        let inner_w = popup.width.saturating_sub(2) as usize;
+        let name_budget = if overflowing {
+            inner_w.saturating_sub(3) // marker + space + scrollbar column
+        } else {
+            inner_w.saturating_sub(2)
+        };
 
         for i in show_from..show_to {
             let entry = &app.browser_entries[i];
             let marker = if entry.is_dir { "/" } else { " " };
-            let name = format!("{}{}", entry.name, if entry.is_dir { "/" } else { "" });
+            let mut name = format!("{}{}", entry.name, if entry.is_dir { "/" } else { "" });
+            if name.chars().count() > name_budget {
+                name = name.chars().take(name_budget).collect();
+            }
             let base = if entry.is_dir { dir_style } else { file_style };
             // Hover steals the highlight: when the mouse is over a row, that
             // row is the only one highlighted. With no hover, the keyboard
@@ -360,6 +414,14 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
 
     f.render_widget(Clear, popup);
     f.render_widget(para, popup);
+
+    let bar = list_overflow_bar(
+        app.browser_entries.len(),
+        app.browser_selected,
+        popup,
+        reserve_name,
+    );
+    scrollbar::render(f, list_scrollbar_rect(popup, reserve_name), bar, theme);
 }
 
 #[cfg(test)]
@@ -648,5 +710,44 @@ mod tests {
         assert_eq!(list_index_at(10, area, 15), Some(10));
         assert_eq!(list_index_at(15, area, 15), Some(15)); // row under sel
         assert_eq!(list_index_at(19, area, 15), Some(19)); // last body row
+    }
+
+    #[test]
+    fn list_scrollbar_rect_is_rightmost_inner_column_of_body() {
+        let popup = file_browser_rect(Rect::new(0, 0, 80, 24));
+        let (start, end) = list_area(popup, false);
+        let sb = list_scrollbar_rect(popup, false);
+        assert_eq!(sb.x, popup.x + popup.width - 2);
+        assert_eq!(sb.width, 1);
+        assert_eq!(sb.y as usize, start);
+        assert_eq!(sb.height as usize, end - start);
+        assert!(list_click_is_scrollbar(
+            sb.x as usize,
+            sb.y as usize,
+            popup,
+            false,
+            true
+        ));
+        assert!(!list_click_is_scrollbar(
+            sb.x as usize - 1,
+            sb.y as usize,
+            popup,
+            false,
+            true
+        ));
+        assert!(
+            !list_click_is_scrollbar(sb.x as usize, sb.y as usize, popup, false, false),
+            "hidden bar must not steal the last filename column"
+        );
+    }
+
+    #[test]
+    fn overflowing_when_entries_exceed_body() {
+        let popup = file_browser_rect(Rect::new(0, 0, 80, 24));
+        let (a, b) = list_area(popup, false);
+        let body_h = b - a;
+        assert!(list_overflow_bar(body_h + 5, 0, popup, false).overflowing());
+        assert!(!list_overflow_bar(body_h, 0, popup, false).overflowing());
+        assert!(!list_overflow_bar(0, 0, popup, false).overflowing());
     }
 }

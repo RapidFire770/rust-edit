@@ -6,5 +6,6 @@ pub mod find;
 pub mod header;
 pub mod layout;
 pub mod popups;
+pub mod scrollbar;
 pub mod spans;
 pub mod status;

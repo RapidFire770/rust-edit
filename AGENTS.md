@@ -122,6 +122,7 @@ rust-edit/
 │   │   ├── header.rs          # Menu bar + file tabs + [+] button + separator rule + dropdown
 │   │   ├── spans.rs           # Batched paint_line_spans (selection / hscroll / wrap clip)
 │   │   ├── editor.rs          # Main editing view, line numbers, cursor, selection, hscroll
+│   │   ├── scrollbar.rs       # Shared vertical overflow scrollbar (editor + popups)
 │   │   ├── status.rs          # Status bar
 │   │   ├── find.rs            # Find/Replace bar (FindState + FindFocus 3-state model)
 │   │   └── popups/

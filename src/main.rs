@@ -139,6 +139,52 @@ fn wheel_target(app: &App) -> WheelTarget {
     }
 }
 
+fn term_area() -> Rect {
+    let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+    Rect::new(0, 0, tw, th)
+}
+
+fn apply_help_scroll(app: &mut App, delta: i32) {
+    let popup = popups::help::help_rect(term_area());
+    let next = (app.help_content_scroll.0 as i32 + delta).max(0) as u16;
+    app.help_content_scroll.0 = popups::help::clamp_help_scroll(next, app.help_tab, popup);
+}
+
+fn apply_help_scrollbar_at(app: &mut App, y: u16) {
+    let popup = popups::help::help_rect(term_area());
+    let sb = popups::help::help_scrollbar_rect(popup);
+    let bar = popups::help::help_overflow_bar(app.help_tab, popup, app.help_content_scroll.0);
+    if let Some(pos) = bar.target_for_row(y, sb) {
+        app.help_content_scroll.0 =
+            popups::help::clamp_help_scroll(pos as u16, app.help_tab, popup);
+    }
+}
+
+fn apply_browser_scrollbar_at(app: &mut App, y: u16) {
+    let popup = popups::file_browser::file_browser_rect(term_area());
+    let reserve = app.browser_origin_is_save;
+    let sb = popups::file_browser::list_scrollbar_rect(popup, reserve);
+    let bar = popups::file_browser::list_overflow_bar(
+        app.browser_entries.len(),
+        app.browser_selected,
+        popup,
+        reserve,
+    );
+    if !bar.overflowing() {
+        return;
+    }
+    if let Some(pos) = bar.target_for_row(y, sb) {
+        let sel = if pos >= bar.max_position() {
+            app.browser_entries.len().saturating_sub(1)
+        } else {
+            pos
+        };
+        app.browser_select_index(sel);
+        app.browser_list_hover = None;
+        app.browser_button_selected = popups::file_browser::FOCUS_LIST;
+    }
+}
+
 /// True for pointer motion that should not, by itself, force a redraw.
 fn event_is_idle_mouse_move(event: &Event) -> bool {
     matches!(
@@ -355,9 +401,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         app.browser_move_cursor(wheel_delta as i32);
                     }
                     WheelTarget::Help => {
-                        let new_row =
-                            (app.help_content_scroll.0 as isize + wheel_delta).max(0) as u16;
-                        app.help_content_scroll.0 = new_row;
+                        apply_help_scroll(app, wheel_delta as i32);
                     }
                     WheelTarget::Swallow => {}
                     WheelTarget::Editor => {
@@ -871,9 +915,26 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
             // handler so the highlighted row is always the one that would activate
             // on a click. Entries past the last row (blank padding) yield None.
             let area = popups::file_browser::list_area(popup, app.browser_origin_is_save);
-            let list_hit =
+            let overflowing = popups::file_browser::list_overflow_bar(
+                app.browser_entries.len(),
+                app.browser_selected,
+                popup,
+                app.browser_origin_is_save,
+            )
+            .overflowing();
+            let on_sb = popups::file_browser::list_click_is_scrollbar(
+                x as usize,
+                y as usize,
+                popup,
+                app.browser_origin_is_save,
+                overflowing,
+            );
+            let list_hit = if on_sb {
+                None
+            } else {
                 popups::file_browser::list_index_at(y as usize, area, app.browser_selected)
-                    .filter(|&i| i < app.browser_entries.len());
+                    .filter(|&i| i < app.browser_entries.len())
+            };
             app.browser_list_hover = list_hit;
             // Mouse owns focus: being over the list means list focus (sentinel 4),
             // so the previously-hovered footer button doesn't stay highlighted too.
@@ -1018,18 +1079,36 @@ fn handle_file_browser_click(x: usize, y: usize, app: &mut App) {
         } else if app.browser_origin_is_save && y == name_y {
             app.browser_button_selected = popups::file_browser::FOCUS_FILENAME;
         } else if y >= list_area.0 && y < list_area.1 {
-            // List row click: select + activate (dir enters, file confirms).
-            // Shares the row->index math with the hover preview so the clicked
-            // row is always the highlighted one.
-            let body_h = (list_area.1 - list_area.0).max(1);
-            if let Some(idx) =
-                popups::file_browser::list_index_at(y, list_area, app.browser_selected)
-                    .filter(|&i| i < app.browser_entries.len())
-            {
-                app.browser_select_index(idx);
-                app.browser_enter_selected();
+            let overflowing = popups::file_browser::list_overflow_bar(
+                app.browser_entries.len(),
+                app.browser_selected,
+                popup,
+                app.browser_origin_is_save,
+            )
+            .overflowing();
+            if popups::file_browser::list_click_is_scrollbar(
+                x,
+                y,
+                popup,
+                app.browser_origin_is_save,
+                overflowing,
+            ) {
+                apply_browser_scrollbar_at(app, y as u16);
+                app.popup_scrollbar_drag = Some(PopupFocus::FileBrowser);
+            } else {
+                // List row click: select + activate (dir enters, file confirms).
+                // Shares the row->index math with the hover preview so the clicked
+                // row is always the highlighted one.
+                let body_h = (list_area.1 - list_area.0).max(1);
+                if let Some(idx) =
+                    popups::file_browser::list_index_at(y, list_area, app.browser_selected)
+                        .filter(|&i| i < app.browser_entries.len())
+                {
+                    app.browser_select_index(idx);
+                    app.browser_enter_selected();
+                }
+                app.editor_visible_lines.set(body_h);
             }
-            app.editor_visible_lines.set(body_h);
         }
     } else {
         app.close_file_browser(false);
@@ -1112,6 +1191,17 @@ fn handle_help_click(x: usize, y: usize, app: &mut App) {
         && y >= popup.y as usize
         && y < (popup.y + popup.height) as usize
     {
+        if popups::help::help_click_is_scrollbar(
+            x,
+            y,
+            popup,
+            app.help_tab,
+            app.help_content_scroll.0,
+        ) {
+            apply_help_scrollbar_at(app, y as u16);
+            app.popup_scrollbar_drag = Some(PopupFocus::Help);
+            return;
+        }
         // Tab strip sits at inner row y = popup.y + 1.
         let tab_row = (popup.y + 1) as usize;
         if y == tab_row {
@@ -1121,6 +1211,7 @@ fn handle_help_click(x: usize, y: usize, app: &mut App) {
                 let ex = (popup.x + *x_end) as usize;
                 if x >= sx && x < ex {
                     app.help_tab = *tab;
+                    app.help_content_scroll = (0, 0);
                     break;
                 }
             }
@@ -1275,6 +1366,19 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             update_hover_states(x, y, app);
         }
         MouseEventKind::Drag(MouseButton::Left) => {
+            // Popup overflow-bar scrub is independent of the editor scrollbar
+            // flag (that flag is cleared while a modal is open).
+            match app.popup_scrollbar_drag {
+                Some(PopupFocus::Help) => {
+                    apply_help_scrollbar_at(app, y);
+                    return;
+                }
+                Some(PopupFocus::FileBrowser) => {
+                    apply_browser_scrollbar_at(app, y);
+                    return;
+                }
+                _ => {}
+            }
             // Two drag modes (mutually exclusive): scrollbar scrub vs text
             // selection. The flag is set on MouseDown; route accordingly.
             if app.scrollbar_drag_active {
@@ -1306,6 +1410,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             // off this flag, so it must be cleared as soon as the button releases.
             app.mouse_drag_active = false;
             app.scrollbar_drag_active = false;
+            app.popup_scrollbar_drag = None;
         }
         // Horizontal mouse-wheel (Shift+wheel on most terminals) scrolls the
         // view sideways. Vertical wheel is coalesced in run_app, but horizontal
@@ -1927,15 +2032,29 @@ fn handle_help_key(code: KeyCode, app: &mut App) {
         }
         KeyCode::Tab => {
             app.help_tab = app.help_tab.next();
+            app.help_content_scroll = (0, 0);
         }
         KeyCode::Char('1') => {
             app.help_tab = popups::help::HelpTab::Shortcuts;
+            app.help_content_scroll = (0, 0);
         }
         KeyCode::Char('2') => {
             app.help_tab = popups::help::HelpTab::Languages;
+            app.help_content_scroll = (0, 0);
         }
         KeyCode::Char('3') => {
             app.help_tab = popups::help::HelpTab::About;
+            app.help_content_scroll = (0, 0);
+        }
+        KeyCode::Up | KeyCode::Char('k') => apply_help_scroll(app, -1),
+        KeyCode::Down | KeyCode::Char('j') => apply_help_scroll(app, 1),
+        KeyCode::PageUp => {
+            let vis = popups::help::help_body_area(popups::help::help_rect(term_area())).height;
+            apply_help_scroll(app, -(vis as i32).max(1));
+        }
+        KeyCode::PageDown => {
+            let vis = popups::help::help_body_area(popups::help::help_rect(term_area())).height;
+            apply_help_scroll(app, (vis as i32).max(1));
         }
         _ => {}
     }
@@ -2480,6 +2599,74 @@ mod popup_focus_key_tests {
         assert!(app.show_help);
         handle_help_key(KeyCode::Esc, &mut app);
         assert!(!app.show_help);
+    }
+
+    #[test]
+    fn handle_help_tab_resets_scroll() {
+        let mut app = App::new(&[]);
+        app.open_help();
+        app.help_content_scroll.0 = 40;
+        handle_help_key(KeyCode::Tab, &mut app);
+        assert_eq!(app.help_content_scroll.0, 0);
+        assert_eq!(app.help_tab, popups::help::HelpTab::Languages);
+    }
+
+    #[test]
+    fn handle_help_down_increases_scroll_on_shortcuts() {
+        let mut app = App::new(&[]);
+        app.open_help();
+        handle_help_key(KeyCode::Down, &mut app);
+        assert!(app.help_content_scroll.0 >= 1);
+    }
+
+    #[test]
+    fn handle_file_browser_scrollbar_click_selects_without_entering() {
+        use crate::ui::popups::file_browser::BrowserEntry;
+        use std::path::PathBuf;
+
+        let mut app = App::new(&[]);
+        app.show_file_dialog(false);
+        app.open_file_browser();
+        let cwd = app.browser_cwd.clone();
+        app.browser_entries = (0..80)
+            .map(|i| BrowserEntry {
+                name: format!("f{i}"),
+                is_dir: false,
+                path: PathBuf::from(format!("/tmp/f{i}")),
+            })
+            .collect();
+        app.browser_selected = 0;
+        let popup = popups::file_browser::file_browser_rect(term_area());
+        let sb = popups::file_browser::list_scrollbar_rect(popup, false);
+        assert!(popups::file_browser::list_overflow_bar(
+            app.browser_entries.len(),
+            0,
+            popup,
+            false
+        )
+        .overflowing());
+        handle_file_browser_click(sb.x as usize, sb.y as usize + 4, &mut app);
+        assert_eq!(
+            app.browser_cwd, cwd,
+            "scrollbar click must not enter a file"
+        );
+        assert!(
+            app.show_file_browser,
+            "scrollbar click must not close the browser"
+        );
+        assert_eq!(app.popup_scrollbar_drag, Some(PopupFocus::FileBrowser));
+    }
+
+    #[test]
+    fn handle_help_tab_click_resets_scroll() {
+        let mut app = App::new(&[]);
+        app.open_help();
+        app.help_content_scroll.0 = 40;
+        let popup = popups::help::help_rect(term_area());
+        // "2 Languages" is popup-local x 15..26 on the tab row (popup.y + 1).
+        handle_help_click((popup.x + 16) as usize, (popup.y + 1) as usize, &mut app);
+        assert_eq!(app.help_tab, popups::help::HelpTab::Languages);
+        assert_eq!(app.help_content_scroll.0, 0);
     }
 
     #[test]

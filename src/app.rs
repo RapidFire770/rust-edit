@@ -111,6 +111,10 @@ pub struct App {
     /// (click-to-jump / drag-to-scrub). Mutually exclusive with
     /// `mouse_drag_active`: a scrollbar press never starts a text selection.
     pub scrollbar_drag_active: bool,
+    /// Popup whose overflow scrollbar is being dragged. Separate from
+    /// `scrollbar_drag_active` because the event loop clears the editor flag
+    /// whenever a modal is open.
+    pub popup_scrollbar_drag: Option<PopupFocus>,
     /// Set to true to exit the main loop cleanly (used by menu Quit etc.)
     pub should_quit: bool,
     /// Last known height (in lines) of the editor viewport area. Used for PgUp/PgDn and better scrolling.
@@ -212,6 +216,7 @@ impl App {
             last_mouse_pos: None,
             mouse_drag_active: false,
             scrollbar_drag_active: false,
+            popup_scrollbar_drag: None,
             should_quit: false,
             editor_visible_lines: std::cell::Cell::new(20),
             editor_visible_width: std::cell::Cell::new(80),
@@ -854,6 +859,7 @@ impl App {
 
     pub fn close_help(&mut self) {
         self.show_help = false;
+        self.popup_scrollbar_drag = None;
     }
 
     pub fn show_confirm_dialog(&mut self, message: &str, action: &str) {
@@ -1102,6 +1108,7 @@ impl App {
         }
         self.show_file_browser = false;
         self.browser_list_hover = None;
+        self.popup_scrollbar_drag = None;
     }
 
     /// Confirm the current directory as the Save As destination, joined with
@@ -1120,6 +1127,7 @@ impl App {
         self.file_path_input = self.browser_cwd.join(name).to_string_lossy().into_owned();
         self.show_file_browser = false;
         self.browser_list_hover = None;
+        self.popup_scrollbar_drag = None;
         self.file_dialog_selected = 0;
     }
 

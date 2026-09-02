@@ -10,6 +10,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::theme::Theme;
+use crate::ui::scrollbar::{self, OverflowBar};
 
 /// Which help tab is shown.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -178,9 +179,76 @@ pub fn help_tab_rects() -> &'static [(&'static str, HelpTab, u16, u16)] {
     ]
 }
 
-pub fn render(f: &mut Frame, area: Rect, theme: &Theme, tab: HelpTab, scroll: (u16, u16)) {
-    let popup = help_rect(area);
+/// Inner area inside the help border.
+pub fn help_inner(popup: Rect) -> Rect {
+    Rect::new(
+        popup.x.saturating_add(1),
+        popup.y.saturating_add(1),
+        popup.width.saturating_sub(2),
+        popup.height.saturating_sub(2),
+    )
+}
 
+/// Scrollable body: skips the pinned tab strip + blank row, leaves the footer.
+pub fn help_body_area(popup: Rect) -> Rect {
+    let inner = help_inner(popup);
+    let y = inner.y.saturating_add(2);
+    let h = inner.height.saturating_sub(3);
+    Rect::new(inner.x, y, inner.width, h)
+}
+
+/// Rightmost column of the help body (scrollbar track).
+pub fn help_scrollbar_rect(popup: Rect) -> Rect {
+    let body = help_body_area(popup);
+    Rect::new(
+        body.x.saturating_add(body.width.saturating_sub(1)),
+        body.y,
+        if body.width == 0 { 0 } else { 1 },
+        body.height,
+    )
+}
+
+pub fn help_overflow_bar(tab: HelpTab, popup: Rect, scroll_row: u16) -> OverflowBar {
+    let body = help_body_area(popup);
+    OverflowBar {
+        total: help_body_line_count(tab),
+        position: scroll_row as usize,
+        viewport: body.height as usize,
+    }
+}
+
+pub fn help_body_line_count(tab: HelpTab) -> usize {
+    help_body_lines(tab, &Theme::default()).len()
+}
+
+/// True when `(x, y)` is on the help body overflow track.
+pub fn help_click_is_scrollbar(
+    x: usize,
+    y: usize,
+    popup: Rect,
+    tab: HelpTab,
+    scroll_row: u16,
+) -> bool {
+    let bar = help_overflow_bar(tab, popup, scroll_row);
+    if !bar.overflowing() {
+        return false;
+    }
+    let sb = help_scrollbar_rect(popup);
+    sb.width > 0
+        && x >= sb.x as usize
+        && x < (sb.x + sb.width) as usize
+        && y >= sb.y as usize
+        && y < (sb.y + sb.height) as usize
+}
+
+pub fn clamp_help_scroll(scroll: u16, tab: HelpTab, popup: Rect) -> u16 {
+    let vis = help_body_area(popup).height as usize;
+    let total = help_body_line_count(tab);
+    let max = total.saturating_sub(vis);
+    (scroll as usize).min(max) as u16
+}
+
+fn help_body_lines(tab: HelpTab, theme: &Theme) -> Vec<Line<'static>> {
     let accent = Style::default()
         .fg(Color::from(&theme.accent))
         .add_modifier(Modifier::BOLD);
@@ -189,38 +257,13 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, tab: HelpTab, scroll: (u
         .fg(Color::from(&theme.string))
         .add_modifier(Modifier::BOLD);
 
-    let title = format!(" Help — {:?} ", tab);
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .style(theme.editor_bg_style());
-
-    // Tab strip.
-    let tabs = [
-        ("1 Shortcuts", HelpTab::Shortcuts),
-        ("2 Languages", HelpTab::Languages),
-        ("3 About", HelpTab::About),
-    ];
-    let mut tab_spans: Vec<Span> = Vec::new();
-    for (i, (label, t)) in tabs.iter().enumerate() {
-        if i > 0 {
-            tab_spans.push(Span::raw("   "));
-        }
-        let s = if *t == tab { accent } else { dim };
-        tab_spans.push(Span::styled(*label, s));
-    }
-
     let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(tab_spans));
-    lines.push(Line::from(""));
-
     match tab {
         HelpTab::Shortcuts => {
             for (category, rows) in shortcuts_rows() {
                 lines.push(Line::from(Span::styled(category, accent)));
                 for (k, d) in rows {
                     let mut row = vec![Span::raw("  "), Span::styled(k, key_style)];
-                    // pad key column to align descriptions; extra 2-space gap for readability
                     let pad = 28usize.saturating_sub(k.chars().count());
                     row.push(Span::raw(" ".repeat(pad + 2)));
                     row.push(Span::styled(d, dim));
@@ -265,18 +308,148 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, tab: HelpTab, scroll: (u
             ));
         }
     }
+    lines
+}
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Press F1 or Esc to close. Tab or 1/2/3 to switch sections.",
-        dim,
-    )));
+pub fn render(f: &mut Frame, area: Rect, theme: &Theme, tab: HelpTab, scroll: (u16, u16)) {
+    let popup = help_rect(area);
+    let inner = help_inner(popup);
+    let body = help_body_area(popup);
+    let scroll_y = clamp_help_scroll(scroll.0, tab, popup);
+    let bar = help_overflow_bar(tab, popup, scroll_y);
 
-    let para = Paragraph::new(lines)
-        .block(block)
-        .style(Style::default().fg(Color::from(&theme.editor_fg)))
-        .scroll(scroll);
+    let accent = Style::default()
+        .fg(Color::from(&theme.accent))
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(Color::from(&theme.editor_fg));
+
+    let title = format!(" Help — {:?} ", tab);
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .style(theme.editor_bg_style());
 
     f.render_widget(Clear, popup);
-    f.render_widget(para, popup);
+    f.render_widget(block, popup);
+
+    let tabs = [
+        ("1 Shortcuts", HelpTab::Shortcuts),
+        ("2 Languages", HelpTab::Languages),
+        ("3 About", HelpTab::About),
+    ];
+    let mut tab_spans: Vec<Span> = Vec::new();
+    for (i, (label, t)) in tabs.iter().enumerate() {
+        if i > 0 {
+            tab_spans.push(Span::raw("   "));
+        }
+        let s = if *t == tab { accent } else { dim };
+        tab_spans.push(Span::styled(*label, s));
+    }
+    let tab_area = Rect::new(inner.x, inner.y, inner.width, 1.min(inner.height));
+    f.render_widget(Paragraph::new(Line::from(tab_spans)), tab_area);
+
+    let content_w = if bar.overflowing() {
+        body.width.saturating_sub(1)
+    } else {
+        body.width
+    };
+    let content = Rect::new(body.x, body.y, content_w, body.height);
+    if content.height > 0 && content.width > 0 {
+        let para = Paragraph::new(help_body_lines(tab, theme))
+            .style(Style::default().fg(Color::from(&theme.editor_fg)))
+            .scroll((scroll_y, 0));
+        f.render_widget(para, content);
+    }
+
+    scrollbar::render(f, help_scrollbar_rect(popup), bar, theme);
+
+    if inner.height > 0 {
+        let footer_area = Rect::new(
+            inner.x,
+            inner.y + inner.height.saturating_sub(1),
+            inner.width,
+            1,
+        );
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "Press F1 or Esc to close. Tab or 1/2/3 to switch sections.",
+                dim,
+            ))),
+            footer_area,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn typical_term() -> Rect {
+        Rect::new(0, 0, 80, 24)
+    }
+
+    #[test]
+    fn help_shortcuts_overflows_default_popup() {
+        let popup = help_rect(typical_term());
+        let vis = help_body_area(popup).height as usize;
+        assert!(help_body_line_count(HelpTab::Shortcuts) > vis);
+        assert!(help_overflow_bar(HelpTab::Shortcuts, popup, 0).overflowing());
+    }
+
+    #[test]
+    fn help_scrollbar_hidden_when_about_fits() {
+        let popup = help_rect(typical_term());
+        assert!(!help_overflow_bar(HelpTab::About, popup, 0).overflowing());
+    }
+
+    #[test]
+    fn clamp_help_scroll_caps_at_max() {
+        let popup = help_rect(typical_term());
+        let vis = help_body_area(popup).height as usize;
+        let total = help_body_line_count(HelpTab::Shortcuts);
+        let max = total.saturating_sub(vis) as u16;
+        assert_eq!(clamp_help_scroll(0, HelpTab::Shortcuts, popup), 0);
+        assert_eq!(clamp_help_scroll(max, HelpTab::Shortcuts, popup), max);
+        assert_eq!(clamp_help_scroll(u16::MAX, HelpTab::Shortcuts, popup), max);
+    }
+
+    #[test]
+    fn help_tab_strip_stays_on_inner_row_one() {
+        let popup = help_rect(typical_term());
+        // handle_help_click uses popup.y + 1 as the tab row.
+        assert_eq!(help_inner(popup).y, popup.y + 1);
+        let body = help_body_area(popup);
+        assert!(body.y > popup.y + 1, "body must sit below the tab strip");
+    }
+
+    #[test]
+    fn help_scrollbar_rect_is_rightmost_body_column() {
+        let popup = help_rect(typical_term());
+        let body = help_body_area(popup);
+        let sb = help_scrollbar_rect(popup);
+        assert_eq!(sb.y, body.y);
+        assert_eq!(sb.height, body.height);
+        assert_eq!(sb.width, 1);
+        assert_eq!(sb.x, body.x + body.width - 1);
+    }
+
+    #[test]
+    fn help_click_is_scrollbar_false_when_about_fits() {
+        let popup = help_rect(typical_term());
+        let sb = help_scrollbar_rect(popup);
+        assert!(!help_click_is_scrollbar(
+            sb.x as usize,
+            sb.y as usize,
+            popup,
+            HelpTab::About,
+            0
+        ));
+        assert!(help_click_is_scrollbar(
+            sb.x as usize,
+            sb.y as usize,
+            popup,
+            HelpTab::Shortcuts,
+            0
+        ));
+    }
 }

@@ -5,9 +5,7 @@
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
@@ -54,17 +52,16 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     } else {
         (buf.line_count(), buf.scroll_offset.0)
     };
-    let content_length = total_rows.saturating_sub(vis).saturating_add(1);
-    let mut scrollbar_state = ScrollbarState::new(content_length)
-        .position(scroll_pos)
-        .viewport_content_length(vis);
-    let scrollbar = Scrollbar::default()
-        .orientation(ScrollbarOrientation::VerticalRight)
-        .begin_symbol(Some("↑"))
-        .end_symbol(Some("↓"))
-        .track_symbol(Some("│"))
-        .thumb_symbol("█");
-    f.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    crate::ui::scrollbar::render_always(
+        f,
+        scrollbar_area,
+        crate::ui::scrollbar::OverflowBar {
+            total: total_rows,
+            position: scroll_pos,
+            viewport: vis,
+        },
+        theme,
+    );
 }
 
 /// Original 1-line-per-row render path. Unchanged from the pre-wrap version.

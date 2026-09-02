@@ -5,7 +5,7 @@
 - [ ] Edit / new theme not working. Cannot select any colors to change or type color values.
   - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value.
 - [ ] In the file browser window when mouse is outside the popup it still scrolls the files list.
-- [ ] A Scrollbar should display in the popups to indicate to the user that the content is scrollable when it overflows the popup window. Currently noticable as an issue in help and file browsing popups.
+- [x] A Scrollbar should display in the popups to indicate to the user that the content is scrollable when it overflows the popup window. Currently noticable as an issue in help and file browsing popups.
 
 ### Major:
 
