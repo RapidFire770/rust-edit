@@ -227,6 +227,8 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
         return None;
     }
 
+    let vis = app.editor_visible_lines.get().max(1);
+
     if app.config.word_wrap {
         let buf = app.active_buffer();
         let layout = crate::wrap::compute_layout(
@@ -240,6 +242,9 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
         let scroll_row = buf.scroll_offset.0;
         if cursor_screen_row >= scroll_row {
             let view_row = cursor_screen_row - scroll_row;
+            if view_row >= vis {
+                return None;
+            }
             let screen_y = crate::ui::layout::HEADER_ROWS + view_row as u16;
             // Column within the sub-row: distance from the sub-row's start byte to the cursor.
             let (line_idx, _col_in_line) = buf.cursor_position();
@@ -271,6 +276,9 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
         let hscroll = buf.scroll_offset.1;
         if cur_row >= scroll_row {
             let view_row = cur_row - scroll_row;
+            if view_row >= vis {
+                return None;
+            }
             // Header now occupies HEADER_ROWS (menu + separator rule).
             let screen_y = crate::ui::layout::HEADER_ROWS + view_row as u16;
             // Hardware cursor must compensate hscroll: the drawn content starts at logical hscroll.
@@ -2926,5 +2934,49 @@ mod editor_mouse_click_scroll_tests {
         handle_mouse(left_down(crate::buffer::Buffer::GUTTER_WIDTH as u16, y), &mut app);
         assert_eq!(app.active_buffer().scroll_offset.0, 40);
         assert_eq!(app.active_buffer().cursor_position().0, 50);
+    }
+
+    #[test]
+    fn hardware_cursor_hidden_when_view_row_past_viewport() {
+        let mut app = App::new(&[]);
+        app.config.word_wrap = false;
+        app.editor_visible_lines.set(20);
+        let b = app.active_buffer_mut();
+        b.visible_lines = 20;
+        b.word_wrap = false;
+        // Empty/untitled buffer: cursor in view → Some.
+        assert!(compute_cursor_position(&app).is_some());
+        // Cursor below the viewport: view_row 25 >= vis 20 → None (not status bar).
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(
+            &(0..30).map(|i| format!("L{i}")).collect::<Vec<_>>().join("\n"),
+            None,
+        );
+        app.active_buffer_mut().cursor = app.active_buffer().rope.line_to_byte(25);
+        app.active_buffer_mut().scroll_offset = (0, 0);
+        app.editor_visible_lines.set(20);
+        assert_eq!(
+            compute_cursor_position(&app),
+            None,
+            "caret below the editor must hide, not paint on the status bar"
+        );
+    }
+
+    #[test]
+    fn hardware_cursor_y_is_inside_editor_for_last_visible_row() {
+        let mut app = App::new(&[]);
+        app.config.word_wrap = false;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(
+            &(0..30).map(|i| format!("L{i}")).collect::<Vec<_>>().join("\n"),
+            None,
+        );
+        app.editor_visible_lines.set(20);
+        let b = app.active_buffer_mut();
+        b.scroll_offset = (10, 0);
+        b.cursor = b.rope.line_to_byte(29); // last visible row: view_row = 19
+        let (_x, y) = compute_cursor_position(&app).expect("last visible row is on-screen");
+        let last_editor_y = crate::ui::layout::HEADER_ROWS + 19;
+        assert_eq!(y, last_editor_y);
+        // Status bar is HEADER_ROWS + vis; cursor must be strictly above it.
+        assert!(y < crate::ui::layout::HEADER_ROWS + 20);
     }
 }
