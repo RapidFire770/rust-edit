@@ -91,6 +91,12 @@ pub struct Buffer {
     /// scrollbar). Refreshed each frame so horizontal auto-scroll can follow the
     /// cursor when a line is longer than the window.
     pub visible_width: usize,
+    /// Mirrors `App.config.word_wrap`, refreshed each frame with `visible_lines`.
+    /// When true, `scroll_offset.0` is a screen row and `adjust_scroll` must use
+    /// wrap math (wrap spec §4.1). Default false so existing tests are unchanged.
+    pub word_wrap: bool,
+    /// Mirrors `App.config.tab_size`, needed to compute wrap layout on edit.
+    pub tab_size: u8,
     /// Bumped on every text mutation (insert/backspace/delete/newline/indent/dedent/undo/redo).
     /// Used as an invalidation key by the highlight cache so spans are only recomputed
     /// on edit or scroll into new lines (see AGENTS §6 "Syntax Highlighting").
@@ -130,6 +136,8 @@ impl Buffer {
             scroll_offset: (0, 0),
             visible_lines: 20,
             visible_width: 80,
+            word_wrap: false,
+            tab_size: 4,
             generation: 0,
             id: next_buffer_id(),
             undo_stack: Vec::with_capacity(32),
@@ -163,6 +171,8 @@ impl Buffer {
             scroll_offset: (0, 0),
             visible_lines: 20,
             visible_width: 80,
+            word_wrap: false,
+            tab_size: 4,
             generation: 0,
             id: next_buffer_id(),
             undo_stack: Vec::with_capacity(32),
@@ -639,6 +649,17 @@ impl Buffer {
     /// view to start scrolling ~halfway down the screen and to jump on every
     /// keystroke in long files. The logic mirrors `ensure_cursor_visible`.
     pub fn adjust_scroll(&mut self) {
+        if self.word_wrap {
+            let layout = crate::wrap::compute_layout(
+                &self.rope,
+                0,
+                self.line_count(),
+                self.visible_width.max(1),
+                self.tab_size,
+            );
+            self.ensure_cursor_visible_wrapped(&layout, self.visible_lines.max(1));
+            return;
+        }
         let v = self.visible_lines.max(1);
         let (row, col) = self.cursor_position();
         let s = self.scroll_offset.0;
@@ -1334,6 +1355,66 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         Buffer::from_str(&text, None)
+    }
+
+    /// 80 logical lines, each 40 `x`s. At width 20 / tab 4 each line is 2 screen rows
+    /// (no spaces → character-fallback wrap). 160 screen rows total.
+    fn make_wrapping_buffer() -> Buffer {
+        let text = (0..80)
+            .map(|_| "x".repeat(40))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut b = Buffer::from_str(&text, None);
+        b.visible_lines = 20;
+        b.visible_width = 20;
+        b.word_wrap = true;
+        b.tab_size = 4;
+        b
+    }
+
+    #[test]
+    fn wrapped_in_view_mouse_place_does_not_move_scroll() {
+        let mut b = make_wrapping_buffer();
+        // Screen rows 0..159. Viewport 20 rows starting at screen row 40
+        // (logical lines 20..29, each 2 rows).
+        b.scroll_offset = (40, 0);
+        let layout = crate::wrap::compute_layout(&b.rope, 0, b.line_count(), 20, 4);
+        // Click in the middle of the viewport: screen row 50, col 0.
+        let target = crate::wrap::byte_of_screen_row(&layout, &b.rope, 0, 50, 0);
+        b.cursor = target;
+        let scroll_before = b.scroll_offset.0;
+
+        // Unwrapped ensure is the wrap-off helper; under wrap, mutation-time
+        // scroll uses adjust_scroll which must keep screen-row units.
+        b.adjust_scroll();
+        assert_eq!(
+            b.scroll_offset.0, scroll_before,
+            "in-view wrap click must not change scroll"
+        );
+    }
+
+    #[test]
+    fn wrapped_ensure_leaves_in_view_cursor_unscrolled() {
+        let mut b = make_wrapping_buffer();
+        b.scroll_offset = (40, 0);
+        let layout = crate::wrap::compute_layout(&b.rope, 0, b.line_count(), 20, 4);
+        b.cursor = crate::wrap::byte_of_screen_row(&layout, &b.rope, 0, 50, 0);
+        b.ensure_cursor_visible_wrapped(&layout, b.visible_lines);
+        assert_eq!(b.scroll_offset.0, 40);
+    }
+
+    #[test]
+    fn wrapped_insert_inside_viewport_does_not_jump_scroll() {
+        let mut b = make_wrapping_buffer();
+        b.scroll_offset = (40, 0);
+        let layout = crate::wrap::compute_layout(&b.rope, 0, b.line_count(), 20, 4);
+        b.cursor = crate::wrap::byte_of_screen_row(&layout, &b.rope, 0, 50, 0);
+        let scroll_before = b.scroll_offset.0;
+        b.insert_char('Z');
+        assert_eq!(
+            b.scroll_offset.0, scroll_before,
+            "typing inside a wrapped viewport must not jump the view"
+        );
     }
 
     #[test]

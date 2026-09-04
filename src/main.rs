@@ -295,9 +295,13 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
         // adds horizontal auto-scroll that follows the cursor on long lines.
         let vis = app.editor_visible_lines.get().max(1);
         let hwidth = app.editor_visible_width.get().max(1);
+        let wrap = app.config.word_wrap;
+        let tab = app.config.tab_size;
         for b in app.buffers.iter_mut() {
             b.visible_lines = vis;
             b.visible_width = hwidth;
+            b.word_wrap = wrap;
+            b.tab_size = tab;
         }
 
         terminal.hide_cursor().ok();
