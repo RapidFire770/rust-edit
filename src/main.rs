@@ -2894,7 +2894,10 @@ mod editor_mouse_click_scroll_tests {
         let scroll_before = app.active_buffer().scroll_offset.0;
         // Content col 0 is terminal x = GUTTER_WIDTH. Editor y 10 → screen row 50.
         let y = crate::ui::layout::HEADER_ROWS + 10;
-        handle_mouse(left_down(crate::buffer::Buffer::GUTTER_WIDTH as u16, y), &mut app);
+        handle_mouse(
+            left_down(crate::buffer::Buffer::GUTTER_WIDTH as u16, y),
+            &mut app,
+        );
         assert_eq!(
             app.active_buffer().scroll_offset.0,
             scroll_before,
@@ -2931,7 +2934,10 @@ mod editor_mouse_click_scroll_tests {
         b.word_wrap = false;
         b.scroll_offset = (40, 0);
         let y = crate::ui::layout::HEADER_ROWS + 10;
-        handle_mouse(left_down(crate::buffer::Buffer::GUTTER_WIDTH as u16, y), &mut app);
+        handle_mouse(
+            left_down(crate::buffer::Buffer::GUTTER_WIDTH as u16, y),
+            &mut app,
+        );
         assert_eq!(app.active_buffer().scroll_offset.0, 40);
         assert_eq!(app.active_buffer().cursor_position().0, 50);
     }
@@ -2948,7 +2954,10 @@ mod editor_mouse_click_scroll_tests {
         assert!(compute_cursor_position(&app).is_some());
         // Cursor below the viewport: view_row 25 >= vis 20 → None (not status bar).
         *app.active_buffer_mut() = crate::buffer::Buffer::from_str(
-            &(0..30).map(|i| format!("L{i}")).collect::<Vec<_>>().join("\n"),
+            &(0..30)
+                .map(|i| format!("L{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
             None,
         );
         app.active_buffer_mut().cursor = app.active_buffer().rope.line_to_byte(25);
@@ -2966,7 +2975,10 @@ mod editor_mouse_click_scroll_tests {
         let mut app = App::new(&[]);
         app.config.word_wrap = false;
         *app.active_buffer_mut() = crate::buffer::Buffer::from_str(
-            &(0..30).map(|i| format!("L{i}")).collect::<Vec<_>>().join("\n"),
+            &(0..30)
+                .map(|i| format!("L{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
             None,
         );
         app.editor_visible_lines.set(20);

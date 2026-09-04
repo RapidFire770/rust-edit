@@ -3,7 +3,7 @@
 **Project:** Rust-Edit — Feature-rich terminal text & code editor (TUI)  
 **Primary Framework:** Ratatui v0.30+  
 **Status:** Phase 1 complete (June 2026). MVP + high-value additions shipped.   
-**Last Updated:** August 31, 2026
+**Last Updated:** September 4, 2026
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
 
@@ -146,7 +146,7 @@ rust-edit/
 
 **Key types / established patterns (read before editing these areas):**
 
-- `Buffer` fields: `id` (unique `AtomicU64` identity for the highlight cache key), `cursor` (byte offset), `selection` (normalized `Range`) + `selection_anchor` (fixed anchor for bidirectional extend), `scroll_offset` (row, col), `visible_lines`/`visible_width` (synced each frame), `generation` (invalidation key for the highlight cache), `is_initial` (true only for the auto-created untitled placeholder at startup or after closing the last tab; `[+]` tabs stay false). Auto-scroll lives in `adjust_scroll` (vertical+horizontal edge clamping) and `ensure_cursor_*`. File open goes through `App::open_file_in_tab` (duplicate-focus, then in-place placeholder replace, else append).
+- `Buffer` fields: `id` (unique `AtomicU64` identity for the highlight cache key), `cursor` (byte offset), `selection` (normalized `Range`) + `selection_anchor` (fixed anchor for bidirectional extend), `scroll_offset` (row, col), `visible_lines`/`visible_width`/`word_wrap`/`tab_size` (synced each frame from the run loop), `generation` (invalidation key for the highlight cache), `is_initial` (true only for the auto-created untitled placeholder at startup or after closing the last tab; `[+]` tabs stay false). Auto-scroll lives in `adjust_scroll` (vertical+horizontal edge clamping; wrap-aware when `word_wrap` is set so `scroll_offset.0` stays a screen row) and `ensure_cursor_*` (use `ensure_cursor_visible_wrapped` for mouse/find under wrap). File open goes through `App::open_file_in_tab` (duplicate-focus, then in-place placeholder replace, else append).
 - `FindState.focus: FindFocus` — a 3-state model (Query → Replace → Command) so letters like `n`/`N` type normally into the boxes and navigate only in Command mode.
 - Syntax highlighting: `HighlightCache` (`src/highlight_cache.rs`) stores syntect `ParseState`/`HighlightState` checkpoints every 64 lines plus an overscanned span window and a frontier. `App::refresh_highlight_cache` is a cache fill, not a full viewport reparse. Scrolling inside the padded window is a hit. Mid-file multi-line constructs resume from the last checkpoint — never `HighlightLines::new` at the viewport. Cache key is `(language, generation, Buffer.id)` so two gen-0 tabs cannot alias. Syntect rayon-style parallel highlighting is not used for a single buffer (grammars are sequential). A background highlight thread is deferred until large-file *jumps* still hitch after checkpoints exist. `editor.rs` reads `line_spans` and paints via `ui::spans::paint_line_spans` (batched tokens, not per-character Spans).
 - Event coalescing: `run_app` drains queued events and sums consecutive mouse-wheel deltas into one scroll → one redraw per burst.
