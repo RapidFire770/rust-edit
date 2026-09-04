@@ -1350,15 +1350,19 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                                     );
                                     buf.cursor = target_byte.min(buf.rope.len_bytes());
                                     buf.clear_selection();
+                                    // Screen-row ensure: in-view clicks are a no-op. The
+                                    // unwrapped helper treats scroll_offset.0 as a logical
+                                    // line and jumps the page under wrap.
+                                    buf.ensure_cursor_visible_wrapped(&layout, vis);
                                 } else {
                                     let hscroll = buf.scroll_offset.1;
                                     // visual_col must account for hscroll: screen col 0 in content == logical hscroll
                                     let visual_col = col_in_row + hscroll;
                                     let visual_line = buf.scroll_offset.0 + editor_y;
                                     buf.set_cursor_from_visual(visual_line, visual_col);
+                                    // Do not force recenter here (ensure only if offscreen).
+                                    buf.ensure_cursor_visible(vis);
                                 }
-                                // Do not force recenter here (ensure only if offscreen); set_visual no longer adjusts.
-                                buf.ensure_cursor_visible(vis);
                                 // Begin a mouse-drag selection session; cleared on MouseUp
                                 // or when a modal popup opens. Drives edge auto-scroll.
                                 app.mouse_drag_active = true;
@@ -2839,5 +2843,88 @@ mod popup_mouse_focus_tests {
         assert_eq!(app.config.tab_size, 8);
 
         app.config.set_tab_size(saved_tab);
+    }
+}
+
+#[cfg(test)]
+mod editor_mouse_click_scroll_tests {
+    use super::*;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    fn left_down(column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn wrapping_app() -> App {
+        let text = (0..80)
+            .map(|_| "x".repeat(40))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = App::new(&[]);
+        app.config.word_wrap = true;
+        app.config.tab_size = 4;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&text, None);
+        app.editor_visible_lines.set(20);
+        app.editor_visible_width.set(20);
+        let b = app.active_buffer_mut();
+        b.visible_lines = 20;
+        b.visible_width = 20;
+        b.word_wrap = true;
+        b.tab_size = 4;
+        b.scroll_offset = (40, 0);
+        app
+    }
+
+    #[test]
+    fn wrap_click_in_viewport_does_not_move_scroll() {
+        let mut app = wrapping_app();
+        let scroll_before = app.active_buffer().scroll_offset.0;
+        // Content col 0 is terminal x = GUTTER_WIDTH. Editor y 10 → screen row 50.
+        let y = crate::ui::layout::HEADER_ROWS + 10;
+        handle_mouse(left_down(crate::buffer::Buffer::GUTTER_WIDTH as u16, y), &mut app);
+        assert_eq!(
+            app.active_buffer().scroll_offset.0,
+            scroll_before,
+            "click inside a wrapped viewport must not jump the page"
+        );
+        let layout = crate::wrap::compute_layout(
+            &app.active_buffer().rope,
+            0,
+            app.active_buffer().line_count(),
+            20,
+            4,
+        );
+        let cursor_row = crate::wrap::screen_row_of_byte(
+            &layout,
+            &app.active_buffer().rope,
+            0,
+            app.active_buffer().cursor,
+        );
+        assert_eq!(cursor_row, 50, "caret must land on the clicked screen row");
+    }
+
+    #[test]
+    fn unwrap_click_in_viewport_does_not_move_scroll() {
+        let text = (0..200)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = App::new(&[]);
+        app.config.word_wrap = false;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&text, None);
+        app.editor_visible_lines.set(20);
+        let b = app.active_buffer_mut();
+        b.visible_lines = 20;
+        b.word_wrap = false;
+        b.scroll_offset = (40, 0);
+        let y = crate::ui::layout::HEADER_ROWS + 10;
+        handle_mouse(left_down(crate::buffer::Buffer::GUTTER_WIDTH as u16, y), &mut app);
+        assert_eq!(app.active_buffer().scroll_offset.0, 40);
+        assert_eq!(app.active_buffer().cursor_position().0, 50);
     }
 }
