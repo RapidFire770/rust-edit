@@ -6,7 +6,7 @@
   - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value.
 - [x] In the file browser window when the mouse is outside of the popup window it still scrolls the files list.
 - [x] A Scrollbar should display in the popups to indicate to the user that the content is scrollable when it overflows the popup window. Currently noticable as an issue in help and file browsing popups.
-- [ ] Cannot click and drag the scrollbar with the mouse in the file browser popups.
+- [x] Cannot click and drag the scrollbar with the mouse in the file browser popups.
 - [ ] Save as and Open file popups file paths are crossing over with each other on reopening the popups. The file paths should be cleared/empty upon opening for the user to select a new file to open or save.
 
 ### Major:

@@ -174,10 +174,14 @@ fn apply_browser_scrollbar_at(app: &mut App, y: u16) {
         return;
     }
     if let Some(pos) = bar.target_for_row(y, sb) {
-        let sel = if pos >= bar.max_position() {
-            app.browser_entries.len().saturating_sub(1)
+        // Properly map the scrollbar position to the selection index range
+        let max_pos = bar.max_position();
+        let total = app.browser_entries.len();
+        let sel = if max_pos == 0 || total == 0 {
+            0
         } else {
-            pos
+            // Scale from [0, max_pos] to [0, total-1]
+            ((pos as f64 / max_pos as f64) * (total - 1) as f64).round() as usize
         };
         app.browser_select_index(sel);
         app.browser_list_hover = None;
@@ -2653,6 +2657,60 @@ mod popup_focus_key_tests {
             "scrollbar click must not close the browser"
         );
         assert_eq!(app.popup_scrollbar_drag, Some(PopupFocus::FileBrowser));
+    }
+
+    #[test]
+    fn browser_scrollbar_position_maps_consistently() {
+        use crate::ui::popups::file_browser::BrowserEntry;
+        use std::path::PathBuf;
+
+        let mut app = App::new(&[]);
+        app.show_file_dialog(false);
+        app.open_file_browser();
+        // 100 files, viewport ~15 rows
+        app.browser_entries = (0..100)
+            .map(|i| BrowserEntry {
+                name: format!("f{i}"),
+                is_dir: false,
+                path: PathBuf::from(format!("/tmp/f{i}")),
+            })
+            .collect();
+        app.browser_selected = 0;
+        let popup = popups::file_browser::file_browser_rect(term_area());
+        let sb = popups::file_browser::list_scrollbar_rect(popup, false);
+        let total = app.browser_entries.len();
+
+        // Test that dragging to the top of the scrollbar selects an early file
+        handle_file_browser_click(sb.x as usize, sb.y as usize + 1, &mut app);
+        let top_sel = app.browser_selected;
+        assert!(top_sel < total / 4, "top of scrollbar should select early file");
+
+        // Test that dragging to the middle of the scrollbar selects a middle file
+        let mid_y = sb.y + sb.height / 2;
+        handle_file_browser_click(sb.x as usize, mid_y as usize, &mut app);
+        let mid_sel = app.browser_selected;
+        assert!(
+            mid_sel > total / 4 && mid_sel < (total * 3) / 4,
+            "middle of scrollbar should select middle file"
+        );
+
+        // Test that dragging to the bottom of the scrollbar selects a late file
+        let bottom_y = sb.y + sb.height - 2;
+        handle_file_browser_click(sb.x as usize, bottom_y as usize, &mut app);
+        let bottom_sel = app.browser_selected;
+        assert!(
+            bottom_sel > (total * 3) / 4,
+            "bottom of scrollbar should select late file"
+        );
+
+        // Verify the mapping is monotonic (top < middle < bottom)
+        assert!(
+            top_sel < mid_sel && mid_sel < bottom_sel,
+            "scrollbar mapping should be monotonic: top ({}) < middle ({}) < bottom ({})",
+            top_sel,
+            mid_sel,
+            bottom_sel
+        );
     }
 
     #[test]
