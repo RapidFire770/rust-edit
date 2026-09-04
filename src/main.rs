@@ -2275,38 +2275,14 @@ fn ui(f: &mut Frame, app: &mut App) {
         base_h
     };
     let vis_h = vis_h.max(1);
-    app.editor_visible_lines.set(vis_h);
     // Text-area width = editor area minus line-number gutter (6) minus scrollbar (1).
     let content_w = (chunks[1].width as usize)
         .saturating_sub(Buffer::GUTTER_WIDTH + 1)
         .max(1);
-    app.editor_visible_width.set(content_w);
-
-    // Refresh the cached syntax spans for the visible window. This is a cheap
-    // key comparison on a steady frame and a full (single-HighlightLines) recompute
-    // only on edit / scroll / language change. Done here so editor::render can read
-    // the cache immutably.
-    //
-    // Under word wrap `scroll_offset.0` is a screen row, but
-    // `refresh_highlight_cache` expects a logical-line index. Translate the
-    // visible screen-row window back to a logical-line window first
-    // (final-review Critical-1); otherwise `cache.start_line` exceeds the
-    // logical-line indices of every visible line and `render_wrapped` falls
-    // back to `Span::raw`, losing all syntax color.
-    let scroll_row = app.active_buffer().scroll_offset.0;
-    if app.config.word_wrap {
-        let buf = app.active_buffer();
-        let (start, count) = crate::wrap::visible_logical_window(
-            &buf.rope,
-            scroll_row,
-            vis_h,
-            buf.visible_width.max(1),
-            app.config.tab_size,
-        );
-        app.refresh_highlight_cache(start, count);
-    } else {
-        app.refresh_highlight_cache(scroll_row, vis_h);
-    }
+    // Sync every buffer, clamp wrap/unwrapped scroll, and fill the highlight
+    // cache using this frame's size — before render, so a resize cannot leave
+    // `buf.visible_width` stale relative to the wrap layout being painted.
+    app.apply_editor_viewport(vis_h, content_w);
 
     crate::ui::header::render(f, chunks[0], app);
 

@@ -15,11 +15,33 @@ pub struct WrapLayout {
     pub tab_size: u8,
 }
 
+/// Logical line index whose wrapped row range contains `scroll_screen_row`.
+/// If `scroll_screen_row` is past the last row, returns the last logical line
+/// (same default as `render_wrapped`), not 0.
+pub fn first_logical_line_for_screen_row(layout: &WrapLayout, scroll_screen_row: usize) -> usize {
+    if layout.breaks.is_empty() {
+        return 0;
+    }
+    let mut prefix = 0usize;
+    for (i, line_breaks) in layout.breaks.iter().enumerate() {
+        let rows = line_breaks.len() + 1;
+        if prefix + rows > scroll_screen_row {
+            return i;
+        }
+        prefix += rows;
+    }
+    layout.breaks.len() - 1
+}
+
 /// Given a screen-row scroll offset and a visible screen-row count, return the
 /// `(logical_start_line, logical_count)` window that covers all visible screen
 /// rows. Used to feed `refresh_highlight_cache` correct logical-line arguments
 /// under word wrap (where `scroll_offset.0` is a screen row, not a logical
 /// line — see final-review Critical-1).
+///
+/// Scroll past the wrapped total is clamped to the last full page
+/// (`total.saturating_sub(visible_screen_rows)`), matching `clamp_scroll_wrapped`,
+/// so cache fill and the renderer describe the same window.
 pub fn visible_logical_window(
     rope: &Rope,
     scroll_screen_row: usize,
@@ -29,21 +51,22 @@ pub fn visible_logical_window(
 ) -> (usize, usize) {
     let n = rope.len_lines();
     let layout = compute_layout(rope, 0, n, width, tab_size);
-    // Find the logical line containing scroll_screen_row.
-    let mut prefix = 0usize;
-    let mut start_line = 0usize;
-    for (i, line_breaks) in layout.breaks.iter().enumerate() {
-        let rows = line_breaks.len() + 1;
-        if prefix + rows > scroll_screen_row {
-            start_line = i;
-            break;
-        }
-        prefix += rows;
+    if layout.total_screen_rows == 0 {
+        return (0, 1);
     }
-    // Extend the window until we've covered visible_screen_rows screen rows
-    // from scroll_screen_row.
-    let target_end_row = scroll_screen_row + visible_screen_rows;
-    let mut acc = prefix; // screen rows up to and including start_line's first row
+    let vis = visible_screen_rows.max(1);
+    // Last page, not last row: vis=5 and total=10 → scroll 5, lines [5, 10).
+    let max_scroll = layout.total_screen_rows.saturating_sub(vis);
+    let scroll_screen_row = scroll_screen_row.min(max_scroll);
+    let start_line = first_logical_line_for_screen_row(&layout, scroll_screen_row);
+    let mut prefix = 0usize;
+    for line_breaks in layout.breaks.iter().take(start_line) {
+        prefix += line_breaks.len() + 1;
+    }
+    // Extend the window until we've covered `vis` screen rows from the
+    // (possibly clamped) scroll origin.
+    let target_end_row = scroll_screen_row + vis;
+    let mut acc = prefix;
     let mut end_line = start_line;
     for (i, line_breaks) in layout.breaks.iter().enumerate().skip(start_line) {
         let rows = line_breaks.len() + 1;
@@ -591,5 +614,46 @@ mod tests {
         let (start, count) = visible_logical_window(&rope, 1, 2, 3, 4);
         assert_eq!(start, 0);
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn visible_logical_window_clamps_scroll_past_end() {
+        // 10 short lines, width 80 → 1 screen row each. Scroll far past the
+        // last row must still describe the last visible window, not line 0.
+        // No trailing newline so ropey reports exactly 10 lines.
+        let rope = Rope::from_str("a\nb\nc\nd\ne\nf\ng\nh\ni\nj");
+        assert_eq!(rope.len_lines(), 10);
+        let (start, count) = visible_logical_window(&rope, 999, 5, 80, 4);
+        assert_eq!(start, 5, "past-end scroll must start at the last 5 lines");
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn visible_logical_window_matches_render_start_when_narrowing() {
+        // 80-char lines: width 80 → 1 row/line; width 20 → 4 rows/line.
+        // Same screen-row scroll must not jump to a later logical start
+        // than the renderer would paint after a narrower wrap.
+        let text = (0..80)
+            .map(|_| "x".repeat(80))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rope = Rope::from_str(&text);
+        let scroll = 100usize;
+        let vis = 20usize;
+        let (wide_start, _) = visible_logical_window(&rope, scroll, vis, 80, 4);
+        let (narrow_start, narrow_count) = visible_logical_window(&rope, scroll, vis, 20, 4);
+        assert!(
+            narrow_start <= wide_start,
+            "narrower wrap must not start later than the wide layout (narrow={narrow_start}, wide={wide_start})"
+        );
+        assert!(narrow_count >= 1, "window must include at least one line");
+        let narrow_layout = compute_layout(&rope, 0, rope.len_lines(), 20, 4);
+        let max_scroll = narrow_layout.total_screen_rows.saturating_sub(vis);
+        let clamped = scroll.min(max_scroll);
+        assert_eq!(
+            narrow_start,
+            first_logical_line_for_screen_row(&narrow_layout, clamped),
+            "visible_logical_window start must match render_wrapped's first painted line"
+        );
     }
 }

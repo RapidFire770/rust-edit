@@ -142,15 +142,8 @@ fn render_wrapped(
         prefix.push(prev);
     }
 
-    // Find the first logical line whose screen-row range contains scroll_screen_row.
-    let mut start_line = full_layout.breaks.len().saturating_sub(1);
-    for (i, line_breaks) in full_layout.breaks.iter().enumerate() {
-        let rows_in_line = line_breaks.len() + 1;
-        if prefix[i] + rows_in_line > scroll_screen_row {
-            start_line = i;
-            break;
-        }
-    }
+    let start_line =
+        crate::wrap::first_logical_line_for_screen_row(&full_layout, scroll_screen_row);
 
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(visible_lines);
 
@@ -162,11 +155,6 @@ fn render_wrapped(
         } else {
             buf.rope.len_bytes()
         };
-
-        let hline = cache.line_spans(lidx);
-        if hline.is_none() {
-            debug_assert!(false, "highlight cache must cover visible line {lidx}");
-        }
 
         // Sub-row byte boundaries. sub_starts[0] = line_start_byte; sub_starts[k]
         // = breaks[k-1]. sub_ends[k] = breaks[k] (or line_end_byte for the last).
@@ -195,17 +183,20 @@ fn render_wrapped(
             } else {
                 Span::raw("      ") // 6 spaces, aligned with the gutter
             };
+            let Some(hline) = cache.line_spans(lidx) else {
+                debug_assert!(false, "highlight cache must cover visible line {lidx}");
+                lines.push(Line::from(vec![gutter]));
+                continue;
+            };
             let mut spans = vec![gutter];
-            if let Some(hline) = hline {
-                spans.extend(paint_line_spans(
-                    hline,
-                    line_start_byte,
-                    0,
-                    buf.selection.as_ref(),
-                    theme.selection_style(),
-                    Some(sub_start_byte..sub_end_byte),
-                ));
-            }
+            spans.extend(paint_line_spans(
+                hline,
+                line_start_byte,
+                0,
+                buf.selection.as_ref(),
+                theme.selection_style(),
+                Some(sub_start_byte..sub_end_byte),
+            ));
             lines.push(Line::from(spans));
         }
     }

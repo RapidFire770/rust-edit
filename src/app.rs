@@ -232,6 +232,47 @@ impl App {
         &mut self.buffers[self.active]
     }
 
+    /// Apply the current editor viewport to every buffer, clamp scroll, and
+    /// fill the highlight cache for the active tab.
+    ///
+    /// Must run inside `ui()` *after* the layout size is known and *before*
+    /// `editor::render`, so wrap math, scroll, and cache window all use the
+    /// same width/height as the frame being painted (resize crash).
+    pub fn apply_editor_viewport(&mut self, vis_h: usize, content_w: usize) {
+        let vis_h = vis_h.max(1);
+        let content_w = content_w.max(1);
+        self.editor_visible_lines.set(vis_h);
+        self.editor_visible_width.set(content_w);
+        let wrap = self.config.word_wrap;
+        let tab = self.config.tab_size;
+        for b in self.buffers.iter_mut() {
+            b.visible_lines = vis_h;
+            b.visible_width = content_w;
+            b.word_wrap = wrap;
+            b.tab_size = tab;
+            if wrap {
+                let total = crate::wrap::total_screen_rows(&b.rope, content_w, tab);
+                b.clamp_scroll_wrapped(total);
+            } else {
+                b.clamp_scroll(vis_h);
+            }
+        }
+        let scroll_row = self.active_buffer().scroll_offset.0;
+        if wrap {
+            let buf = self.active_buffer();
+            let (start, count) = crate::wrap::visible_logical_window(
+                &buf.rope,
+                scroll_row,
+                vis_h,
+                buf.visible_width.max(1),
+                tab,
+            );
+            self.refresh_highlight_cache(start, count);
+        } else {
+            self.refresh_highlight_cache(scroll_row, vis_h);
+        }
+    }
+
     /// Ensure the highlight cache covers the active buffer's visible window.
     ///
     /// Delegates to `HighlightCache::ensure_window`, which is a cheap no-op on
@@ -1674,6 +1715,66 @@ mod tests {
         app.wrap_selection_or_cursor("**", "**");
         assert_ne!(app.active_buffer().generation, g);
         assert_eq!(app.active_buffer().text(), "**hi**");
+    }
+
+    #[test]
+    fn highlight_cache_covers_wrapped_lines_after_width_change() {
+        // Repro: wrap on, long lines, scrolled, then the editor gets narrower
+        // (terminal resize). After applying the new viewport, every logical
+        // line the wrapped renderer would visit must be in the cache.
+        let text = (0..80)
+            .map(|_| "x".repeat(80))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = App::new(&[]);
+        app.config.word_wrap = true;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&text, None);
+        app.editor_visible_lines.set(20);
+        app.editor_visible_width.set(80);
+        let b = app.active_buffer_mut();
+        b.visible_lines = 20;
+        b.visible_width = 80;
+        b.word_wrap = true;
+        b.tab_size = 4;
+        b.scroll_offset = (100, 0);
+
+        // Previous frame filled the cache at width 80 (logical start ≈ 100,
+        // overscan → cache starts at line 36).
+        app.refresh_highlight_cache(100, 20);
+        assert!(
+            app.highlight_cache.line_spans(35).is_none(),
+            "precondition: wide fill must miss line 35 (overscan edge)"
+        );
+
+        // Resize: apply current frame size.
+        app.apply_editor_viewport(20, 20);
+
+        let buf = app.active_buffer();
+        let vis = buf.visible_lines.max(1);
+        let width = buf.visible_width.max(1);
+        let (start, count) = crate::wrap::visible_logical_window(
+            &buf.rope,
+            buf.scroll_offset.0,
+            vis,
+            width,
+            buf.tab_size,
+        );
+        let layout =
+            crate::wrap::compute_layout(&buf.rope, 0, buf.line_count(), width, buf.tab_size);
+        assert_eq!(
+            start,
+            crate::wrap::first_logical_line_for_screen_row(&layout, buf.scroll_offset.0),
+            "cache window must start at the same logical line render_wrapped would paint"
+        );
+        for i in start..start + count {
+            if i >= buf.line_count() {
+                break;
+            }
+            assert!(
+                app.highlight_cache.line_spans(i).is_some(),
+                "after resize, cache must cover visible logical line {i} (window {start}+{count})"
+            );
+        }
     }
 
     // ----- File browser navigation regressions -----
