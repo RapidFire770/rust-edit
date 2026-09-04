@@ -2971,6 +2971,27 @@ mod editor_mouse_click_scroll_tests {
     }
 
     #[test]
+    fn hardware_cursor_hidden_when_wrap_view_row_past_viewport() {
+        let mut app = wrapping_app();
+        app.active_buffer_mut().scroll_offset = (0, 0);
+        let layout = crate::wrap::compute_layout(
+            &app.active_buffer().rope,
+            0,
+            app.active_buffer().line_count(),
+            20,
+            4,
+        );
+        // Screen row 25 with vis 20 → view_row 25 >= vis → None.
+        let target = crate::wrap::byte_of_screen_row(&layout, &app.active_buffer().rope, 0, 25, 0);
+        app.active_buffer_mut().cursor = target;
+        assert_eq!(
+            compute_cursor_position(&app),
+            None,
+            "wrapped caret below the editor must hide, not paint on the status bar"
+        );
+    }
+
+    #[test]
     fn hardware_cursor_y_is_inside_editor_for_last_visible_row() {
         let mut app = App::new(&[]);
         app.config.word_wrap = false;

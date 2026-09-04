@@ -1418,6 +1418,42 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_adjust_scroll_only_at_edges() {
+        let mut b = make_wrapping_buffer();
+        b.scroll_offset = (40, 0); // view spans screen rows 40..59
+        let layout = crate::wrap::compute_layout(&b.rope, 0, b.line_count(), 20, 4);
+
+        b.cursor = crate::wrap::byte_of_screen_row(&layout, &b.rope, 0, 50, 0);
+        b.adjust_scroll();
+        assert_eq!(
+            b.scroll_offset.0, 40,
+            "mid-window wrap cursor must not scroll"
+        );
+
+        b.cursor = crate::wrap::byte_of_screen_row(&layout, &b.rope, 0, 59, 0);
+        b.adjust_scroll();
+        assert_eq!(
+            b.scroll_offset.0, 40,
+            "cursor on last visible wrap row must not scroll"
+        );
+
+        b.cursor = crate::wrap::byte_of_screen_row(&layout, &b.rope, 0, 60, 0);
+        b.adjust_scroll();
+        assert_eq!(
+            b.scroll_offset.0,
+            60usize.saturating_sub(18),
+            "cursor past wrap bottom should recenter to row - (v-2)"
+        );
+
+        b.cursor = crate::wrap::byte_of_screen_row(&layout, &b.rope, 0, 5, 0);
+        b.adjust_scroll();
+        assert_eq!(
+            b.scroll_offset.0, 5,
+            "cursor above wrap top should snap to that screen row"
+        );
+    }
+
+    #[test]
     fn adjust_scroll_only_at_edges() {
         let mut b = make_long_buffer(200);
         b.visible_lines = 20; // viewport rows 0..19
