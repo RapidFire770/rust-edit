@@ -2246,14 +2246,14 @@ fn handle_word_count_key(code: KeyCode, app: &mut App) {
     }
 }
 
-/// True when any modal/popup is open and the editor (and its drag selection)
-/// should be suspended.
 /// True when `(x, y)` is the editor vertical scrollbar column. Header row
 /// last cells (`[+]`, `[>]`) must not be treated as the scrollbar.
 fn is_editor_vscrollbar_col(x: usize, y: usize, term_width: usize) -> bool {
     y >= crate::ui::layout::HEADER_ROWS as usize && x + 1 == term_width
 }
 
+/// True when any modal/popup is open and the editor (and its drag selection)
+/// should be suspended.
 fn any_modal_open(app: &App) -> bool {
     app.show_help
         || app.show_word_count

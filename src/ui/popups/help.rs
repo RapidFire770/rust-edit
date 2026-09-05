@@ -98,6 +98,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Alt+H / Alt+L", "Scroll view left / right"),
                 ("Alt+F / T / S", "Open File / Tools / Settings menu"),
                 ("Alt+1..9", "Switch to tab N"),
+                ("[<] / [>]", "Scroll overflow file tabs"),
             ],
         ),
         (
@@ -133,6 +134,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
             vec![
                 ("Click tab", "Switch buffer"),
                 ("Click menu / [+]", "Open menu / new tab"),
+                ("[<] / [>] / wheel over tabs", "Scroll overflow file tabs"),
                 ("Click + drag", "Place cursor / select text"),
                 ("Scroll wheel", "Scroll vertically"),
                 ("Click buttons", "Click any [ button ] in popups"),

@@ -55,7 +55,7 @@ See the in-app help (`?` or `F1`) for the full, categorized list. Highlights:
 **Find** — `Ctrl+F` open bar · `Tab` cycle query→replace→commands · (in commands) `n`/`N` next/prev · `r`/`Enter` replace · `Ctrl+A` all · `c`/`x`/`w` case/regex/word
 **Navigation** — arrows/Home/End · `Shift+arrows` select · `PgUp`/`PgDn` · `Alt+H`/`Alt+L` scroll left/right · `Alt+F`/`T`/`S` menus · `Alt+1..9` tabs
 **View/Tools** — `?`/`F1` help · `Shift+W` word count · `Ctrl+Shift+F` format
-**Mouse** — click tabs/menus/[+] · click+drag to select · scroll wheel (vertical; Shift = horizontal) · click any `[ button ]` in popups
+**Mouse** — click tabs/menus/[+] · `[<]`/`[>]` scroll overflow tabs (wheel over the tab strip too) · click+drag to select · scroll wheel (vertical; Shift = horizontal) · click any `[ button ]` in popups
 
 ## Requirements
 

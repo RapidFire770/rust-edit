@@ -14,7 +14,7 @@
 
 # Features:
 
-- [ ] If there are to many tabs open that span wider than the terminal window they push off the screen and there is no way to scroll the open tabs with the mouse or click on the + button anymore. We need some arrows ( [<] / [>] ) to appear and let the tabs be scrolled.
+- [x] If there are to many tabs open that span wider than the terminal window they push off the screen and there is no way to scroll the open tabs with the mouse or click on the + button anymore. We need some arrows ( [<] / [>] ) to appear and let the tabs be scrolled.
 - [x] When word wrap isn't on and lines are longer than the visible width of the window a horizontal scrollbar should be displayed along the bottom of the window to allow the user to scroll the line horizontally.
 - [ ] If a file is modified outside of the editor while it is currently open the program should notice and ask the user if they would like to reload the file to see the new changes. Auto reload of the file without asking the user each time should be a selectable option when the program asks the user so it doesn’t have to keep asking them each time the file is modified.
 - [ ] Spellcheck for normal text files and markdown
