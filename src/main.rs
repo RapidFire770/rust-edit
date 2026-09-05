@@ -1364,7 +1364,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 // cursor or starts a text selection. (find-bar row is excluded
                 // by `scrollbar_target_for_row`'s vis-bounded y range.)
                 let (tw, _th) = crossterm::terminal::size().unwrap_or((80, 24));
-                if x + 1 == tw as usize {
+                if is_editor_vscrollbar_col(x, y, tw as usize) {
                     if let Some(target) = scrollbar_target_for_row(app, y) {
                         let vis = app.editor_visible_lines.get().max(1);
                         let word_wrap = app.config.word_wrap;
@@ -2248,6 +2248,12 @@ fn handle_word_count_key(code: KeyCode, app: &mut App) {
 
 /// True when any modal/popup is open and the editor (and its drag selection)
 /// should be suspended.
+/// True when `(x, y)` is the editor vertical scrollbar column. Header row
+/// last cells (`[+]`, `[>]`) must not be treated as the scrollbar.
+fn is_editor_vscrollbar_col(x: usize, y: usize, term_width: usize) -> bool {
+    y >= crate::ui::layout::HEADER_ROWS as usize && x + 1 == term_width
+}
+
 fn any_modal_open(app: &App) -> bool {
     app.show_help
         || app.show_word_count
@@ -2627,6 +2633,26 @@ mod plus_button_hit_test_tests {
         let before = app.buffers.len();
         handle_header_click(layout.plus_x + 1, &mut app);
         assert_eq!(app.buffers.len(), before + 1);
+    }
+
+    #[test]
+    fn plus_last_cell_stays_clickable_when_tabs_overflow() {
+        let mut app = App::new(&[]);
+        while app.buffers.len() < 8 {
+            app.new_tab();
+        }
+        app.clamp_tab_strip(80);
+        let names = app.tab_names();
+        let layout = crate::ui::header::layout_tab_strip(&names, 80, app.tab_scroll);
+        let before = app.buffers.len();
+        handle_header_click(layout.plus_x + crate::ui::header::PLUS_COLS - 1, &mut app);
+        assert_eq!(app.buffers.len(), before + 1);
+    }
+
+    #[test]
+    fn header_last_col_is_not_the_editor_scrollbar() {
+        assert!(!is_editor_vscrollbar_col(79, 0, 80));
+        assert!(is_editor_vscrollbar_col(79, 1, 80));
     }
 
     #[test]
