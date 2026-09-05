@@ -312,8 +312,10 @@ impl Buffer {
 
     /// Max `scroll_offset.1` such that the viewport still shows content.
     pub fn max_hscroll(&self) -> usize {
+        // Extra column so an EOL caret (col == max_line_width) stays in the
+        // text area instead of sitting on the vertical scrollbar.
         self.max_line_width
-            .saturating_sub(self.visible_width.max(1))
+            .saturating_sub(self.visible_width.max(1).saturating_sub(1))
     }
 
     pub fn clamp_hscroll(&mut self) {
@@ -1729,7 +1731,8 @@ mod tests {
         b.refresh_max_line_width();
         b.scroll_offset.1 = 999;
         b.clamp_hscroll();
-        assert_eq!(b.scroll_offset.1, 70); // 80 - 10
+        // Extra column so an EOL caret (col == 80) stays in the text area.
+        assert_eq!(b.scroll_offset.1, 71); // 80 - (10 - 1)
     }
 
     #[test]
@@ -1740,8 +1743,26 @@ mod tests {
         b.scroll_horizontal(4);
         assert_eq!(b.scroll_offset.1, 4);
         b.scroll_horizontal(100);
-        assert_eq!(b.scroll_offset.1, 10); // 20 - 10
+        assert_eq!(b.scroll_offset.1, 11); // 20 - (10 - 1)
         b.scroll_horizontal(-100);
         assert_eq!(b.scroll_offset.1, 0);
+    }
+
+    #[test]
+    fn end_on_longest_line_stays_in_text_viewport_after_clamp() {
+        let mut b = Buffer::from_str(&"x".repeat(80), None);
+        b.visible_width = 10;
+        b.refresh_max_line_width();
+        b.move_end(false);
+        b.ensure_cursor_horizontally_visible();
+        b.clamp_hscroll();
+        let col = b.cursor_position().1;
+        let h = b.scroll_offset.1;
+        let w = b.visible_width;
+        assert_eq!(col, 80, "End on an 80-char line sits at column 80");
+        assert!(
+            col >= h && col < h + w,
+            "EOL caret col {col} must stay in [{h}, {h}+{w}), got hscroll={h}"
+        );
     }
 }

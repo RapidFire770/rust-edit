@@ -286,7 +286,12 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
             // Header now occupies HEADER_ROWS (menu + separator rule).
             let screen_y = crate::ui::layout::HEADER_ROWS + view_row as u16;
             // Hardware cursor must compensate hscroll: the drawn content starts at logical hscroll.
+            let vis_width = buf.visible_width.max(1);
             let content_col = cur_col.saturating_sub(hscroll);
+            // Hide rather than paint on the vertical scrollbar column.
+            if content_col >= vis_width {
+                return None;
+            }
             let screen_x = Buffer::GUTTER_WIDTH as u16 + content_col as u16;
             Some((screen_x, screen_y))
         } else {
@@ -3147,5 +3152,29 @@ mod editor_mouse_click_scroll_tests {
         handle_mouse(left_down(20, y), &mut app);
         assert!(!app.hscrollbar_drag_active);
         assert_eq!(app.active_buffer().scroll_offset.1, 0);
+    }
+
+    #[test]
+    fn hardware_cursor_x_stays_in_text_area_at_eol_when_hscroll_clamped() {
+        let mut app = App::new(&[]);
+        app.config.word_wrap = false;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&"x".repeat(80), None);
+        app.editor_visible_lines.set(20);
+        app.editor_visible_width.set(10);
+        let b = app.active_buffer_mut();
+        b.visible_lines = 20;
+        b.visible_width = 10;
+        b.word_wrap = false;
+        b.refresh_max_line_width();
+        b.cursor = b.rope.len_bytes();
+        b.ensure_cursor_horizontally_visible();
+        b.clamp_hscroll();
+        let (screen_x, _y) =
+            compute_cursor_position(&app).expect("EOL caret should stay in the text area");
+        let vis_w = app.editor_visible_width.get();
+        assert!(
+            screen_x < crate::buffer::Buffer::GUTTER_WIDTH as u16 + vis_w as u16,
+            "hardware cursor must stay left of the v-bar; got screen_x={screen_x}"
+        );
     }
 }
