@@ -270,8 +270,7 @@ fn pack_visible_tabs(
             });
             used += w;
         } else if tabs.is_empty() {
-            // First visible tab does not fit: include it clipped to the viewport.
-            // If inner width is 0, still emit a 1-col clip when viewport > 0.
+            // First visible tab does not fit: clip it to the remaining viewport.
             if viewport > 0 {
                 tabs.push(TabGeom {
                     index,
@@ -296,7 +295,7 @@ pub fn layout_tab_strip(
 ) -> TabStripLayout {
     let remaining = header_width.saturating_sub(MENU_BLOCK_COLS);
     let total_tabs: usize = names.iter().map(|n| tab_width(n)).sum();
-    let fits = header_width <= MENU_BLOCK_COLS || total_tabs.saturating_add(PLUS_COLS) <= remaining;
+    let fits = total_tabs.saturating_add(PLUS_COLS) <= remaining;
 
     if fits {
         let mut tabs = Vec::with_capacity(names.len());
@@ -324,34 +323,63 @@ pub fn layout_tab_strip(
     }
 
     let chrome = (ARROW_COLS + ARROW_PAD) * 2 + PLUS_COLS;
+    if remaining < chrome {
+        return layout_degraded_overflow(names, header_width, first_visible);
+    }
+
     let viewport = remaining.saturating_sub(chrome);
     let first_visible = first_visible.min(max_first_visible(names, viewport));
     let tab_start = MENU_BLOCK_COLS + ARROW_COLS + ARROW_PAD;
     let tabs = pack_visible_tabs(names, first_visible, tab_start, viewport);
-    let left_arrow_x = Some(MENU_BLOCK_COLS);
     let right_arrow_x = tab_start + viewport;
-    let mut plus_x = right_arrow_x + ARROW_COLS + ARROW_PAD;
-    if plus_x.saturating_add(PLUS_COLS) > header_width {
-        plus_x = header_width.saturating_sub(PLUS_COLS);
-    }
-
-    let can_scroll_left = first_visible > 0;
-    let last_packed = tabs.last().map(|g| g.index);
-    let can_scroll_right = match last_packed {
-        Some(i) => i < names.len().saturating_sub(1),
-        // Viewport too small to emit a tab: still allow scrolling if later names exist.
-        None => !names.is_empty() && first_visible < names.len().saturating_sub(1),
-    };
+    let plus_x = right_arrow_x + ARROW_COLS + ARROW_PAD;
+    let can_scroll_right = can_scroll_right(&tabs, names, first_visible);
 
     TabStripLayout {
         overflowing: true,
         first_visible,
-        left_arrow_x,
+        left_arrow_x: Some(MENU_BLOCK_COLS),
         right_arrow_x: Some(right_arrow_x),
         plus_x,
         tabs,
-        can_scroll_left,
+        can_scroll_left: first_visible > 0,
         can_scroll_right,
+    }
+}
+
+/// Overflow chrome (`[<] [>] [+]`) does not fit. Drop arrows rather than sliding
+/// `[+]` onto menus, and pack tabs into `[MENU_BLOCK_COLS, plus_x)`.
+fn layout_degraded_overflow(
+    names: &[String],
+    header_width: usize,
+    first_visible: usize,
+) -> TabStripLayout {
+    let plus_x = if header_width >= MENU_BLOCK_COLS + PLUS_COLS {
+        header_width.saturating_sub(PLUS_COLS).max(MENU_BLOCK_COLS)
+    } else {
+        MENU_BLOCK_COLS
+    };
+    let leftover = plus_x.saturating_sub(MENU_BLOCK_COLS);
+    let first_visible = first_visible.min(max_first_visible(names, leftover));
+    let tabs = pack_visible_tabs(names, first_visible, MENU_BLOCK_COLS, leftover);
+    let can_scroll_right = can_scroll_right(&tabs, names, first_visible);
+
+    TabStripLayout {
+        overflowing: true,
+        first_visible,
+        left_arrow_x: None,
+        right_arrow_x: None,
+        plus_x,
+        tabs,
+        can_scroll_left: first_visible > 0,
+        can_scroll_right,
+    }
+}
+
+fn can_scroll_right(tabs: &[TabGeom], names: &[String], first_visible: usize) -> bool {
+    match tabs.last().map(|g| g.index) {
+        Some(i) => i < names.len().saturating_sub(1),
+        None => !names.is_empty() && first_visible < names.len().saturating_sub(1),
     }
 }
 
@@ -530,5 +558,95 @@ mod tests {
         assert!(!l.tabs.iter().any(|t| t.clipped));
         assert_eq!(l.right_arrow_x, Some(73));
         assert_eq!(l.plus_x, 77);
+        assert_on_screen_widgets_disjoint(&l, 80);
+    }
+
+    fn occupy(owner: &mut [Option<&'static str>], start: usize, end: usize, label: &'static str) {
+        let header_width = owner.len();
+        let start = start.min(header_width);
+        let end = end.min(header_width);
+        for x in start..end {
+            assert!(
+                owner[x].is_none(),
+                "column {x} already {:?} would also be {label}",
+                owner[x]
+            );
+            owner[x] = Some(label);
+        }
+    }
+
+    /// Geometric ranges of Menu / arrows / tabs / plus must not share a column
+    /// inside `0..header_width`. `hit_test_header` is first-match and would hide
+    /// overlaps, so this inspects the layout rects directly.
+    fn assert_on_screen_widgets_disjoint(layout: &TabStripLayout, header_width: usize) {
+        let mut owner = vec![None; header_width];
+        occupy(&mut owner, 0, 6, "Menu");
+        occupy(&mut owner, 7, 14, "Menu");
+        occupy(&mut owner, 15, 25, "Menu");
+        if let Some(ax) = layout.left_arrow_x {
+            occupy(&mut owner, ax, ax + ARROW_COLS, "ScrollLeft");
+        }
+        for tab in &layout.tabs {
+            occupy(&mut owner, tab.x, tab.x + tab.width, "Tab");
+        }
+        if let Some(ax) = layout.right_arrow_x {
+            occupy(&mut owner, ax, ax + ARROW_COLS, "ScrollRight");
+        }
+        occupy(&mut owner, layout.plus_x, layout.plus_x + PLUS_COLS, "Plus");
+    }
+
+    #[test]
+    fn empty_names_place_plus_at_menu_block() {
+        let l = layout_tab_strip(&[], 80, 0);
+        assert!(!l.overflowing);
+        assert!(l.tabs.is_empty());
+        assert_eq!(l.plus_x, MENU_BLOCK_COLS);
+        assert_eq!(l.left_arrow_x, None);
+        assert_eq!(l.right_arrow_x, None);
+        assert_eq!(hit_test_header(MENU_BLOCK_COLS, &l), HeaderHit::Plus);
+        assert_on_screen_widgets_disjoint(&l, 80);
+    }
+
+    #[test]
+    fn four_untitled_at_width_38_arrows_with_empty_viewport() {
+        // remaining = 11 == chrome, viewport = 0. Arrows stay; plus at 35.
+        let l = layout_tab_strip(&untitled_names(4), 38, 0);
+        assert!(l.overflowing);
+        assert_eq!(l.left_arrow_x, Some(27));
+        assert_eq!(l.right_arrow_x, Some(31));
+        assert_eq!(l.plus_x, 35);
+        assert!(l.tabs.is_empty());
+        assert_eq!(hit_test_header(27, &l), HeaderHit::ScrollLeft);
+        assert_eq!(hit_test_header(31, &l), HeaderHit::ScrollRight);
+        assert_eq!(hit_test_header(35, &l), HeaderHit::Plus);
+        assert_on_screen_widgets_disjoint(&l, 38);
+    }
+
+    #[test]
+    fn width_30_drops_arrows_and_keeps_plus_off_menus() {
+        // remaining = 3 < chrome: no arrows, leftover tab span is 0, plus at 27.
+        let l = layout_tab_strip(&untitled_names(4), 30, 0);
+        assert!(l.overflowing);
+        assert_eq!(l.left_arrow_x, None);
+        assert_eq!(l.right_arrow_x, None);
+        assert_eq!(l.plus_x, MENU_BLOCK_COLS);
+        assert!(l.tabs.is_empty());
+        assert_eq!(hit_test_header(16, &l), HeaderHit::Menu("Settings"));
+        assert_eq!(hit_test_header(27, &l), HeaderHit::Plus);
+        assert_on_screen_widgets_disjoint(&l, 30);
+    }
+
+    #[test]
+    fn width_20_plus_stays_off_menus() {
+        // remaining = 0: not a fit. plus sits at 27 (off-screen), never on Settings.
+        let l = layout_tab_strip(&untitled_names(4), 20, 0);
+        assert!(l.overflowing);
+        assert_eq!(l.left_arrow_x, None);
+        assert_eq!(l.right_arrow_x, None);
+        assert_eq!(l.plus_x, MENU_BLOCK_COLS);
+        assert!(l.tabs.is_empty());
+        assert_eq!(hit_test_header(16, &l), HeaderHit::Menu("Settings"));
+        assert_ne!(hit_test_header(19, &l), HeaderHit::Plus);
+        assert_on_screen_widgets_disjoint(&l, 20);
     }
 }
