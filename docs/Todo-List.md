@@ -10,6 +10,9 @@
 - [x] Save as and Open file popups file paths are crossing over with each other on reopening the popups. These file paths should not cross from one popup to another and I would expect that re-opening these popups that the file path would have been empty for the user to select a new file to open or save.
 - [x] In the open popups browse files feature, the option to view recent files is not clear. Currently is initially says Browse with no clear indication that clicking on this will change it to show recently opened files. Possibly change this to show [ Browse / Recent ] bolding the text of which view the user is on or some other method that makes it more clear to the user this feature exists and can be used.
 - [x] Configure menu setting for turning the visible line numbers on and off does not function. There is also a toggle for Mouse input that got added but should not have. The setting doesn not work and should be removed  as mouse input does not need to be able to turn on and off.
+    - [ ] There is now a large amount of extra whitespace bellow the Toggle and close buttons in the configure menu.
+    - [ ] Now that the line numbers are toggling on and off there is still a large gap on the side of the screen where the line numbers show. The text should move to fill this gap when line numbers are not being displayed.
+- [ ] The new bottom/horizontal scrollbars height is to large, needs to match the size of the vertical scrollbars width so the two bars are consistant visually.
 
 ### Major:
 
