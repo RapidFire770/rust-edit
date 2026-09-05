@@ -87,7 +87,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             f,
             hbar,
             crate::ui::scrollbar::OverflowBar {
-                total: buf.max_line_width,
+                // +1 so max_position == max_hscroll (extra EOL caret column).
+                total: buf.max_line_width.saturating_add(1),
                 position: buf.scroll_offset.1,
                 viewport: buf.visible_width.max(1),
             },

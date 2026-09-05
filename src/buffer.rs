@@ -1725,7 +1725,7 @@ mod tests {
     }
 
     #[test]
-    fn clamp_hscroll_caps_at_max_minus_viewport() {
+    fn clamp_hscroll_leaves_caret_column() {
         let mut b = Buffer::from_str(&"x".repeat(80), None);
         b.visible_width = 10;
         b.refresh_max_line_width();

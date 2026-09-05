@@ -1493,7 +1493,8 @@ fn hscrollbar_target_for_col(app: &App, x: u16) -> Option<usize> {
     let area = editor_hscrollbar_rect(app)?;
     let buf = app.active_buffer();
     let bar = crate::ui::scrollbar::OverflowBar {
-        total: buf.max_line_width,
+        // +1 so max_position == max_hscroll (extra EOL caret column).
+        total: buf.max_line_width.saturating_add(1),
         position: buf.scroll_offset.1,
         viewport: buf.visible_width.max(1),
     };
@@ -3172,6 +3173,45 @@ mod editor_mouse_click_scroll_tests {
         let (screen_x, _y) =
             compute_cursor_position(&app).expect("EOL caret should stay in the text area");
         let vis_w = app.editor_visible_width.get();
+        assert!(
+            screen_x < crate::buffer::Buffer::GUTTER_WIDTH as u16 + vis_w as u16,
+            "hardware cursor must stay left of the v-bar; got screen_x={screen_x}"
+        );
+    }
+
+    #[test]
+    fn hscrollbar_right_end_reaches_max_hscroll_and_keeps_eol_caret() {
+        let mut app = long_line_app();
+        let rect = editor_hscrollbar_rect(&app).expect("hbar visible");
+        let end_x = rect.x + rect.width.saturating_sub(1);
+        let y = crate::ui::layout::HEADER_ROWS + app.editor_visible_lines.get() as u16;
+        handle_mouse(left_down(end_x, y), &mut app);
+        app.active_buffer_mut().refresh_max_line_width();
+        assert_eq!(
+            app.active_buffer().scroll_offset.1,
+            app.active_buffer().max_hscroll(),
+            "→ cap must reach max_hscroll so the thumb matches End"
+        );
+
+        // Cursor at EOF, then the same bar-end jump, must keep the hardware caret.
+        let mut app = long_line_app();
+        {
+            let buf = app.active_buffer_mut();
+            buf.cursor = buf.rope.len_bytes();
+            buf.ensure_cursor_horizontally_visible();
+            buf.clamp_hscroll();
+        }
+        let rect = editor_hscrollbar_rect(&app).expect("hbar visible");
+        let end_x = rect.x + rect.width.saturating_sub(1);
+        let target = hscrollbar_target_for_col(&app, end_x).expect("end cell maps");
+        {
+            let buf = app.active_buffer_mut();
+            buf.scroll_offset.1 = target;
+            buf.clamp_hscroll();
+        }
+        let (screen_x, _y) =
+            compute_cursor_position(&app).expect("EOL caret still visible at bar end");
+        let vis_w = app.active_buffer().visible_width.max(1);
         assert!(
             screen_x < crate::buffer::Buffer::GUTTER_WIDTH as u16 + vis_w as u16,
             "hardware cursor must stay left of the v-bar; got screen_x={screen_x}"
