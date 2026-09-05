@@ -1347,6 +1347,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                             buf.clamp_scroll(vis);
                         }
                         app.scrollbar_drag_active = true;
+                        app.hscrollbar_drag_active = false;
                         app.mouse_drag_active = false;
                     }
                 } else if y < header_rows {
