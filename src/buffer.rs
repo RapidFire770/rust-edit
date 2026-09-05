@@ -101,6 +101,11 @@ pub struct Buffer {
     /// Used as an invalidation key by the highlight cache so spans are only recomputed
     /// on edit or scroll into new lines (see AGENTS §6 "Syntax Highlighting").
     pub generation: u64,
+    /// Longest line in chars (no `\n`/`\r`). Refreshed when `generation` changes.
+    // Editor/mouse wiring for the horizontal overflow bar lands in a later task.
+    #[allow(dead_code)]
+    pub max_line_width: usize,
+    max_line_width_gen: u64,
     /// Unique identity for this buffer instance. Used as the highlight-cache
     /// `source` so two gen-0 files cannot alias each other.
     pub id: u64,
@@ -139,6 +144,8 @@ impl Buffer {
             word_wrap: false,
             tab_size: 4,
             generation: 0,
+            max_line_width: 0,
+            max_line_width_gen: u64::MAX,
             id: next_buffer_id(),
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
@@ -174,6 +181,8 @@ impl Buffer {
             word_wrap: false,
             tab_size: 4,
             generation: 0,
+            max_line_width: 0,
+            max_line_width_gen: u64::MAX,
             id: next_buffer_id(),
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
@@ -276,6 +285,50 @@ impl Buffer {
         if self.scroll_offset.0 > max {
             self.scroll_offset.0 = max;
         }
+    }
+
+    pub fn compute_max_line_width(&self) -> usize {
+        let n = self.line_count();
+        let mut max = 0usize;
+        for i in 0..n {
+            let w = self
+                .rope
+                .line(i)
+                .chars()
+                .filter(|&c| c != '\n' && c != '\r')
+                .count();
+            if w > max {
+                max = w;
+            }
+        }
+        max
+    }
+
+    pub fn refresh_max_line_width(&mut self) {
+        if self.max_line_width_gen == self.generation {
+            return;
+        }
+        self.max_line_width = self.compute_max_line_width();
+        self.max_line_width_gen = self.generation;
+    }
+
+    /// Max `scroll_offset.1` such that the viewport still shows content.
+    pub fn max_hscroll(&self) -> usize {
+        self.max_line_width
+            .saturating_sub(self.visible_width.max(1))
+    }
+
+    pub fn clamp_hscroll(&mut self) {
+        let max = self.max_hscroll();
+        if self.scroll_offset.1 > max {
+            self.scroll_offset.1 = max;
+        }
+    }
+
+    pub fn scroll_horizontal(&mut self, delta: isize) {
+        let cur = self.scroll_offset.1 as isize;
+        self.scroll_offset.1 = (cur + delta).max(0) as usize;
+        self.clamp_hscroll();
     }
 
     /// Compute the byte offset for a visual line and column (does not mutate).
@@ -1657,5 +1710,40 @@ mod tests {
         b.cursor = 0;
         b.ensure_cursor_horizontally_visible();
         assert_eq!(b.scroll_offset.1, 0, "cursor at col 0 snaps hscroll to 0");
+    }
+
+    #[test]
+    fn max_line_width_ignores_newlines_and_picks_longest() {
+        let b = Buffer::from_str("ab\nlonger-line\nxy\n", None);
+        assert_eq!(b.compute_max_line_width(), 11); // "longer-line"
+    }
+
+    #[test]
+    fn max_line_width_empty_is_zero() {
+        let b = Buffer::new();
+        assert_eq!(b.compute_max_line_width(), 0);
+    }
+
+    #[test]
+    fn clamp_hscroll_caps_at_max_minus_viewport() {
+        let mut b = Buffer::from_str(&"x".repeat(80), None);
+        b.visible_width = 10;
+        b.refresh_max_line_width();
+        b.scroll_offset.1 = 999;
+        b.clamp_hscroll();
+        assert_eq!(b.scroll_offset.1, 70); // 80 - 10
+    }
+
+    #[test]
+    fn scroll_horizontal_steps_and_clamps() {
+        let mut b = Buffer::from_str(&"x".repeat(20), None);
+        b.visible_width = 10;
+        b.refresh_max_line_width();
+        b.scroll_horizontal(4);
+        assert_eq!(b.scroll_offset.1, 4);
+        b.scroll_horizontal(100);
+        assert_eq!(b.scroll_offset.1, 10); // 20 - 10
+        b.scroll_horizontal(-100);
+        assert_eq!(b.scroll_offset.1, 0);
     }
 }
