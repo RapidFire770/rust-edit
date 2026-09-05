@@ -98,8 +98,6 @@ impl Config {
         self.save();
     }
 
-
-
     /// Record a file as just-opened/saved: move it to the front of
     /// `recent_files`, dedupe by canonicalized path, and cap the list at
     /// [`RECENT_FILES_MAX`]. Persists immediately. No-op if the path doesn't

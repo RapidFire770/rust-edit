@@ -25,7 +25,6 @@ pub const ROW_TAB_SIZE: usize = 0;
 pub const ROW_WORD_WRAP: usize = 1;
 pub const ROW_LINE_NUMBERS: usize = 2;
 
-
 /// Inner content height of the popup (title + blank + 4 rows + blank + footer).
 pub const POPUP_W: u16 = 46;
 pub const POPUP_H: u16 = 11;
@@ -102,7 +101,6 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
             "Line numbers".to_string(),
             if cfg.show_line_numbers { "[x]" } else { "[ ]" }.to_string(),
         ),
-
     ];
 
     let mut lines: Vec<Line> = Vec::with_capacity(8);
