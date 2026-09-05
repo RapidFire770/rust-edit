@@ -4,11 +4,14 @@
 
 - [ ] Edit / new theme not working. Cannot select any colors to change or type color values.
   - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value depending on the capabitlities of Rataui and our current tech stack.
-- [ ] Now that the line numbers are toggling on and off there is a large gap on the side of the screen where the line numbers show. The text should move to fill this gap when line numbers are not being displayed.
+- [ ] For the file tabs, if the file name is to long it should be truncated to keep all file tabs the same width for consistency.
+- [ ] Need a way to exit a file tab from the tab itself instead of just from the file menu.
+- [ ] The file tabs highlight has extra whitespace for the highlight on the right side of the closing ] for the file name. 
 
 
 ### Major:
 
+- [ ] Now that the line numbers are toggling on and off there is a large gap on the side of the screen where the line numbers show. The text should move to fill this gap when line numbers are not being displayed.
 
 ---
 

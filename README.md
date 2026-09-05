@@ -50,7 +50,7 @@ cargo build --release
 
 See the in-app help (`?` or `F1`) for the full, categorized list. Highlights:
 
-**File** — `Ctrl+N` new · `Ctrl+O` open · `Ctrl+S` save · `Ctrl+Shift+S` save as · `Ctrl+W` close tab · `Ctrl+Q` quit
+**File** — `Ctrl+N` new · `Ctrl+O` open · `Ctrl+S` save · `Ctrl+Alt+S` save as · `Ctrl+W` close tab · `Ctrl+Q` quit
 **Edit** — `Enter` newline+indent · `Tab` insert at cursor · `Shift+Tab` dedent · `Ctrl+Z`/`Ctrl+Y` undo/redo · `Ctrl+X`/`C`/`V` cut/copy/paste
 **Find** — `Ctrl+F` open bar · `Tab` cycle query→replace→commands · (in commands) `n`/`N` next/prev · `r`/`Enter` replace · `Ctrl+A` all · `c`/`x`/`w` case/regex/word
 **Navigation** — arrows/Home/End · `Shift+arrows` select · `PgUp`/`PgDn` · `Alt+H`/`Alt+L` scroll left/right · `Alt+F`/`T`/`S` menus · `Alt+1..9` tabs
