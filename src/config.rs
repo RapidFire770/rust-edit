@@ -17,7 +17,7 @@ pub struct Config {
     pub theme: String,
     pub show_line_numbers: bool,
     pub word_wrap: bool,
-    pub mouse_enabled: bool,
+
     /// Recently opened/saved file paths, most-recent-first. Capped at
     /// [`RECENT_FILES_MAX`] by [`Config::record_recent_file`]. Stored as
     /// strings (not `PathBuf`) so the TOML stays human-readable and survives
@@ -33,7 +33,7 @@ impl Default for Config {
             theme: "dark-red".to_string(),
             show_line_numbers: true,
             word_wrap: false,
-            mouse_enabled: true,
+
             recent_files: Vec::new(),
         }
     }
@@ -98,11 +98,7 @@ impl Config {
         self.save();
     }
 
-    /// Toggle mouse input and persist.
-    pub fn set_mouse_enabled(&mut self, on: bool) {
-        self.mouse_enabled = on;
-        self.save();
-    }
+
 
     /// Record a file as just-opened/saved: move it to the front of
     /// `recent_files`, dedupe by canonicalized path, and cap the list at

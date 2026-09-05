@@ -9,7 +9,7 @@
 - [x] Cannot click and drag the scrollbar with the mouse in the file browser popups.
 - [x] Save as and Open file popups file paths are crossing over with each other on reopening the popups. These file paths should not cross from one popup to another and I would expect that re-opening these popups that the file path would have been empty for the user to select a new file to open or save.
 - [x] In the open popups browse files feature, the option to view recent files is not clear. Currently is initially says Browse with no clear indication that clicking on this will change it to show recently opened files. Possibly change this to show [ Browse / Recent ] bolding the text of which view the user is on or some other method that makes it more clear to the user this feature exists and can be used.
-- [ ] Configure menu setting for turning the visible line numbers on and off does not function. There is also a toggle for Mouse input that got added but should not have. The setting doesn not work and should be removed  as mouse input does not need to be able to turn on and off.
+- [x] Configure menu setting for turning the visible line numbers on and off does not function. There is also a toggle for Mouse input that got added but should not have. The setting doesn not work and should be removed  as mouse input does not need to be able to turn on and off.
 
 ### Major:
 

@@ -85,7 +85,11 @@ fn render_unwrapped(
         // Gutter MUST be pure ASCII: `│` (U+2502) is East-Asian-Width Ambiguous
         // and renders as 2 cells in some terminals/fonts, which shifts content
         // right by 1 vs GUTTER_WIDTH and desyncs the hardware cursor. AGENTS §1.
-        let gutter = format!("{:>4}| ", line_idx + 1);
+        let gutter = if app.config.show_line_numbers {
+            format!("{:>4}| ", line_idx + 1)
+        } else {
+            "      ".to_string()
+        };
         let Some(hline) = cache.line_spans(line_idx) else {
             debug_assert!(false, "highlight cache must cover visible line {line_idx}");
             // still emit gutter so the row exists; do NOT Span::raw the whole line
@@ -179,7 +183,11 @@ fn render_wrapped(
             let sub_end_byte = sub_ends[sub];
             let is_first_sub = sub == 0;
             let gutter = if is_first_sub {
-                Span::styled(format!("{:>4}| ", lidx + 1), theme.line_number_style())
+                if app.config.show_line_numbers {
+                    Span::styled(format!("{:>4}| ", lidx + 1), theme.line_number_style())
+                } else {
+                    Span::raw("      ")
+                }
             } else {
                 Span::raw("      ") // 6 spaces, aligned with the gutter
             };
@@ -219,7 +227,11 @@ pub fn render_with_highlights(
     for (i, hline) in highlighted.iter().enumerate() {
         let line_idx = start_line + i;
         // ASCII gutter — see note above (U+2502 width ambiguity shifts cursor).
-        let gutter = format!("{:>4}| ", line_idx + 1);
+        let gutter = if true {
+            format!("{:>4}| ", line_idx + 1)
+        } else {
+            "      ".to_string()
+        };
         let mut spans = vec![Span::styled(gutter, theme.line_number_style())];
         let is_cursor = line_idx == cursor_line;
         let mut char_count = 0usize;

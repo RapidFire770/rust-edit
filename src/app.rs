@@ -771,9 +771,7 @@ impl App {
                 self.config
                     .set_show_line_numbers(!self.config.show_line_numbers);
             }
-            3 => {
-                self.config.set_mouse_enabled(!self.config.mouse_enabled);
-            }
+
             _ => {}
         }
     }
