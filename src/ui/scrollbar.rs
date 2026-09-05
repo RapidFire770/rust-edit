@@ -56,8 +56,6 @@ impl OverflowBar {
 
     /// Map a screen column `x` on `area` to a left-col. `None` if `x` is
     /// outside the track. Skips the ←/→ end cells.
-    // Editor mouse wiring lands in a later task.
-    #[allow(dead_code)]
     pub fn target_for_col(&self, x: u16, area: Rect) -> Option<usize> {
         if !area_contains_x(area, x) {
             return None;
@@ -75,8 +73,6 @@ impl OverflowBar {
     }
 }
 
-// Editor layout wiring lands in a later task.
-#[allow(dead_code)]
 pub fn needs_horizontal_scrollbar(
     word_wrap: bool,
     max_line_width: usize,
@@ -126,14 +122,10 @@ fn area_contains_y(area: Rect, y: u16) -> bool {
     y >= area.y && y < area.y.saturating_add(area.height)
 }
 
-// Called from `target_for_col`; unused until that path is wired.
-#[allow(dead_code)]
 fn area_contains_x(area: Rect, x: u16) -> bool {
     x >= area.x && x < area.x.saturating_add(area.width)
 }
 
-// Editor paint wiring lands in a later task.
-#[allow(dead_code)]
 pub fn render_horizontal(f: &mut Frame, area: Rect, bar: OverflowBar, theme: &Theme) {
     if area.width == 0 || area.height == 0 || !bar.overflowing() {
         return;

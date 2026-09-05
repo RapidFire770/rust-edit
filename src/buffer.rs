@@ -102,8 +102,6 @@ pub struct Buffer {
     /// on edit or scroll into new lines (see AGENTS §6 "Syntax Highlighting").
     pub generation: u64,
     /// Longest line in chars (no `\n`/`\r`). Refreshed when `generation` changes.
-    // Editor/mouse wiring for the horizontal overflow bar lands in a later task.
-    #[allow(dead_code)]
     pub max_line_width: usize,
     max_line_width_gen: u64,
     /// Unique identity for this buffer instance. Used as the highlight-cache

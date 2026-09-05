@@ -345,6 +345,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             if any_modal_open(app) {
                 app.mouse_drag_active = false;
                 app.scrollbar_drag_active = false;
+                app.hscrollbar_drag_active = false;
             }
             let cursor_should_blink = compute_cursor_position(app).is_some();
             if blink_is_due(last_blink, BLINK_INTERVAL, cursor_should_blink) {
@@ -384,12 +385,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                     }
                 }
                 if dcol != 0 && !app.config.word_wrap {
-                    let cur = app.active_buffer_mut().scroll_offset.1;
-                    app.active_buffer_mut().scroll_offset.1 = if dcol < 0 {
-                        cur.saturating_sub(1)
-                    } else {
-                        cur.saturating_add(1)
-                    };
+                    app.active_buffer_mut().scroll_horizontal(dcol);
                 }
                 extend_drag_to_mouse(app);
                 break 'wait;
@@ -566,12 +562,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             // and Ctrl+L were taken/conflicting). Auto-hscroll also follows
                             // the cursor, but these give manual control over long lines.
                             KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::ALT) => {
-                                app.active_buffer_mut().scroll_offset.1 =
-                                    app.active_buffer_mut().scroll_offset.1.saturating_sub(4);
+                                app.active_buffer_mut().scroll_horizontal(-4);
                             }
                             KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => {
-                                app.active_buffer_mut().scroll_offset.1 =
-                                    app.active_buffer_mut().scroll_offset.1.saturating_add(4);
+                                app.active_buffer_mut().scroll_horizontal(4);
                             }
                             KeyCode::Char(d)
                                 if ('1'..='9').contains(&d)
@@ -1312,6 +1306,22 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             }
 
             if !skip_editor {
+                if let Some(hbar) = editor_hscrollbar_rect(app) {
+                    if y as u16 == hbar.y {
+                        if let Some(target) = hscrollbar_target_for_col(app, x as u16) {
+                            let buf = app.active_buffer_mut();
+                            buf.scroll_offset.1 = target;
+                            buf.clamp_hscroll();
+                            app.hscrollbar_drag_active = true;
+                            app.scrollbar_drag_active = false;
+                            app.mouse_drag_active = false;
+                            skip_editor = true;
+                        }
+                    }
+                }
+            }
+
+            if !skip_editor {
                 let header_rows = crate::ui::layout::HEADER_ROWS as usize;
                 // Scrollbar lives in the rightmost column of the editor render
                 // area. Handle click-to-jump / drag-to-scrub here, ahead of
@@ -1407,6 +1417,14 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             }
             // Two drag modes (mutually exclusive): scrollbar scrub vs text
             // selection. The flag is set on MouseDown; route accordingly.
+            if app.hscrollbar_drag_active {
+                if let Some(target) = hscrollbar_target_for_col(app, x) {
+                    let buf = app.active_buffer_mut();
+                    buf.scroll_offset.1 = target;
+                    buf.clamp_hscroll();
+                }
+                return;
+            }
             if app.scrollbar_drag_active {
                 if let Some(target) = scrollbar_target_for_row(app, y as usize) {
                     let vis = app.editor_visible_lines.get().max(1);
@@ -1436,6 +1454,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             // off this flag, so it must be cleared as soon as the button releases.
             app.mouse_drag_active = false;
             app.scrollbar_drag_active = false;
+            app.hscrollbar_drag_active = false;
             app.popup_scrollbar_drag = None;
         }
         // Horizontal mouse-wheel (Shift+wheel on most terminals) scrolls the
@@ -1444,15 +1463,35 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
         // while a popup owns focus so the editor underneath cannot pan.
         MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight if app.popup_is_open() => {}
         MouseEventKind::ScrollLeft => {
-            app.active_buffer_mut().scroll_offset.1 =
-                app.active_buffer_mut().scroll_offset.1.saturating_sub(4);
+            app.active_buffer_mut().scroll_horizontal(-4);
         }
         MouseEventKind::ScrollRight => {
-            app.active_buffer_mut().scroll_offset.1 =
-                app.active_buffer_mut().scroll_offset.1.saturating_add(4);
+            app.active_buffer_mut().scroll_horizontal(4);
         }
         _ => {}
     }
+}
+
+fn editor_hscrollbar_rect(app: &App) -> Option<Rect> {
+    if any_modal_open(app) || !app.editor_hscrollbar_visible.get() {
+        return None;
+    }
+    let vis = app.editor_visible_lines.get().max(1);
+    let content_w = app.editor_visible_width.get().max(1);
+    let bar_y = crate::ui::layout::HEADER_ROWS + vis as u16;
+    let width = (Buffer::GUTTER_WIDTH + content_w) as u16;
+    Some(Rect::new(0, bar_y, width, 1))
+}
+
+fn hscrollbar_target_for_col(app: &App, x: u16) -> Option<usize> {
+    let area = editor_hscrollbar_rect(app)?;
+    let buf = app.active_buffer();
+    let bar = crate::ui::scrollbar::OverflowBar {
+        total: buf.max_line_width,
+        position: buf.scroll_offset.1,
+        viewport: buf.visible_width.max(1),
+    };
+    bar.target_for_col(x, area)
 }
 
 /// Map a screen row `y` to a target top-line scroll offset for the editor
@@ -3064,5 +3103,48 @@ mod editor_mouse_click_scroll_tests {
         assert_eq!(y, last_editor_y);
         // Status bar is HEADER_ROWS + vis; cursor must be strictly above it.
         assert!(y < crate::ui::layout::HEADER_ROWS + 20);
+    }
+
+    fn long_line_app() -> App {
+        let mut app = App::new(&[]);
+        app.config.word_wrap = false;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&"x".repeat(80), None);
+        app.editor_visible_lines.set(20);
+        // Viewport must be narrower than the 80-char line (overflow) but wide
+        // enough that the click at column 20 lands on the track
+        // (`GUTTER_WIDTH + visible_width`).
+        app.editor_visible_width.set(40);
+        app.editor_hscrollbar_visible.set(true);
+        let b = app.active_buffer_mut();
+        b.visible_lines = 20;
+        b.visible_width = 40;
+        b.word_wrap = false;
+        b.refresh_max_line_width();
+        b.scroll_offset = (0, 0);
+        app
+    }
+
+    #[test]
+    fn hscrollbar_click_pans_and_does_not_move_cursor() {
+        let mut app = long_line_app();
+        let cursor_before = app.active_buffer().cursor;
+        // Bar row is HEADER + vis. Tests set vis=20 as *content* height.
+        let y = crate::ui::layout::HEADER_ROWS + 20;
+        handle_mouse(left_down(20, y), &mut app);
+        assert!(app.hscrollbar_drag_active);
+        assert!(!app.mouse_drag_active);
+        assert_eq!(app.active_buffer().cursor, cursor_before);
+        assert!(app.active_buffer().scroll_offset.1 > 0);
+    }
+
+    #[test]
+    fn hscrollbar_hidden_under_wrap() {
+        let mut app = long_line_app();
+        app.config.word_wrap = true;
+        app.editor_hscrollbar_visible.set(false);
+        let y = crate::ui::layout::HEADER_ROWS + 20;
+        handle_mouse(left_down(20, y), &mut app);
+        assert!(!app.hscrollbar_drag_active);
+        assert_eq!(app.active_buffer().scroll_offset.1, 0);
     }
 }
