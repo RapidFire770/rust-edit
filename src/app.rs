@@ -1423,8 +1423,8 @@ impl App {
             ["[ Use folder ]", "[ Up ]", hidden_btn, "[ Cancel ]"]
         } else {
             let mode_btn = match self.browser_mode {
-                crate::ui::popups::file_browser::BrowserMode::Dir => "[ Browse ]",
-                crate::ui::popups::file_browser::BrowserMode::Recent => "[ Recent ]",
+                crate::ui::popups::file_browser::BrowserMode::Dir => "[ **Browse** / Recent ]",
+                crate::ui::popups::file_browser::BrowserMode::Recent => "[ Browse / **Recent** ]",
             };
             ["[ Up ]", mode_btn, hidden_btn, "[ Cancel ]"]
         }
@@ -2302,11 +2302,11 @@ mod tests {
     fn open_browser_footer_unchanged() {
         let mut app = App::new(&[]);
         app.browser_origin_is_save = false;
-        // Dir mode: index 1 is the toggle *to* Recent, labelled "[ Browse ]"
-        // (existing convention — keep it).
+        // Dir mode: index 1 is the toggle *to* Recent, labelled "[ **Browse** / Recent ]"
+        // (shows both options with active view bolded).
         assert_eq!(
             app.browser_footer_labels(),
-            ["[ Up ]", "[ Browse ]", "[ Hidden: off ]", "[ Cancel ]"]
+            ["[ Up ]", "[ **Browse** / Recent ]", "[ Hidden: off ]", "[ Cancel ]"]
         );
     }
 
