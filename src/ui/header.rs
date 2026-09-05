@@ -189,9 +189,227 @@ pub fn dropdown_rect(area: Rect, menu_name: &str) -> Rect {
     Rect::new(x, y, w, h.min(area.height.saturating_sub(y)))
 }
 
+pub const MENU_BLOCK_COLS: usize = 27;
+pub const PLUS_COLS: usize = 3;
+pub const ARROW_COLS: usize = 3; // "[<]" / "[>]"
+pub const ARROW_PAD: usize = 1; // trailing space after an arrow
+
+pub struct TabGeom {
+    pub index: usize,
+    pub x: usize,     // screen column of '['
+    pub width: usize, // includes trailing space; may be clipped
+    pub clipped: bool,
+}
+
+pub struct TabStripLayout {
+    pub overflowing: bool,
+    pub first_visible: usize, // clamped
+    pub left_arrow_x: Option<usize>,
+    pub right_arrow_x: Option<usize>,
+    pub plus_x: usize,
+    pub tabs: Vec<TabGeom>,
+    pub can_scroll_left: bool,
+    pub can_scroll_right: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderHit {
+    Menu(&'static str),
+    Tab(usize),
+    Plus,
+    ScrollLeft,
+    ScrollRight,
+    Miss,
+}
+
+fn tab_width(name: &str) -> usize {
+    name.chars().count() + 5
+}
+
+/// Walk from the end, packing whole tab widths into `viewport`. A single
+/// too-wide tab still occupies the viewport (clipped). The first index of
+/// that packed-from-end window is the max scroll.
+fn max_first_visible(names: &[String], viewport: usize) -> usize {
+    if names.is_empty() {
+        return 0;
+    }
+    let mut acc: usize = 0;
+    let mut first = names.len() - 1;
+    for i in (0..names.len()).rev() {
+        let w = tab_width(&names[i]);
+        if acc.saturating_add(w) <= viewport {
+            acc += w;
+            first = i;
+        } else if acc == 0 {
+            first = i;
+            break;
+        } else {
+            break;
+        }
+    }
+    first
+}
+
+fn pack_visible_tabs(
+    names: &[String],
+    first_visible: usize,
+    start_x: usize,
+    viewport: usize,
+) -> Vec<TabGeom> {
+    let mut tabs = Vec::new();
+    let mut used: usize = 0;
+    for (offset, name) in names.get(first_visible..).unwrap_or(&[]).iter().enumerate() {
+        let index = first_visible + offset;
+        let w = tab_width(name);
+        if used.saturating_add(w) <= viewport {
+            tabs.push(TabGeom {
+                index,
+                x: start_x + used,
+                width: w,
+                clipped: false,
+            });
+            used += w;
+        } else if tabs.is_empty() {
+            // First visible tab does not fit: include it clipped to the viewport.
+            // If inner width is 0, still emit a 1-col clip when viewport > 0.
+            if viewport > 0 {
+                tabs.push(TabGeom {
+                    index,
+                    x: start_x,
+                    width: viewport,
+                    clipped: true,
+                });
+            }
+            break;
+        } else {
+            break;
+        }
+    }
+    tabs
+}
+
+/// `names` are the inner labels (`untitled`, `main.rs`, `foo.rs•`), no brackets.
+pub fn layout_tab_strip(
+    names: &[String],
+    header_width: usize,
+    first_visible: usize,
+) -> TabStripLayout {
+    let remaining = header_width.saturating_sub(MENU_BLOCK_COLS);
+    let total_tabs: usize = names.iter().map(|n| tab_width(n)).sum();
+    let fits = header_width <= MENU_BLOCK_COLS || total_tabs.saturating_add(PLUS_COLS) <= remaining;
+
+    if fits {
+        let mut tabs = Vec::with_capacity(names.len());
+        let mut x = MENU_BLOCK_COLS;
+        for (index, name) in names.iter().enumerate() {
+            let width = tab_width(name);
+            tabs.push(TabGeom {
+                index,
+                x,
+                width,
+                clipped: false,
+            });
+            x += width;
+        }
+        return TabStripLayout {
+            overflowing: false,
+            first_visible: 0,
+            left_arrow_x: None,
+            right_arrow_x: None,
+            plus_x: x,
+            tabs,
+            can_scroll_left: false,
+            can_scroll_right: false,
+        };
+    }
+
+    let chrome = (ARROW_COLS + ARROW_PAD) * 2 + PLUS_COLS;
+    let viewport = remaining.saturating_sub(chrome);
+    let first_visible = first_visible.min(max_first_visible(names, viewport));
+    let tab_start = MENU_BLOCK_COLS + ARROW_COLS + ARROW_PAD;
+    let tabs = pack_visible_tabs(names, first_visible, tab_start, viewport);
+    let left_arrow_x = Some(MENU_BLOCK_COLS);
+    let right_arrow_x = tab_start + viewport;
+    let mut plus_x = right_arrow_x + ARROW_COLS + ARROW_PAD;
+    if plus_x.saturating_add(PLUS_COLS) > header_width {
+        plus_x = header_width.saturating_sub(PLUS_COLS);
+    }
+
+    let can_scroll_left = first_visible > 0;
+    let last_packed = tabs.last().map(|g| g.index);
+    let can_scroll_right = match last_packed {
+        Some(i) => i < names.len().saturating_sub(1),
+        // Viewport too small to emit a tab: still allow scrolling if later names exist.
+        None => !names.is_empty() && first_visible < names.len().saturating_sub(1),
+    };
+
+    TabStripLayout {
+        overflowing: true,
+        first_visible,
+        left_arrow_x,
+        right_arrow_x: Some(right_arrow_x),
+        plus_x,
+        tabs,
+        can_scroll_left,
+        can_scroll_right,
+    }
+}
+
+pub fn hit_test_header(x: usize, layout: &TabStripLayout) -> HeaderHit {
+    // Menu ranges are independent of the tab-strip layout and are checked first.
+    if x < 6 {
+        return HeaderHit::Menu("File");
+    }
+    if (7..14).contains(&x) {
+        return HeaderHit::Menu("Tools");
+    }
+    if (15..25).contains(&x) {
+        return HeaderHit::Menu("Settings");
+    }
+
+    if let Some(ax) = layout.left_arrow_x {
+        if x >= ax && x < ax + ARROW_COLS {
+            return HeaderHit::ScrollLeft;
+        }
+    }
+    for tab in &layout.tabs {
+        if x >= tab.x && x < tab.x + tab.width {
+            return HeaderHit::Tab(tab.index);
+        }
+    }
+    if let Some(ax) = layout.right_arrow_x {
+        if x >= ax && x < ax + ARROW_COLS {
+            return HeaderHit::ScrollRight;
+        }
+    }
+    if x >= layout.plus_x && x < layout.plus_x + PLUS_COLS {
+        return HeaderHit::Plus;
+    }
+    HeaderHit::Miss
+}
+
+/// Filename or `"untitled"`, plus `'•'` if the buffer is modified.
+pub fn buffer_tab_name(buf: &crate::buffer::Buffer) -> String {
+    let mut name = buf
+        .path
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("untitled")
+        .to_string();
+    if buf.is_modified {
+        name.push('•');
+    }
+    name
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn untitled_names(n: usize) -> Vec<String> {
+        vec!["untitled".to_string(); n]
+    }
 
     #[test]
     fn test_dropdown_rect_file() {
@@ -221,5 +439,96 @@ mod tests {
         assert_eq!(rect.y, crate::ui::layout::HEADER_ROWS);
         assert_eq!(rect.width, 26);
         assert_eq!(rect.height, 5);
+    }
+
+    #[test]
+    fn tabs_that_fit_have_no_arrows_and_plus_after_last() {
+        // 1 untitled: tabs start at 27, width 13, plus at 40
+        let l = layout_tab_strip(&untitled_names(1), 80, 0);
+        assert!(!l.overflowing);
+        assert_eq!(l.left_arrow_x, None);
+        assert_eq!(l.plus_x, 27 + 13);
+        assert_eq!(l.tabs.len(), 1);
+        assert_eq!(hit_test_header(40, &l), HeaderHit::Plus); // middle of [+]
+        assert_eq!(hit_test_header(27, &l), HeaderHit::Tab(0));
+    }
+
+    #[test]
+    fn four_untitled_tabs_overflow_80_cols() {
+        // 27 + 4*13 + 3 = 82 > 80
+        let l = layout_tab_strip(&untitled_names(4), 80, 0);
+        assert!(l.overflowing);
+        assert_eq!(l.left_arrow_x, Some(27));
+        assert!(l.can_scroll_right);
+        assert!(!l.can_scroll_left);
+        assert!(l.plus_x + PLUS_COLS <= 80);
+        assert_eq!(hit_test_header(l.plus_x, &l), HeaderHit::Plus);
+        assert_eq!(hit_test_header(27, &l), HeaderHit::ScrollLeft);
+        assert_eq!(
+            hit_test_header(l.right_arrow_x.unwrap(), &l),
+            HeaderHit::ScrollRight
+        );
+    }
+
+    #[test]
+    fn first_visible_clamps_so_viewport_stays_packed() {
+        let l = layout_tab_strip(&untitled_names(4), 80, 99);
+        assert!(l.first_visible > 0);
+        assert!(l.can_scroll_left);
+        assert!(!l.can_scroll_right);
+    }
+
+    #[test]
+    fn too_wide_single_tab_is_clipped_and_plus_stays_on_screen() {
+        let names = vec!["a".repeat(80)];
+        let l = layout_tab_strip(&names, 40, 0);
+        assert!(l.overflowing);
+        assert_eq!(l.tabs.len(), 1);
+        assert!(l.tabs[0].clipped);
+        assert!(l.plus_x + PLUS_COLS <= 40);
+    }
+
+    #[test]
+    fn menus_still_win_hit_test() {
+        let l = layout_tab_strip(&untitled_names(1), 80, 0);
+        assert_eq!(hit_test_header(1, &l), HeaderHit::Menu("File"));
+        assert_eq!(hit_test_header(8, &l), HeaderHit::Menu("Tools"));
+        assert_eq!(hit_test_header(16, &l), HeaderHit::Menu("Settings"));
+    }
+
+    #[test]
+    fn modified_name_width_counts_bullet_as_one_char() {
+        let names = vec!["main.rs•".to_string()];
+        let l = layout_tab_strip(&names, 80, 0);
+        assert!(!l.overflowing);
+        assert_eq!(l.tabs.len(), 1);
+        assert_eq!(l.tabs[0].width, "main.rs•".chars().count() + 5);
+        assert_eq!(l.plus_x, MENU_BLOCK_COLS + l.tabs[0].width);
+    }
+
+    #[test]
+    fn buffer_tab_name_untitled_unmodified() {
+        let buf = crate::buffer::Buffer::new();
+        assert_eq!(buffer_tab_name(&buf), "untitled");
+    }
+
+    #[test]
+    fn buffer_tab_name_appends_bullet_when_modified() {
+        let mut buf = crate::buffer::Buffer::new();
+        buf.is_modified = true;
+        assert_eq!(buffer_tab_name(&buf), "untitled•");
+    }
+
+    #[test]
+    fn four_untitled_at_80_packs_three_tabs_and_stable_plus() {
+        let l = layout_tab_strip(&untitled_names(4), 80, 0);
+        assert_eq!(l.tabs.len(), 3);
+        assert_eq!(l.first_visible, 0);
+        assert_eq!(l.tabs[0].index, 0);
+        assert_eq!(l.tabs[0].x, 31);
+        assert_eq!(l.tabs[0].width, 13);
+        assert!(!l.tabs.iter().any(|t| t.clipped));
+        assert_eq!(l.right_arrow_x, Some(73));
+        assert_eq!(l.plus_x, 77);
     }
 }
