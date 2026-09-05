@@ -1,4 +1,4 @@
-// Shared vertical overflow scrollbar for the editor and popups.
+// Shared overflow scrollbar (vertical + horizontal) for the editor and popups.
 // Presentation helper: overflow math + themed Ratatui Scrollbar.
 
 use ratatui::layout::Rect;
@@ -8,7 +8,8 @@ use ratatui::Frame;
 
 use crate::theme::Theme;
 
-/// Vertical overflow scrollbar. `position` is the top visible row / index.
+/// Overflow scrollbar. `position` is the first visible row (vertical) or
+/// column (horizontal).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverflowBar {
     pub total: usize,
@@ -52,6 +53,37 @@ impl OverflowBar {
         let frac = rel as f64 / track as f64;
         Some((frac * max as f64).round() as usize)
     }
+
+    /// Map a screen column `x` on `area` to a left-col. `None` if `x` is
+    /// outside the track. Skips the ←/→ end cells.
+    // Editor mouse wiring lands in a later task.
+    #[allow(dead_code)]
+    pub fn target_for_col(&self, x: u16, area: Rect) -> Option<usize> {
+        if !area_contains_x(area, x) {
+            return None;
+        }
+        let max = self.max_position();
+        if max == 0 {
+            return Some(0);
+        }
+        let vis = (area.width as usize).max(1);
+        let track = vis.saturating_sub(2).max(1);
+        let rel = (x.saturating_sub(area.x.saturating_add(1))) as usize;
+        let rel = rel.min(track);
+        let frac = rel as f64 / track as f64;
+        Some((frac * max as f64).round() as usize)
+    }
+}
+
+// Editor layout wiring lands in a later task.
+#[allow(dead_code)]
+pub fn needs_horizontal_scrollbar(
+    word_wrap: bool,
+    max_line_width: usize,
+    content_w: usize,
+    editor_rows: usize,
+) -> bool {
+    !word_wrap && max_line_width > content_w && editor_rows > 1
 }
 
 /// Paint the bar only when content overflows the viewport.
@@ -92,6 +124,37 @@ fn render_ex(f: &mut Frame, area: Rect, bar: OverflowBar, theme: &Theme, always:
 
 fn area_contains_y(area: Rect, y: u16) -> bool {
     y >= area.y && y < area.y.saturating_add(area.height)
+}
+
+// Called from `target_for_col`; unused until that path is wired.
+#[allow(dead_code)]
+fn area_contains_x(area: Rect, x: u16) -> bool {
+    x >= area.x && x < area.x.saturating_add(area.width)
+}
+
+// Editor paint wiring lands in a later task.
+#[allow(dead_code)]
+pub fn render_horizontal(f: &mut Frame, area: Rect, bar: OverflowBar, theme: &Theme) {
+    if area.width == 0 || area.height == 0 || !bar.overflowing() {
+        return;
+    }
+    let vis = (area.width as usize).max(1);
+    let mut state = ScrollbarState::new(bar.content_length())
+        .position(bar.clamp_position(bar.position))
+        .viewport_content_length(vis);
+    let fg = Style::default().fg(Color::from(&theme.editor_fg));
+    let accent = Style::default().fg(Color::from(&theme.accent));
+    let widget = Scrollbar::default()
+        .orientation(ScrollbarOrientation::HorizontalBottom)
+        .begin_symbol(Some("←"))
+        .end_symbol(Some("→"))
+        .track_symbol(Some("─"))
+        .thumb_symbol("█")
+        .begin_style(fg)
+        .end_style(fg)
+        .track_style(fg)
+        .thumb_style(accent);
+    f.render_stateful_widget(widget, area, &mut state);
 }
 
 #[cfg(test)]
@@ -155,5 +218,28 @@ mod tests {
             viewport: 5,
         };
         assert_eq!(bar.target_for_row(0, Rect::new(0, 0, 1, 0)), None);
+    }
+
+    #[test]
+    fn needs_horizontal_scrollbar_rules() {
+        assert!(!needs_horizontal_scrollbar(true, 200, 40, 20)); // wrap on
+        assert!(!needs_horizontal_scrollbar(false, 40, 40, 20)); // fits exactly
+        assert!(!needs_horizontal_scrollbar(false, 80, 40, 1)); // would leave 0 content rows
+        assert!(needs_horizontal_scrollbar(false, 41, 40, 20));
+    }
+
+    #[test]
+    fn target_for_col_skips_end_caps_and_maps_proportionally() {
+        let bar = OverflowBar {
+            total: 100,
+            position: 0,
+            viewport: 10,
+        };
+        let area = Rect::new(5, 10, 10, 1); // x=5..15
+        assert_eq!(bar.target_for_col(4, area), None); // left of bar
+        assert_eq!(bar.target_for_col(15, area), None); // right of bar
+        assert_eq!(bar.target_for_col(5, area), Some(0)); // ← cell → start
+        let right = bar.target_for_col(14, area).unwrap();
+        assert_eq!(right, bar.max_position());
     }
 }
