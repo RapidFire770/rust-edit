@@ -124,6 +124,10 @@ pub struct App {
     /// Last known width (in columns) of the editor text area (excludes gutter +
     /// scrollbar). Used by horizontal auto-scroll to follow the cursor.
     pub editor_visible_width: std::cell::Cell<usize>,
+    /// Whether `ui()` reserved a row for the editor horizontal scrollbar this
+    /// frame. `editor::render` reads this instead of recomputing from
+    /// `buf.visible_lines` (already post-subtract).
+    pub editor_hscrollbar_visible: std::cell::Cell<bool>,
     /// Parse-state checkpoint cache for the active buffer. `refresh_highlight_cache`
     /// ensures an overscanned window; the editor reads spans via `line_spans`.
     pub highlight_cache: crate::highlight_cache::HighlightCache,
@@ -223,6 +227,7 @@ impl App {
             should_quit: false,
             editor_visible_lines: std::cell::Cell::new(20),
             editor_visible_width: std::cell::Cell::new(80),
+            editor_hscrollbar_visible: std::cell::Cell::new(false),
             highlight_cache: crate::highlight_cache::HighlightCache::new(),
         }
     }
@@ -253,6 +258,12 @@ impl App {
             b.visible_width = content_w;
             b.word_wrap = wrap;
             b.tab_size = tab;
+            b.refresh_max_line_width();
+            if wrap {
+                b.scroll_offset.1 = 0;
+            } else {
+                b.clamp_hscroll();
+            }
             if wrap {
                 let total = crate::wrap::total_screen_rows(&b.rope, content_w, tab);
                 b.clamp_scroll_wrapped(total);
@@ -956,10 +967,7 @@ impl App {
                 self.file_path_input = path.to_string_lossy().to_string();
             } else if let Some(ref dir) = self.last_save_directory {
                 // No current path - use last save directory with untitled filename
-                self.file_path_input = dir
-                    .join("untitled.txt")
-                    .to_string_lossy()
-                    .to_string();
+                self.file_path_input = dir.join("untitled.txt").to_string_lossy().to_string();
             } else {
                 self.file_path_input = "untitled.txt".to_string();
             }
@@ -2304,7 +2312,12 @@ mod tests {
         // (shows both options with active view bolded).
         assert_eq!(
             app.browser_footer_labels(),
-            ["[ Up ]", "[ **Browse** / Recent ]", "[ Hidden: off ]", "[ Cancel ]"]
+            [
+                "[ Up ]",
+                "[ **Browse** / Recent ]",
+                "[ Hidden: off ]",
+                "[ Cancel ]"
+            ]
         );
     }
 

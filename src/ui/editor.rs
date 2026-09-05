@@ -16,35 +16,48 @@ use crate::ui::spans::paint_line_spans;
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let buf = app.active_buffer();
     let theme = app.current_theme();
-    let visible_lines = area.height as usize;
-    let cache = app.cached_visible_spans();
+    // Single source of truth: `ui()` already applied the predicate and
+    // shrank `visible_lines`. Recomputing from `buf.visible_lines` here
+    // would double-subtract.
+    let show_hbar = app.editor_hscrollbar_visible.get();
 
+    let (main_area, hbar_area) = if show_hbar {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
+    let inner = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(main_area);
+    let content_area = inner[0];
+    let vbar_area = inner[1];
+
+    let visible_lines = content_area.height as usize;
+    let cache = app.cached_visible_spans();
     let mut lines: Vec<Line<'static>> = if app.config.word_wrap {
         render_wrapped(buf, app, visible_lines, cache)
     } else {
         render_unwrapped(buf, app, visible_lines, cache)
     };
-
-    while lines.len() < area.height as usize {
+    while lines.len() < visible_lines {
         lines.push(Line::from(""));
     }
 
-    // Split for scrollbar on right (1 col).
-    let inner_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(area);
-    let content_area = inner_chunks[0];
-    let scrollbar_area = inner_chunks[1];
+    f.render_widget(
+        Paragraph::new(lines)
+            .style(theme.editor_bg_style())
+            .block(Block::default().borders(Borders::NONE)),
+        content_area,
+    );
 
-    let editor = Paragraph::new(lines)
-        .style(theme.editor_bg_style())
-        .block(Block::default().borders(Borders::NONE));
-    f.render_widget(editor, content_area);
-
-    // Scrollbar calibration (see existing comment). When wrap is on, the total
-    // is screen rows (not logical lines) and scroll_offset.0 is a screen row.
-    let vis = (scrollbar_area.height as usize).max(1);
+    // vertical bar (always) — height is content rows, not including h-bar
+    let vis = (vbar_area.height as usize).max(1);
     let (total_rows, scroll_pos) = if app.config.word_wrap {
         let total =
             crate::wrap::total_screen_rows(&buf.rope, buf.visible_width, app.config.tab_size);
@@ -54,7 +67,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     };
     crate::ui::scrollbar::render_always(
         f,
-        scrollbar_area,
+        vbar_area,
         crate::ui::scrollbar::OverflowBar {
             total: total_rows,
             position: scroll_pos,
@@ -62,6 +75,26 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         },
         theme,
     );
+
+    if let Some(hbar_row) = hbar_area {
+        let parts = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(hbar_row);
+        let hbar = parts[0];
+        let corner = parts[1];
+        crate::ui::scrollbar::render_horizontal(
+            f,
+            hbar,
+            crate::ui::scrollbar::OverflowBar {
+                total: buf.max_line_width,
+                position: buf.scroll_offset.1,
+                viewport: buf.visible_width.max(1),
+            },
+            theme,
+        );
+        f.render_widget(Paragraph::new("").style(theme.editor_bg_style()), corner);
+    }
 }
 
 /// Original 1-line-per-row render path. Unchanged from the pre-wrap version.

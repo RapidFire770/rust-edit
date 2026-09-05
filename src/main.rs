@@ -2283,9 +2283,23 @@ fn ui(f: &mut Frame, app: &mut App) {
     let content_w = (chunks[1].width as usize)
         .saturating_sub(Buffer::GUTTER_WIDTH + 1)
         .max(1);
-    // Sync every buffer, clamp wrap/unwrapped scroll, and fill the highlight
-    // cache using this frame's size — before render, so a resize cannot leave
-    // `buf.visible_width` stale relative to the wrap layout being painted.
+    // `vis_h` here is the full editor content+vbar height (find bar already
+    // subtracted). Reserve one row for the h-bar when wrap is off and the
+    // longest line exceeds the text width, then sync viewport to the shrunk
+    // height so wrap math / cache / paint agree.
+    let wrap = app.config.word_wrap;
+    let max_w = {
+        let b = app.active_buffer_mut();
+        b.refresh_max_line_width();
+        b.max_line_width
+    };
+    let show_hbar = crate::ui::scrollbar::needs_horizontal_scrollbar(wrap, max_w, content_w, vis_h);
+    app.editor_hscrollbar_visible.set(show_hbar);
+    let vis_h = if show_hbar {
+        vis_h.saturating_sub(1).max(1)
+    } else {
+        vis_h
+    };
     app.apply_editor_viewport(vis_h, content_w);
 
     crate::ui::header::render(f, chunks[0], app);
@@ -2683,7 +2697,10 @@ mod popup_focus_key_tests {
         // Test that dragging to the top of the scrollbar selects an early file
         handle_file_browser_click(sb.x as usize, sb.y as usize + 1, &mut app);
         let top_sel = app.browser_selected;
-        assert!(top_sel < total / 4, "top of scrollbar should select early file");
+        assert!(
+            top_sel < total / 4,
+            "top of scrollbar should select early file"
+        );
 
         // Test that dragging to the middle of the scrollbar selects a middle file
         let mid_y = sb.y + sb.height / 2;
