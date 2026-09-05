@@ -3,23 +3,12 @@
 ### Minor:
 
 - [ ] Edit / new theme not working. Cannot select any colors to change or type color values.
-  - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value.
-- [x] In the file browser window when the mouse is outside of the popup window it still scrolls the files list.
-- [x] A Scrollbar should display in the popups to indicate to the user that the content is scrollable when it overflows the popup window. Currently noticable as an issue in help and file browsing popups.
-- [x] Cannot click and drag the scrollbar with the mouse in the file browser popups.
-- [x] Save as and Open file popups file paths are crossing over with each other on reopening the popups. These file paths should not cross from one popup to another and I would expect that re-opening these popups that the file path would have been empty for the user to select a new file to open or save.
-- [x] In the open popups browse files feature, the option to view recent files is not clear. Currently is initially says Browse with no clear indication that clicking on this will change it to show recently opened files. Possibly change this to show [ Browse / Recent ] bolding the text of which view the user is on or some other method that makes it more clear to the user this feature exists and can be used.
-- [x] Configure menu setting for turning the visible line numbers on and off does not function. There is also a toggle for Mouse input that got added but should not have. The setting doesn not work and should be removed  as mouse input does not need to be able to turn on and off.
-    - [ ] There is now a large amount of extra whitespace bellow the Toggle and close buttons in the configure menu.
-    - [ ] Now that the line numbers are toggling on and off there is still a large gap on the side of the screen where the line numbers show. The text should move to fill this gap when line numbers are not being displayed.
-- [x] The new bottom/horizontal scrollbars height is to large, needs to match the size of the vertical scrollbars width so the two bars are consistant visually. Box-drawing lines (`─`/`━`) with a `┘` corner sit on one baseline, use the editor background, and meet the vertical bar; no block elements that fill/bleed the cell.
+  - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value depending on the capabitlities of Rataui and our current tech stack.
+- [ ] Now that the line numbers are toggling on and off there is a large gap on the side of the screen where the line numbers show. The text should move to fill this gap when line numbers are not being displayed.
+
 
 ### Major:
 
-- [x] In the Save As popup when using the browser function there is no way to select the folder/directory to save the file into. It appears to be an exact copy of the browse function from the open dialog that is not adapted to function for a save as feature making it impossible to select a directory to save a file into.
-- [x] When hitting the tab button it does not work as expected of a text and code editor. When hitting tab anywhere on a line of text it inputs the tab at the beginning of the line pushing the line over 4 spaces like an indent instead of moving the text at the cursor over the tab amount. If the cursor is at the end of the line, instead of moving the cursor over the tab amount it moves the whole line over 4 spaces. Also the configured tab amount in the configure menu does not change the tab amount input in the editor window.
-- [x] Issue with editor scroll jumping and possible cursor positioning when clicking with mouse. When clicking to position the cursor after having scrolled about half way down a larger document like our AGENTS.md the editor scrolls the screen to have the spot clicked on by the mouse as the very last visible line on the screen. The page should stay put and the cursor should just be positioned where the user clicked so they can edit from that point like in other text and code editors. Also when at bottom of the document the cursor can show as being on the bottom information bar instead of in the editor window when the page scrolls itself.
-- [x] Terminal resize with word wrap on panicked (`highlight cache must cover visible line N`). Viewport size is now applied and wrap scroll clamped inside `ui()` before the highlight cache is filled.
 
 ---
 
