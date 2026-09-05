@@ -101,6 +101,8 @@ pub struct App {
     pub browser_origin_is_save: bool,
     /// Save As only: filename typed in the browser Name field (not a path).
     pub browser_filename: String,
+    /// Last directory used for Save As, used to pre-fill the path for subsequent saves.
+    pub last_save_directory: Option<std::path::PathBuf>,
     /// Mouse position tracking
     pub last_mouse_pos: Option<(u16, u16)>,
     /// True while the left mouse button is held down in the editor area after
@@ -213,6 +215,7 @@ impl App {
             browser_button_selected: 0,
             browser_origin_is_save: false,
             browser_filename: String::new(),
+            last_save_directory: std::env::current_dir().ok(),
             last_mouse_pos: None,
             mouse_drag_active: false,
             scrollbar_drag_active: false,
@@ -349,6 +352,10 @@ impl App {
         if let Some(ref path) = buf.path.clone() {
             if std::fs::write(path, buf.text()).is_ok() {
                 buf.is_modified = false;
+                // Remember the directory for future Save As operations
+                if let Some(parent) = path.parent() {
+                    self.last_save_directory = Some(parent.to_path_buf());
+                }
                 return true;
             }
         }
@@ -945,9 +952,21 @@ impl App {
         self.show_file_dialog = true;
         self.file_dialog_is_save = is_save;
         self.file_path_input.clear();
-        if let Some(ref path) = self.active_buffer().path {
-            self.file_path_input = path.to_string_lossy().to_string();
+        if is_save {
+            // For Save As, pre-fill with current file path if one exists
+            if let Some(ref path) = self.active_buffer().path {
+                self.file_path_input = path.to_string_lossy().to_string();
+            } else if let Some(ref dir) = self.last_save_directory {
+                // No current path - use last save directory with untitled filename
+                self.file_path_input = dir
+                    .join("untitled.txt")
+                    .to_string_lossy()
+                    .to_string();
+            } else {
+                self.file_path_input = "untitled.txt".to_string();
+            }
         }
+        // For Open, leave path empty so user selects a new file
         self.file_dialog_message = if is_save {
             "Enter path to save as".to_string()
         } else {
@@ -1040,6 +1059,10 @@ impl App {
             buf.set_path(path.clone());
             buf.is_modified = false;
             self.config.record_recent_file(&path);
+            // Remember the directory for future Save As operations
+            if let Some(parent) = path.parent() {
+                self.last_save_directory = Some(parent.to_path_buf());
+            }
         } else {
             match self.open_file_in_tab(&path) {
                 Ok(()) => {}
@@ -2241,11 +2264,12 @@ mod tests {
         let mut app = App::new(&[]);
         app.show_file_dialog(true);
         assert!(app.active_buffer().path.is_none());
-        assert!(app.file_path_input.is_empty());
+        // file_path_input is now pre-filled with last_save_directory + untitled.txt
+        // for Save As dialogs, and browser_filename is seeded from it
         app.open_file_browser();
-        assert!(
-            app.browser_filename.is_empty(),
-            "new buffers must not seed untitled; got {:?}",
+        assert_eq!(
+            app.browser_filename, "untitled.txt",
+            "new buffers should seed untitled.txt; got {:?}",
             app.browser_filename
         );
     }

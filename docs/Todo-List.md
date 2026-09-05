@@ -5,7 +5,8 @@
 - [ ] Edit / new theme not working. Cannot select any colors to change or type color values.
   - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value.
 - [x] In the file browser window when the mouse is outside of the popup window it still scrolls the files list.
-- [x] A Scrollbar should display in the popups to indicate to the user that the content is scrollable when it overflows the popup window. Currently noticable as an issue in help and file browsing popups.
+- [x] A Scroll
+- [x] Save As and Open file popups file paths are crossing over with each other on reopening the popups. These file paths should not cross from one popup to another and I would expect that re-opening these popups that the file path would have been empty for the user to select a new file to open or save.bar should display in the popups to indicate to the user that the content is scrollable when it overflows the popup window. Currently noticable as an issue in help and file browsing popups.
 - [x] Cannot click and drag the scrollbar with the mouse in the file browser popups.
 - [ ] Save as and Open file popups file paths are crossing over with each other on reopening the popups. These file paths should not cross from one popup to another and I would expect that re-opening these popups that the file path would have been empty for the user to select a new file to open or save.
 - [ ] In the open popups browse files feature, the option to view recent files is not clear. Currently is initially says Browse with no clear indication that clicking on this will change it to show recently opened files. Possibly change this to show [ Browse / Recent ] bolding the text of which view the user is on or some other method that makes it more clear to the user this feature exists and can be used.

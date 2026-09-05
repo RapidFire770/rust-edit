@@ -2746,6 +2746,8 @@ mod popup_focus_key_tests {
             app.browser_button_selected,
             popups::file_browser::FOCUS_FILENAME
         );
+        // Clear the pre-filled filename and type a new one
+        app.browser_filename.clear();
         handle_file_browser_key(KeyCode::Char('n'), &mut app);
         handle_file_browser_key(KeyCode::Char('o'), &mut app);
         handle_file_browser_key(KeyCode::Char('t'), &mut app);
