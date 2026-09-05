@@ -126,6 +126,15 @@ fn area_contains_x(area: Rect, x: u16) -> bool {
     x >= area.x && x < area.x.saturating_add(area.width)
 }
 
+/// Track/thumb sit in the lower part of the cell so the painted strip is about
+/// as thick as the 1-column vertical bar. Terminal cells are taller than they
+/// are wide; a full-cell `█` thumb looks like a second status row. Begin/end
+/// stay `←`/`→` (same as before; hit-testing still skips those two cells).
+pub const HORIZONTAL_TRACK: &str = "▁"; // U+2581 lower one eighth
+pub const HORIZONTAL_THUMB: &str = "▄"; // U+2584 lower half
+pub const HORIZONTAL_BEGIN: &str = "←";
+pub const HORIZONTAL_END: &str = "→";
+
 pub fn render_horizontal(f: &mut Frame, area: Rect, bar: OverflowBar, theme: &Theme) {
     if area.width == 0 || area.height == 0 || !bar.overflowing() {
         return;
@@ -138,10 +147,10 @@ pub fn render_horizontal(f: &mut Frame, area: Rect, bar: OverflowBar, theme: &Th
     let accent = Style::default().fg(Color::from(&theme.accent));
     let widget = Scrollbar::default()
         .orientation(ScrollbarOrientation::HorizontalBottom)
-        .begin_symbol(Some("←"))
-        .end_symbol(Some("→"))
-        .track_symbol(Some("─"))
-        .thumb_symbol("█")
+        .begin_symbol(Some(HORIZONTAL_BEGIN))
+        .end_symbol(Some(HORIZONTAL_END))
+        .track_symbol(Some(HORIZONTAL_TRACK))
+        .thumb_symbol(HORIZONTAL_THUMB)
         .begin_style(fg)
         .end_style(fg)
         .track_style(fg)
@@ -233,5 +242,19 @@ mod tests {
         assert_eq!(bar.target_for_col(5, area), Some(0)); // ← cell → start
         let right = bar.target_for_col(14, area).unwrap();
         assert_eq!(right, bar.max_position());
+    }
+
+    #[test]
+    fn horizontal_glyphs_are_lower_aligned_not_full_cell() {
+        // Full-cell █ is as tall as a whole row (~2× a column), so the bar
+        // looked thicker than the vertical track. Lower-block glyphs keep
+        // the reserved row but paint a strip about as thick as 1 column.
+        assert_ne!(HORIZONTAL_THUMB, "█");
+        assert_eq!(HORIZONTAL_THUMB, "▄");
+        assert_eq!(HORIZONTAL_TRACK, "▁");
+        assert_eq!(HORIZONTAL_THUMB.chars().count(), 1);
+        assert_eq!(HORIZONTAL_TRACK.chars().count(), 1);
+        assert_eq!(HORIZONTAL_BEGIN.chars().count(), 1);
+        assert_eq!(HORIZONTAL_END.chars().count(), 1);
     }
 }
