@@ -2349,6 +2349,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     };
     app.apply_editor_viewport(vis_h, content_w);
 
+    app.sync_tab_strip_mut(chunks[0].width as usize);
     crate::ui::header::render(f, chunks[0], app);
 
     let edit_chunk = chunks[1];

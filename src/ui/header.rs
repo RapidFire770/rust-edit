@@ -46,39 +46,101 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // A slightly wider gap between the menu block and the file tabs.
     header_spans.push(Span::styled("  ", menu_base_style));
 
-    // File tabs — all bracketed for consistency with [untitled] / [+]. The active
-    // tab uses the accent background so the current buffer is unmistakable.
+    // File tabs — consume layout_tab_strip so overflow paints arrows and keeps
+    // [+] on-screen. The active tab uses the accent background.
     let active_tab_style = Style::default()
         .bg(Color::from(&theme.accent))
         .fg(Color::from(&theme.header_fg))
         .add_modifier(Modifier::BOLD);
     let inactive_tab_style = menu_base_style;
-    for (i, buf) in app.buffers.iter().enumerate() {
-        let mut name = buf
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("untitled")
-            .to_string();
-        if buf.is_modified {
-            name.push('•');
-        }
-        let is_active = i == app.active;
-        let style = if is_active {
+    let dim_arrow_style = menu_base_style.add_modifier(Modifier::DIM);
+
+    let names = app.tab_names();
+    let layout = layout_tab_strip(&names, area.width as usize, app.tab_scroll);
+    // Columns already consumed by the menu block + gap (`MENU_BLOCK_COLS`).
+    let mut col = MENU_BLOCK_COLS;
+
+    if let Some(ax) = layout.left_arrow_x {
+        let left_style = if layout.can_scroll_left {
+            menu_base_style
+        } else {
+            dim_arrow_style
+        };
+        pad_header_spans(&mut header_spans, &mut col, ax, menu_base_style);
+        header_spans.push(Span::styled("[<]", left_style));
+        col += ARROW_COLS;
+        header_spans.push(Span::styled(" ", menu_base_style));
+        col += ARROW_PAD;
+    }
+
+    for geom in &layout.tabs {
+        pad_header_spans(&mut header_spans, &mut col, geom.x, menu_base_style);
+        let name = names.get(geom.index).map(String::as_str).unwrap_or("");
+        let style = if geom.index == app.active {
             active_tab_style
         } else {
             inactive_tab_style
         };
-        header_spans.push(Span::styled(format!("[ {name} ]"), style));
-        header_spans.push(Span::styled(" ", menu_base_style));
+        header_spans.push(Span::styled(tab_label(name, geom), style));
+        col += geom.width;
     }
+
+    if let Some(ax) = layout.right_arrow_x {
+        let right_style = if layout.can_scroll_right {
+            menu_base_style
+        } else {
+            dim_arrow_style
+        };
+        pad_header_spans(&mut header_spans, &mut col, ax, menu_base_style);
+        header_spans.push(Span::styled("[>]", right_style));
+        col += ARROW_COLS;
+        header_spans.push(Span::styled(" ", menu_base_style));
+        col += ARROW_PAD;
+    }
+
+    pad_header_spans(&mut header_spans, &mut col, layout.plus_x, menu_base_style);
     header_spans.push(Span::styled("[+]", menu_base_style));
 
     // Base style fills trailing cells to the right edge regardless of content
     // (the old byte-length padding under-counted on non-ASCII chars).
     let header = Paragraph::new(Line::from(header_spans)).style(theme.header_style());
     f.render_widget(header, area);
+}
+
+/// Pad with spaces so widgets sit on their layout columns (hit-test alignment).
+fn pad_header_spans(spans: &mut Vec<Span>, col: &mut usize, target: usize, style: Style) {
+    if target > *col {
+        spans.push(Span::styled(" ".repeat(target - *col), style));
+        *col = target;
+    }
+}
+
+/// Full tab widget text (`[ name ]` plus trailing space), clipped to `geom.width`.
+fn tab_label(name: &str, geom: &TabGeom) -> String {
+    let inner = geom.width.saturating_sub(5);
+    let mut inner_text = if name.chars().count() <= inner {
+        name.chars().take(inner).collect::<String>()
+    } else if inner >= 1 {
+        let mut s: String = name.chars().take(inner.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    } else {
+        String::new()
+    };
+    while inner_text.chars().count() < inner {
+        inner_text.push(' ');
+    }
+
+    let mut label = format!("[ {inner_text} ] ");
+    let count = label.chars().count();
+    if count > geom.width {
+        label = label.chars().take(geom.width).collect();
+    } else {
+        while label.chars().count() < geom.width {
+            label.push(' ');
+        }
+    }
+    label
 }
 
 /// Simple text for menus (can be expanded for dropdown anchors later).
@@ -532,6 +594,29 @@ mod tests {
         assert_eq!(l.tabs.len(), 1);
         assert_eq!(l.tabs[0].width, "main.rs•".chars().count() + 5);
         assert_eq!(l.plus_x, MENU_BLOCK_COLS + l.tabs[0].width);
+    }
+
+    #[test]
+    fn tab_label_matches_geom_width_and_ellipsis() {
+        let full = TabGeom {
+            index: 0,
+            x: 0,
+            width: 13,
+            clipped: false,
+        };
+        let s = tab_label("untitled", &full);
+        assert_eq!(s, "[ untitled ] ");
+        assert_eq!(s.chars().count(), 13);
+
+        let clip = TabGeom {
+            index: 0,
+            x: 0,
+            width: 10,
+            clipped: true,
+        };
+        let s = tab_label("untitled", &clip);
+        assert_eq!(s, "[ unti… ] ");
+        assert_eq!(s.chars().count(), 10);
     }
 
     #[test]
