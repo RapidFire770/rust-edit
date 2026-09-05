@@ -25,9 +25,9 @@ pub const ROW_TAB_SIZE: usize = 0;
 pub const ROW_WORD_WRAP: usize = 1;
 pub const ROW_LINE_NUMBERS: usize = 2;
 
-/// Inner content height of the popup (title + blank + 4 rows + blank + footer).
+/// Inner content height of the popup (title + blank + 3 rows + blank + footer).
 pub const POPUP_W: u16 = 46;
-pub const POPUP_H: u16 = 11;
+pub const POPUP_H: u16 = 9;
 
 // Row content geometry, shared by the render loop and the mouse hit-test so
 // they cannot drift apart. Each row is: prefix + padded label + value.
