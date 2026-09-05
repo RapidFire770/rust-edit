@@ -128,14 +128,27 @@ enum WheelTarget {
     Help,
     FileBrowser,
     Swallow,
+    TabStrip,
 }
 
-fn wheel_target(app: &App) -> WheelTarget {
+fn wheel_target(app: &App, wheel_col: u16, wheel_row: u16) -> WheelTarget {
     match app.popup_focus() {
         Some(PopupFocus::Help) => WheelTarget::Help,
         Some(PopupFocus::FileBrowser) => WheelTarget::FileBrowser,
         Some(_) => WheelTarget::Swallow,
-        None => WheelTarget::Editor,
+        None => {
+            if (wheel_row as usize) < crate::ui::layout::HEADER_ROWS as usize
+                && (wheel_col as usize) >= crate::ui::header::MENU_BLOCK_COLS
+            {
+                let names = app.tab_names();
+                let width = app.header_width.get().max(1);
+                let layout = crate::ui::header::layout_tab_strip(&names, width, app.tab_scroll);
+                if layout.overflowing {
+                    return WheelTarget::TabStrip;
+                }
+            }
+            WheelTarget::Editor
+        }
     }
 }
 
@@ -413,7 +426,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             // all wheel events so only key/click/other events remain for the dispatch.
             let wheel_delta = events.iter().filter_map(wheel_lines).sum::<isize>();
             if wheel_delta != 0 {
-                match wheel_target(app) {
+                let (wheel_col, wheel_row) =
+                    events.iter().rev().find_map(wheel_pos).unwrap_or((0, 0));
+                match wheel_target(app, wheel_col, wheel_row) {
                     WheelTarget::FileBrowser => {
                         app.browser_move_cursor(wheel_delta as i32);
                     }
@@ -421,6 +436,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         apply_help_scroll(app, wheel_delta as i32);
                     }
                     WheelTarget::Swallow => {}
+                    WheelTarget::TabStrip => {
+                        app.scroll_tab_strip(wheel_delta.signum() * (wheel_delta.abs() / 3).max(1));
+                    }
                     WheelTarget::Editor => {
                         if app.config.word_wrap {
                             let buf = app.active_buffer();
@@ -579,6 +597,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 let idx = (d as u8 - b'1') as usize;
                                 if idx < app.buffers.len() {
                                     app.active = idx;
+                                    app.ensure_active_tab_visible();
                                 }
                             }
                             KeyCode::Tab if app.is_find_active() => {
@@ -860,6 +879,17 @@ fn wheel_lines(event: &Event) -> Option<isize> {
         match m.kind {
             MouseEventKind::ScrollUp => Some(-3),
             MouseEventKind::ScrollDown => Some(3),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+fn wheel_pos(event: &Event) -> Option<(u16, u16)> {
+    if let Event::Mouse(m) = event {
+        match m.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => Some((m.column, m.row)),
             _ => None,
         }
     } else {
@@ -1469,10 +1499,18 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
         // while a popup owns focus so the editor underneath cannot pan.
         MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight if app.popup_is_open() => {}
         MouseEventKind::ScrollLeft => {
-            app.active_buffer_mut().scroll_horizontal(-4);
+            if wheel_target(app, x, y) == WheelTarget::TabStrip {
+                app.scroll_tab_strip(-1);
+            } else {
+                app.active_buffer_mut().scroll_horizontal(-4);
+            }
         }
         MouseEventKind::ScrollRight => {
-            app.active_buffer_mut().scroll_horizontal(4);
+            if wheel_target(app, x, y) == WheelTarget::TabStrip {
+                app.scroll_tab_strip(1);
+            } else {
+                app.active_buffer_mut().scroll_horizontal(4);
+            }
         }
         _ => {}
     }
@@ -2223,49 +2261,47 @@ fn any_modal_open(app: &App) -> bool {
 }
 
 fn handle_header_click(x: usize, app: &mut App) {
-    // Menu button hit-ranges must mirror header.rs render exactly:
-    //   " File "(0-5) │(6) " Tools "(7-13) │(14) " Settings "(15-24)  (gap 25-26)
-    let menus = [("File", 0, 6), ("Tools", 7, 14), ("Settings", 15, 25)];
-    for (name, start, end) in menus {
-        if x >= start && x < end {
-            app.open_menu(name);
-            return;
-        }
-    }
-    if app.active_menu.is_some() {
-        app.close_menu();
-    }
-
-    // File tabs start after the menu block + a 2-col gap. Each tab renders as
-    // "[ name• ]" (name + 4 cols: brackets + two inner spaces) plus one
-    // trailing space = name + 5 cols in COLUMNS (chars().count(), not bytes).
-    // [+] is 3 cols.
-    let mut pos = 27usize;
-    for i in 0..app.buffers.len() {
-        let buf = &app.buffers[i];
-        let mut name = buf
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("untitled")
-            .to_string();
-        if buf.is_modified {
-            name.push('•');
-        }
-        let tab_width = name.chars().count() + 5; // "[ " + name + " ]" + " "
-        if x >= pos && x < pos + tab_width {
-            app.active = i;
+    let width = app.header_width.get();
+    let width = if width == 0 {
+        crossterm::terminal::size()
+            .map(|(w, _)| w as usize)
+            .unwrap_or(80)
+    } else {
+        width
+    };
+    app.clamp_tab_strip(width);
+    let names = app.tab_names();
+    let layout = crate::ui::header::layout_tab_strip(&names, width, app.tab_scroll);
+    match crate::ui::header::hit_test_header(x, &layout) {
+        crate::ui::header::HeaderHit::Menu(name) => app.open_menu(name),
+        crate::ui::header::HeaderHit::Tab(i) => {
+            if i < app.buffers.len() {
+                app.active = i;
+                app.ensure_active_tab_visible();
+            }
             app.close_menu();
-            return;
         }
-        pos += tab_width;
-    }
-
-    // [+] button (new tab)
-    if x >= pos && x < pos + 3 {
-        app.new_tab();
-        app.close_menu();
+        crate::ui::header::HeaderHit::Plus => {
+            app.new_tab();
+            app.close_menu();
+        }
+        crate::ui::header::HeaderHit::ScrollLeft => {
+            if layout.can_scroll_left {
+                app.scroll_tab_strip(-1);
+            }
+            app.close_menu();
+        }
+        crate::ui::header::HeaderHit::ScrollRight => {
+            if layout.can_scroll_right {
+                app.scroll_tab_strip(1);
+            }
+            app.close_menu();
+        }
+        crate::ui::header::HeaderHit::Miss => {
+            if app.active_menu.is_some() {
+                app.close_menu();
+            }
+        }
     }
 }
 
@@ -2349,7 +2385,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     };
     app.apply_editor_viewport(vis_h, content_w);
 
-    app.sync_tab_strip_mut(chunks[0].width as usize);
+    app.clamp_tab_strip(chunks[0].width as usize);
     crate::ui::header::render(f, chunks[0], app);
 
     let edit_chunk = chunks[1];
@@ -2551,11 +2587,9 @@ mod cursor_blink_tests {
 mod plus_button_hit_test_tests {
     use super::*;
 
-    /// The `[+]` new-tab button's hit region must track the rendered header as
-    /// tabs accumulate. The menu block + gap is 27 cols; each untitled tab
-    /// ("untitled", 8 chars) renders as `[ untitled ]` (12 cols) plus one
-    /// trailing space = 13 cols. So `[+]` starts at column 27 + N*13. A click
-    /// in the middle of its 3-col region must create a new blank tab.
+    /// The `[+]` new-tab button's hit region must track the packed tab-strip
+    /// layout. n=1..=3 still fit on width 80; n=4 overflows and `[+]` sits
+    /// after `[>]` rather than past the last packed tab.
     #[test]
     fn plus_button_stays_aligned_as_tabs_accumulate() {
         for n in 1..=4usize {
@@ -2566,9 +2600,10 @@ mod plus_button_hit_test_tests {
             }
             assert_eq!(app.buffers.len(), n, "setup: expected {n} buffers");
 
-            // Rendered [+] start column, then click its middle column.
-            let plus_start = 27 + n * 13;
-            let click_x = plus_start + 1;
+            app.clamp_tab_strip(80);
+            let names = app.tab_names();
+            let layout = crate::ui::header::layout_tab_strip(&names, 80, app.tab_scroll);
+            let click_x = layout.plus_x + 1;
 
             let before = app.buffers.len();
             handle_header_click(click_x, &mut app);
@@ -2578,6 +2613,49 @@ mod plus_button_hit_test_tests {
                 "with {n} tab(s), a click at column {click_x} (middle of [+]) must create a new tab"
             );
         }
+    }
+
+    #[test]
+    fn plus_stays_clickable_when_tabs_overflow() {
+        let mut app = App::new(&[]);
+        while app.buffers.len() < 8 {
+            app.new_tab();
+        }
+        app.clamp_tab_strip(80);
+        let names = app.tab_names();
+        let layout = crate::ui::header::layout_tab_strip(&names, 80, app.tab_scroll);
+        let before = app.buffers.len();
+        handle_header_click(layout.plus_x + 1, &mut app);
+        assert_eq!(app.buffers.len(), before + 1);
+    }
+
+    #[test]
+    fn click_right_arrow_advances_tab_scroll() {
+        let mut app = App::new(&[]);
+        while app.buffers.len() < 8 {
+            app.new_tab();
+        }
+        app.active = 0;
+        app.clamp_tab_strip(80);
+        app.tab_scroll = 0;
+        app.clamp_tab_strip(80);
+        let names = app.tab_names();
+        let layout = crate::ui::header::layout_tab_strip(&names, 80, app.tab_scroll);
+        let start = app.tab_scroll;
+        handle_header_click(layout.right_arrow_x.expect("overflow"), &mut app);
+        assert!(app.tab_scroll > start);
+    }
+
+    #[test]
+    fn click_visible_tab_activates_it() {
+        let mut app = App::new(&[]);
+        app.new_tab();
+        app.clamp_tab_strip(80);
+        let names = app.tab_names();
+        let layout = crate::ui::header::layout_tab_strip(&names, 80, app.tab_scroll);
+        let tab1 = layout.tabs.iter().find(|t| t.index == 1).unwrap();
+        handle_header_click(tab1.x + 1, &mut app);
+        assert_eq!(app.active, 1);
     }
 }
 
@@ -2828,18 +2906,32 @@ mod wheel_target_tests {
     #[test]
     fn wheel_target_is_focused_popup_not_editor() {
         let mut app = App::new(&[]);
-        assert_eq!(wheel_target(&app), WheelTarget::Editor);
+        assert_eq!(wheel_target(&app, 0, 10), WheelTarget::Editor);
         app.open_configure();
-        assert_eq!(wheel_target(&app), WheelTarget::Swallow);
+        assert_eq!(wheel_target(&app, 0, 10), WheelTarget::Swallow);
         app.close_configure();
         app.open_help();
-        assert_eq!(wheel_target(&app), WheelTarget::Help);
+        assert_eq!(wheel_target(&app, 0, 10), WheelTarget::Help);
         app.close_help();
         app.show_file_dialog(false);
         app.open_file_browser();
-        assert_eq!(wheel_target(&app), WheelTarget::FileBrowser);
+        assert_eq!(wheel_target(&app, 0, 10), WheelTarget::FileBrowser);
         app.show_confirm = true;
-        assert_eq!(wheel_target(&app), WheelTarget::Swallow);
+        assert_eq!(wheel_target(&app, 0, 10), WheelTarget::Swallow);
+    }
+
+    #[test]
+    fn wheel_over_overflowing_tab_strip_is_tab_strip() {
+        let mut app = App::new(&[]);
+        while app.buffers.len() < 8 {
+            app.new_tab();
+        }
+        app.clamp_tab_strip(80);
+        let names = app.tab_names();
+        let layout = crate::ui::header::layout_tab_strip(&names, 80, app.tab_scroll);
+        assert!(layout.overflowing);
+        assert_eq!(wheel_target(&app, 40, 0), WheelTarget::TabStrip);
+        assert_eq!(wheel_target(&app, 40, 10), WheelTarget::Editor);
     }
 }
 

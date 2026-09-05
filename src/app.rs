@@ -346,6 +346,7 @@ impl App {
         let len = self.buffers.len() as isize;
         let new = (self.active as isize + delta).rem_euclid(len) as usize;
         self.active = new;
+        self.ensure_active_tab_visible();
     }
 
     pub fn close_current_tab(&mut self) {
@@ -356,17 +357,20 @@ impl App {
         if self.buffers.len() <= 1 {
             self.buffers[0] = Buffer::placeholder();
             self.active = 0;
+            self.ensure_active_tab_visible();
             return;
         }
         self.buffers.remove(self.active);
         if self.active >= self.buffers.len() {
             self.active = self.buffers.len() - 1;
         }
+        self.ensure_active_tab_visible();
     }
 
     pub fn new_tab(&mut self) {
         self.buffers.push(Buffer::new());
         self.active = self.buffers.len() - 1;
+        self.ensure_active_tab_visible();
     }
 
     pub fn tab_names(&self) -> Vec<String> {
@@ -376,31 +380,42 @@ impl App {
             .collect()
     }
 
-    /// Clamp scroll and pull the active tab into the packed window.
-    pub fn sync_tab_strip_mut(&mut self, header_width: usize) {
+    /// Clamp `tab_scroll` to a packed window. Does **not** pull the active tab
+    /// into view — that would fight `[>]` / wheel on every `ui()` frame.
+    pub fn clamp_tab_strip(&mut self, header_width: usize) {
         self.header_width.set(header_width);
         if self.buffers.is_empty() {
             self.tab_scroll = 0;
             return;
         }
         let names = self.tab_names();
-        let mut layout = crate::ui::header::layout_tab_strip(&names, header_width, self.tab_scroll);
-        if self.active < layout.first_visible {
-            self.tab_scroll = self.active;
-            layout = crate::ui::header::layout_tab_strip(&names, header_width, self.tab_scroll);
-        }
-        if layout.overflowing && !layout.tabs.iter().any(|t| t.index == self.active) {
-            self.tab_scroll = self.active;
-            layout = crate::ui::header::layout_tab_strip(&names, header_width, self.tab_scroll);
-        }
+        let layout = crate::ui::header::layout_tab_strip(&names, header_width, self.tab_scroll);
         self.tab_scroll = layout.first_visible;
+    }
+
+    /// Pull the active tab into the packed window. Call when `active` changes,
+    /// not on every draw.
+    pub fn ensure_active_tab_visible(&mut self) {
+        let header_width = self.header_width.get().max(1);
+        if self.buffers.is_empty() {
+            self.tab_scroll = 0;
+            return;
+        }
+        let names = self.tab_names();
+        let layout = crate::ui::header::layout_tab_strip(&names, header_width, self.tab_scroll);
+        if self.active < layout.first_visible
+            || (layout.overflowing && !layout.tabs.iter().any(|t| t.index == self.active))
+        {
+            self.tab_scroll = self.active;
+        }
+        self.clamp_tab_strip(header_width);
     }
 
     pub fn scroll_tab_strip(&mut self, delta: isize) {
         let width = self.header_width.get().max(1);
         let next = (self.tab_scroll as isize + delta).max(0) as usize;
         self.tab_scroll = next;
-        self.sync_tab_strip_mut(width);
+        self.clamp_tab_strip(width);
     }
 
     /// Basic save (overwrite). Returns success.
@@ -986,6 +1001,7 @@ impl App {
                             self.buffers[0] = Buffer::placeholder();
                             self.active = 0;
                         }
+                        self.ensure_active_tab_visible();
                     }
                     "quit" => {
                         // handled in main event loop
@@ -1039,6 +1055,7 @@ impl App {
             self.active = idx;
             self.config.record_recent_file(path);
             self.highlight_cache.invalidate();
+            self.ensure_active_tab_visible();
             return Ok(());
         }
 
@@ -1052,6 +1069,7 @@ impl App {
         }
         self.config.record_recent_file(path);
         self.highlight_cache.invalidate();
+        self.ensure_active_tab_visible();
         Ok(())
     }
 
@@ -2480,9 +2498,23 @@ mod tests {
         }
         app.active = 7;
         app.tab_scroll = 0;
-        app.sync_tab_strip_mut(80);
+        app.clamp_tab_strip(80);
+        app.ensure_active_tab_visible();
         let names = app.tab_names();
         let layout = crate::ui::header::layout_tab_strip(&names, 80, app.tab_scroll);
         assert!(layout.tabs.iter().any(|t| t.index == 7));
+    }
+
+    #[test]
+    fn clamp_tab_strip_does_not_snap_active_into_view() {
+        let mut app = App::new(&[]);
+        while app.buffers.len() < 8 {
+            app.new_tab();
+        }
+        app.active = 0;
+        app.clamp_tab_strip(80);
+        app.scroll_tab_strip(1);
+        app.clamp_tab_strip(80);
+        assert!(app.tab_scroll > 0);
     }
 }
