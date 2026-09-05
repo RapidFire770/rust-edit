@@ -77,15 +77,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     );
 
     if let Some(hbar_row) = hbar_area {
-        let parts = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1), Constraint::Length(1)])
-            .split(hbar_row);
-        let hbar = parts[0];
-        let corner = parts[1];
+        // Full width, including the vertical-bar column, so `┘` meets `↓`
+        // instead of leaving a dead corner hole on the right.
+        f.render_widget(Paragraph::new("").style(theme.editor_bg_style()), hbar_row);
         crate::ui::scrollbar::render_horizontal(
             f,
-            hbar,
+            hbar_row,
             crate::ui::scrollbar::OverflowBar {
                 // +1 so max_position == max_hscroll (extra EOL caret column).
                 total: buf.max_line_width.saturating_add(1),
@@ -94,7 +91,6 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             },
             theme,
         );
-        f.render_widget(Paragraph::new("").style(theme.editor_bg_style()), corner);
     }
 }
 

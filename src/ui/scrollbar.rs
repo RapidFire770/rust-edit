@@ -126,14 +126,14 @@ fn area_contains_x(area: Rect, x: u16) -> bool {
     x >= area.x && x < area.x.saturating_add(area.width)
 }
 
-/// Track/thumb sit in the lower part of the cell so the painted strip is about
-/// as thick as the 1-column vertical bar. Terminal cells are taller than they
-/// are wide; a full-cell `█` thumb looks like a second status row. Begin/end
-/// stay `←`/`→` (same as before; hit-testing still skips those two cells).
-pub const HORIZONTAL_TRACK: &str = "▁"; // U+2581 lower one eighth
-pub const HORIZONTAL_THUMB: &str = "▄"; // U+2584 lower half
+/// Horizontal bar uses *centered* box-drawing lines, not block elements.
+/// Lower/full blocks (`▄`/`▁`/`█`) fill or bleed out of the cell, so the row
+/// looks like a tall empty band and the glyphs collide with the status bar.
+/// `┘` as the end cap meets the vertical bar's column on the right.
+pub const HORIZONTAL_TRACK: &str = "─";
+pub const HORIZONTAL_THUMB: &str = "━";
 pub const HORIZONTAL_BEGIN: &str = "←";
-pub const HORIZONTAL_END: &str = "→";
+pub const HORIZONTAL_END: &str = "┘";
 
 pub fn render_horizontal(f: &mut Frame, area: Rect, bar: OverflowBar, theme: &Theme) {
     if area.width == 0 || area.height == 0 || !bar.overflowing() {
@@ -143,8 +143,11 @@ pub fn render_horizontal(f: &mut Frame, area: Rect, bar: OverflowBar, theme: &Th
     let mut state = ScrollbarState::new(bar.content_length())
         .position(bar.clamp_position(bar.position))
         .viewport_content_length(vis);
-    let fg = Style::default().fg(Color::from(&theme.editor_fg));
-    let accent = Style::default().fg(Color::from(&theme.accent));
+    // Same editor background as the text so this row is not a second, taller
+    // "bar" behind the line glyphs.
+    let bg = Color::from(&theme.editor_bg);
+    let fg = Style::default().fg(Color::from(&theme.editor_fg)).bg(bg);
+    let accent = Style::default().fg(Color::from(&theme.accent)).bg(bg);
     let widget = Scrollbar::default()
         .orientation(ScrollbarOrientation::HorizontalBottom)
         .begin_symbol(Some(HORIZONTAL_BEGIN))
@@ -245,16 +248,23 @@ mod tests {
     }
 
     #[test]
-    fn horizontal_glyphs_are_lower_aligned_not_full_cell() {
-        // Full-cell █ is as tall as a whole row (~2× a column), so the bar
-        // looked thicker than the vertical track. Lower-block glyphs keep
-        // the reserved row but paint a strip about as thick as 1 column.
-        assert_ne!(HORIZONTAL_THUMB, "█");
-        assert_eq!(HORIZONTAL_THUMB, "▄");
-        assert_eq!(HORIZONTAL_TRACK, "▁");
-        assert_eq!(HORIZONTAL_THUMB.chars().count(), 1);
-        assert_eq!(HORIZONTAL_TRACK.chars().count(), 1);
-        assert_eq!(HORIZONTAL_BEGIN.chars().count(), 1);
-        assert_eq!(HORIZONTAL_END.chars().count(), 1);
+    fn horizontal_glyphs_are_centered_lines_not_blocks() {
+        // Block elements (█/▄/▁) fill or bleed the cell and look like a tall
+        // bar that collides with the status row. Box-drawing lines sit on the
+        // same baseline as ← and join the vertical bar with ┘.
+        for ch in [
+            HORIZONTAL_THUMB,
+            HORIZONTAL_TRACK,
+            HORIZONTAL_BEGIN,
+            HORIZONTAL_END,
+        ] {
+            assert_eq!(ch.chars().count(), 1);
+            assert_ne!(ch, "█");
+            assert_ne!(ch, "▄");
+            assert_ne!(ch, "▁");
+        }
+        assert_eq!(HORIZONTAL_TRACK, "─");
+        assert_eq!(HORIZONTAL_THUMB, "━");
+        assert_eq!(HORIZONTAL_END, "┘");
     }
 }

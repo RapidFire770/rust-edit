@@ -12,7 +12,7 @@
 - [x] Configure menu setting for turning the visible line numbers on and off does not function. There is also a toggle for Mouse input that got added but should not have. The setting doesn not work and should be removed  as mouse input does not need to be able to turn on and off.
     - [ ] There is now a large amount of extra whitespace bellow the Toggle and close buttons in the configure menu.
     - [ ] Now that the line numbers are toggling on and off there is still a large gap on the side of the screen where the line numbers show. The text should move to fill this gap when line numbers are not being displayed.
-- [x] The new bottom/horizontal scrollbars height is to large, needs to match the size of the vertical scrollbars width so the two bars are consistant visually. Lower-block glyphs (`▁`/`▄`) paint a strip about as thick as the 1-column vertical bar; the reserved row is still 1 cell (terminal minimum).
+- [x] The new bottom/horizontal scrollbars height is to large, needs to match the size of the vertical scrollbars width so the two bars are consistant visually. Box-drawing lines (`─`/`━`) with a `┘` corner sit on one baseline, use the editor background, and meet the vertical bar; no block elements that fill/bleed the cell.
 
 ### Major:
 

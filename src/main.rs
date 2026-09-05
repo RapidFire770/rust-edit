@@ -1485,7 +1485,8 @@ fn editor_hscrollbar_rect(app: &App) -> Option<Rect> {
     let vis = app.editor_visible_lines.get().max(1);
     let content_w = app.editor_visible_width.get().max(1);
     let bar_y = crate::ui::layout::HEADER_ROWS + vis as u16;
-    let width = (Buffer::GUTTER_WIDTH + content_w) as u16;
+    // Gutter + text + the 1-col vertical bar, so `┘` is clickable too.
+    let width = (Buffer::GUTTER_WIDTH + content_w + 1) as u16;
     Some(Rect::new(0, bar_y, width, 1))
 }
 
@@ -2957,6 +2958,7 @@ mod popup_mouse_focus_tests {
 mod editor_mouse_click_scroll_tests {
     use super::*;
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::backend::TestBackend;
 
     fn left_down(column: u16, row: u16) -> MouseEvent {
         MouseEvent {
@@ -3215,6 +3217,51 @@ mod editor_mouse_click_scroll_tests {
         assert!(
             screen_x < crate::buffer::Buffer::GUTTER_WIDTH as u16 + vis_w as u16,
             "hardware cursor must stay left of the v-bar; got screen_x={screen_x}"
+        );
+    }
+
+    #[test]
+    fn hscrollbar_row_is_above_status_with_line_glyphs_to_the_right_edge() {
+        // 1 header + 10 editor + 1 status. Long line forces the h-bar, which
+        // must occupy the last editor row (not the status row) and meet the
+        // vertical bar's column with `┘`.
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&[]);
+        app.config.word_wrap = false;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&"x".repeat(200), None);
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let status_y = 11u16;
+        let hbar_y = 10u16;
+
+        for x in 0..80u16 {
+            let ch = buf[(x, status_y)].symbol();
+            assert!(
+                !["▄", "▁", "█", "─", "━", "┘"].contains(&ch),
+                "status row must not carry h-bar glyphs, found {ch:?} at x={x}"
+            );
+        }
+
+        let mut saw_track = false;
+        for x in 0..80u16 {
+            let ch = buf[(x, hbar_y)].symbol();
+            assert_ne!(ch, "█", "full-cell block on h-bar at x={x}");
+            assert_ne!(ch, "▄", "lower-half block on h-bar at x={x}");
+            assert_ne!(ch, "▁", "lower-eighth block on h-bar at x={x}");
+            if ch == "─" || ch == "━" || ch == "←" || ch == "┘" {
+                saw_track = true;
+            }
+        }
+        assert!(saw_track, "h-bar row should contain line glyphs");
+        assert_eq!(
+            buf[(79, hbar_y)].symbol(),
+            "┘",
+            "right edge must join the vertical bar column"
+        );
+        assert!(
+            app.editor_hscrollbar_visible.get(),
+            "long unwrapped line must show the h-bar"
         );
     }
 }
