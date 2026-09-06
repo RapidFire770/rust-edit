@@ -252,6 +252,17 @@ impl App {
         &mut self.buffers[self.active]
     }
 
+    /// Columns reserved for the line-number gutter in the current config.
+    /// `Buffer::GUTTER_WIDTH` when numbers are shown, `0` when hidden so text
+    /// reclaims the column (Todo-List: line-number gap).
+    pub fn gutter_width(&self) -> usize {
+        if self.config.show_line_numbers {
+            Buffer::GUTTER_WIDTH
+        } else {
+            0
+        }
+    }
+
     /// Apply the current editor viewport to every buffer, clamp scroll, and
     /// fill the highlight cache for the active tab.
     ///
@@ -2516,5 +2527,20 @@ mod tests {
         app.scroll_tab_strip(1);
         app.clamp_tab_strip(80);
         assert!(app.tab_scroll > 0);
+    }
+
+    #[test]
+    fn gutter_width_is_six_when_line_numbers_shown() {
+        let mut app = App::new(&[]);
+        app.config.show_line_numbers = true;
+        assert_eq!(app.gutter_width(), Buffer::GUTTER_WIDTH);
+        assert_eq!(app.gutter_width(), 6);
+    }
+
+    #[test]
+    fn gutter_width_is_zero_when_line_numbers_hidden() {
+        let mut app = App::new(&[]);
+        app.config.show_line_numbers = false;
+        assert_eq!(app.gutter_width(), 0);
     }
 }

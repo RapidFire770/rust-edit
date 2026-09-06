@@ -11,7 +11,7 @@
 
 ### Major:
 
-- [ ] Now that the line numbers are toggling on and off there is a large gap on the side of the screen where the line numbers show. The text should move to fill this gap when line numbers are not being displayed.
+- [x] Now that the line numbers are toggling on and off there is a large gap on the side of the screen where the line numbers show. The text should move to fill this gap when line numbers are not being displayed.
 
 ---
 

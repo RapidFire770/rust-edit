@@ -32,6 +32,7 @@ use std::io::stdout;
 use std::time::{Duration, Instant};
 
 use crate::app::{App, PopupFocus};
+#[cfg(test)]
 use crate::buffer::Buffer;
 use crate::ui::find::FindFocus;
 use crate::ui::popups;
@@ -281,7 +282,7 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
                 .to_string()
                 .chars()
                 .count();
-            let screen_x = Buffer::GUTTER_WIDTH as u16 + col_offset as u16;
+            let screen_x = app.gutter_width() as u16 + col_offset as u16;
             Some((screen_x, screen_y))
         } else {
             None
@@ -305,7 +306,7 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
             if content_col >= vis_width {
                 return None;
             }
-            let screen_x = Buffer::GUTTER_WIDTH as u16 + content_col as u16;
+            let screen_x = app.gutter_width() as u16 + content_col as u16;
             Some((screen_x, screen_y))
         } else {
             None
@@ -1395,7 +1396,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                         let editor_y = y - editor_start_y;
                         let vis = app.editor_visible_lines.get().max(1);
                         if editor_y < vis {
-                            let gutter = Buffer::GUTTER_WIDTH;
+                            let gutter = app.gutter_width();
                             if x >= gutter {
                                 let col_in_row = x - gutter;
                                 let layout = active_wrap_layout(app);
@@ -1524,7 +1525,7 @@ fn editor_hscrollbar_rect(app: &App) -> Option<Rect> {
     let content_w = app.editor_visible_width.get().max(1);
     let bar_y = crate::ui::layout::HEADER_ROWS + vis as u16;
     // Gutter + text + the 1-col vertical bar, so `┘` is clickable too.
-    let width = (Buffer::GUTTER_WIDTH + content_w + 1) as u16;
+    let width = (app.gutter_width() + content_w + 1) as u16;
     Some(Rect::new(0, bar_y, width, 1))
 }
 
@@ -1589,7 +1590,7 @@ fn extend_drag_to_mouse(app: &mut App) {
         return;
     }
     let editor_y = y - header_rows;
-    let gutter = Buffer::GUTTER_WIDTH;
+    let gutter = app.gutter_width();
     if x < gutter {
         return;
     }
@@ -1621,7 +1622,7 @@ fn drag_edge_delta(app: &App) -> Option<(isize, isize)> {
     }
     let editor_y = y - header_rows;
     let vis = app.editor_visible_lines.get().max(1);
-    let gutter = Buffer::GUTTER_WIDTH;
+    let gutter = app.gutter_width();
 
     let mut drow: isize = 0;
     let mut dcol: isize = 0;
@@ -2368,9 +2369,9 @@ fn ui(f: &mut Frame, app: &mut App) {
         base_h
     };
     let vis_h = vis_h.max(1);
-    // Text-area width = editor area minus line-number gutter (6) minus scrollbar (1).
+    // Text-area width = editor area minus live gutter minus scrollbar (1).
     let content_w = (chunks[1].width as usize)
-        .saturating_sub(Buffer::GUTTER_WIDTH + 1)
+        .saturating_sub(app.gutter_width() + 1)
         .max(1);
     // `vis_h` here is the full editor content+vbar height (find bar already
     // subtracted). Reserve one row for the h-bar when wrap is off and the
@@ -3088,6 +3089,10 @@ mod editor_mouse_click_scroll_tests {
         }
     }
 
+    fn editor_cell(buf: &ratatui::buffer::Buffer, x: u16, y: u16) -> String {
+        buf[(x, y)].symbol().to_string()
+    }
+
     fn wrapping_app() -> App {
         let text = (0..80)
             .map(|_| "x".repeat(40))
@@ -3381,6 +3386,144 @@ mod editor_mouse_click_scroll_tests {
         assert!(
             app.editor_hscrollbar_visible.get(),
             "long unwrapped line must show the h-bar"
+        );
+    }
+
+    #[test]
+    fn hidden_line_numbers_paint_text_at_column_zero() {
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&[]);
+        app.config.show_line_numbers = false;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str("HELLO", None);
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let y = crate::ui::layout::HEADER_ROWS;
+        assert_eq!(
+            editor_cell(buf, 0, y),
+            "H",
+            "first text column must occupy x=0 when the gutter is hidden"
+        );
+        assert_eq!(app.editor_visible_width.get(), 79); // 80 - vbar 1, no gutter
+    }
+
+    #[test]
+    fn shown_line_numbers_keep_six_column_gutter() {
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&[]);
+        app.config.show_line_numbers = true;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str("HELLO", None);
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let y = crate::ui::layout::HEADER_ROWS;
+        assert_eq!(editor_cell(buf, 3, y), "1");
+        assert_eq!(editor_cell(buf, 4, y), "|");
+        assert_eq!(editor_cell(buf, 6, y), "H");
+        assert_eq!(app.editor_visible_width.get(), 73); // 80 - gutter 6 - vbar 1
+    }
+
+    #[test]
+    fn hardware_cursor_x_tracks_live_gutter_width() {
+        let mut app = App::new(&[]);
+        app.config.word_wrap = false;
+        app.config.show_line_numbers = true;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str("HELLO", None);
+        app.editor_visible_lines.set(20);
+        app.editor_visible_width.set(40);
+        let (x_on, _) = compute_cursor_position(&app).expect("caret in view");
+        assert_eq!(x_on, Buffer::GUTTER_WIDTH as u16);
+
+        app.config.show_line_numbers = false;
+        let (x_off, _) = compute_cursor_position(&app).expect("caret in view");
+        assert_eq!(x_off, 0);
+    }
+
+    #[test]
+    fn click_at_column_zero_places_caret_when_gutter_hidden() {
+        let mut app = App::new(&[]);
+        app.config.show_line_numbers = false;
+        app.config.word_wrap = false;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str("HELLO", None);
+        app.active_buffer_mut().cursor = 5; // not already at col 0
+        app.editor_visible_lines.set(20);
+        let y = crate::ui::layout::HEADER_ROWS;
+        handle_mouse(left_down(0, y), &mut app);
+        assert_eq!(
+            app.active_buffer().cursor_position(),
+            (0, 0),
+            "x=0 is the first text column when line numbers are hidden"
+        );
+    }
+
+    #[test]
+    fn wrap_continuation_has_no_indent_when_gutter_hidden() {
+        // Long unwrapped-by-words line of A's. With no gutter the first wrapped
+        // continuation row must start at x=0, not x=6.
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&[]);
+        app.config.show_line_numbers = false;
+        app.config.word_wrap = true;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&"A".repeat(80), None);
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let y0 = crate::ui::layout::HEADER_ROWS;
+        let y1 = y0 + 1;
+        assert_eq!(editor_cell(buf, 0, y0), "A");
+        assert_eq!(
+            editor_cell(buf, 0, y1),
+            "A",
+            "wrapped continuation must also start at x=0 when the gutter is hidden"
+        );
+        assert_eq!(
+            app.editor_visible_width.get(),
+            39,
+            "40-col terminal minus vbar, no gutter"
+        );
+    }
+
+    #[test]
+    fn wrap_continuation_indents_when_gutter_shown() {
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&[]);
+        app.config.show_line_numbers = true;
+        app.config.word_wrap = true;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&"A".repeat(80), None);
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let y0 = crate::ui::layout::HEADER_ROWS;
+        let y1 = y0 + 1;
+        assert_eq!(editor_cell(buf, 4, y0), "|");
+        assert_eq!(editor_cell(buf, 6, y0), "A");
+        assert_eq!(editor_cell(buf, 0, y1), " ");
+        assert_eq!(editor_cell(buf, 5, y1), " ");
+        assert_eq!(
+            editor_cell(buf, 6, y1),
+            "A",
+            "wrap continuation must indent to the text column when line numbers are shown"
+        );
+    }
+
+    #[test]
+    fn click_in_gutter_does_not_move_caret_when_numbers_shown() {
+        let mut app = App::new(&[]);
+        app.config.show_line_numbers = true;
+        app.config.word_wrap = false;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str("HELLO", None);
+        app.active_buffer_mut().cursor = 5;
+        app.editor_visible_lines.set(20);
+        let y = crate::ui::layout::HEADER_ROWS;
+        handle_mouse(left_down(0, y), &mut app);
+        assert_eq!(app.active_buffer().cursor_position(), (0, 5));
+        handle_mouse(left_down(5, y), &mut app);
+        assert_eq!(app.active_buffer().cursor_position(), (0, 5));
+        handle_mouse(left_down(Buffer::GUTTER_WIDTH as u16, y), &mut app);
+        assert_eq!(
+            app.active_buffer().cursor_position(),
+            (0, 0),
+            "first text column (x=gutter) must place the caret"
         );
     }
 }

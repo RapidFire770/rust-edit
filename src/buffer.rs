@@ -217,7 +217,9 @@ impl Buffer {
         (line, col)
     }
 
-    /// Gutter width used for rendering line numbers (used for mouse hit testing).
+    /// Gutter width used for rendering line numbers when they are shown.
+    /// When `config.show_line_numbers` is false, `App::gutter_width()` returns 0.
+    /// Used for paint, mouse hit testing, hardware cursor X, and viewport width.
     pub const GUTTER_WIDTH: usize = 6;
 
     /// Set cursor from a visual line (absolute buffer line, 0-based) and visual column (chars after gutter).
