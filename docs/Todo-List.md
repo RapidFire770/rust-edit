@@ -6,7 +6,9 @@
   - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value depending on the capabitlities of Rataui and our current tech stack.
 - [ ] For the file tabs, if the file name is to long it should be truncated to keep all file tabs the same width for consistency.
 - [x] Need a way to exit a file tab from the tab itself instead of just from the file menu.
-- [x] The file tabs highlight has extra whitespace for the highlight on the right side of the closing ] for the file name. 
+- [ ] Add an X button to the file tabs to click on and close the tabs as well if possible to fit in with the current ui design and look.
+- [x] The file tabs highlight has extra whitespace for the highlight on the right side of the closing ] for the file name.
+- [ ] In the help menu, under the mouse section for "Scroll overflow file tabs" it says you can use the mouse wheel over the tabs to scroll along with using the ui arrow buttons we added. I have tested and using the mouse wheel to scroll the tabs does not actually work.
 
 
 ### Major:
