@@ -1,4 +1,4 @@
-// Word count popup. Sprint 2.
+// Word count popup.
 
 #![allow(dead_code)]
 

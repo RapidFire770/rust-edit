@@ -1,4 +1,4 @@
-// Menu bar + file tabs + [+] button. Sprint 1/2.
+// Menu bar + file tabs + [+] button.
 // Presentation only.
 
 #![allow(dead_code)]

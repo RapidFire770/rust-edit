@@ -1,4 +1,4 @@
-// Main editing view, line numbers, cursor, selection, syntax spans. Sprint 1/2.
+// Main editing view, line numbers, cursor, selection, syntax spans.
 // Presentation only. Receives state from App/Buffer + highlighter.
 
 #![allow(dead_code)]

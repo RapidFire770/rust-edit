@@ -1,4 +1,4 @@
-// Find / Replace bar or popup logic. MVP basic + Phase 1 full.
+// Find / Replace bar or popup logic.
 // Presentation + small state helpers.
 
 #![allow(dead_code)]

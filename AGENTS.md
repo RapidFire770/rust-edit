@@ -15,7 +15,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
 - Keep this AGENTS.md file updated with information about the project that other AI agents would need to know to keep the project consistent from session to session. (Project layout/structure, technology stack, tool chain, coding standards & style, testing, pitfalls and conflicts to avoid, features, etc.)
 - When a bug is fixed or feature is implemented check it off the users `docs/Todo-List.md` and include it in the commit for for the final work.
 
-**Mandatory first step for any task:** Read the full Design Specification (`docs/Rust-Edit-Design-Specification-2026-06-24.md` or the version provided with this task). It contains the prioritized scope, UI rules, tradeoffs, and data model.
+**Mandatory first step for any task:** Read the full Design Specification (`docs/Rust-Edit-Design-Specification-2026-06-24.md` or the version provided with this task). It contains the prioritized scope, UI rules, tradeoffs, and data model. This document is outdated, changes in the AGENTS.md takes priorty over the original design spec. 
 
 ---
 
@@ -107,7 +107,8 @@ rust-edit/
 ├── AGENTS.md                  # this file
 ├── docs/
 │   ├── Rust-Edit-Design-Specification-2026-06-24.md
-│   └── ui-design-sample-2.jpg
+│   ├── ui-design-sample-2.jpg
+│   └── Todo-List.md
 ├── src/
 │   ├── main.rs
 │   ├── app.rs                 # Top-level App state, event loop, high-level commands, highlight cache
@@ -308,7 +309,7 @@ Document any terminal-specific quirks you discover.
 
 ---
 
-## 8. What NOT to Do (Phase 2 — not started; needs approval)
+## 8. What NOT to Do Yet (needs approval)
 
 - Do not implement full LSP client, diagnostics from rust-analyzer, completions, etc.
 - Do not add session restore, split panes, a sidebar file tree, git integration, or a plugin system.

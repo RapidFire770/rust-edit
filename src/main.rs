@@ -1,5 +1,4 @@
 //! rust-edit — terminal text & code editor (Ratatui TUI)
-//! Phase 1 implementation per Design Spec + AGENTS.md
 
 #![allow(unreachable_patterns)]
 

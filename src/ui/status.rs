@@ -1,4 +1,4 @@
-// Status bar. Sprint 1/2.
+// Status bar.
 // Presentation only.
 
 use ratatui::layout::Rect;

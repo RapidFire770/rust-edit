@@ -1,4 +1,4 @@
-// Ratatui Layout helpers. Sprint 1/2.
+// Ratatui Layout helpers.
 // Keeps layout concerns separate from rendering details.
 
 #![allow(dead_code)]

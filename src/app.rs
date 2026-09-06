@@ -1,4 +1,4 @@
-// Top-level App state, event loop, high-level commands (to be implemented in Sprint 1)
+// Top-level App state, event loop, high-level commands
 // See Design Spec §6 data model sketch and AGENTS.md recommended structure.
 
 #![allow(dead_code)]
