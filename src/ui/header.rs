@@ -76,12 +76,15 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     for geom in &layout.tabs {
         pad_header_spans(&mut header_spans, &mut col, geom.x, menu_base_style);
         let name = names.get(geom.index).map(String::as_str).unwrap_or("");
-        let style = if geom.index == app.active {
-            active_tab_style
+        if geom.index == app.active {
+            let (label, sep) = split_tab_label(name, geom);
+            header_spans.push(Span::styled(label, active_tab_style));
+            if !sep.is_empty() {
+                header_spans.push(Span::styled(sep, inactive_tab_style));
+            }
         } else {
-            inactive_tab_style
-        };
-        header_spans.push(Span::styled(tab_label(name, geom), style));
+            header_spans.push(Span::styled(tab_label(name, geom), inactive_tab_style));
+        }
         col += geom.width;
     }
 
@@ -141,6 +144,22 @@ fn tab_label(name: &str, geom: &TabGeom) -> String {
         }
     }
     label
+}
+
+/// Split `[ inner ] ` into `(label, separator)`. When the tab is unclipped and
+/// the trailing separator space is present, returns `("[ inner ]", " ")` so the
+/// caller can paint the separator with the base style and keep the accent
+/// highlight ending at the closing `]`. Otherwise returns `(whole_label, "")`
+/// and the caller paints a single span (clipped/ellipsed tabs never have the
+/// trailing-space issue).
+fn split_tab_label(name: &str, geom: &TabGeom) -> (String, String) {
+    let label = tab_label(name, geom);
+    if geom.clipped || !label.ends_with(' ') {
+        return (label, String::new());
+    }
+    let sep_count = label.chars().count();
+    let label_part: String = label.chars().take(sep_count - 1).collect();
+    (label_part, " ".to_string())
 }
 
 /// Simple text for menus (can be expanded for dropdown anchors later).
@@ -617,6 +636,33 @@ mod tests {
         let s = tab_label("untitled", &clip);
         assert_eq!(s, "[ unti… ] ");
         assert_eq!(s.chars().count(), 10);
+    }
+
+    #[test]
+    fn split_tab_label_separates_trailing_space_for_unclipped() {
+        let full = TabGeom {
+            index: 0,
+            x: 0,
+            width: 13,
+            clipped: false,
+        };
+        let (label, sep) = split_tab_label("untitled", &full);
+        assert_eq!(label, "[ untitled ]");
+        assert_eq!(sep, " ");
+        assert_eq!(label.chars().count(), 12);
+    }
+
+    #[test]
+    fn split_tab_label_returns_single_span_for_clipped() {
+        let clip = TabGeom {
+            index: 0,
+            x: 0,
+            width: 10,
+            clipped: true,
+        };
+        let (label, sep) = split_tab_label("untitled", &clip);
+        assert_eq!(label, "[ unti… ] ");
+        assert_eq!(sep, "");
     }
 
     #[test]
