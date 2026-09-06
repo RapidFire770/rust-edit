@@ -121,18 +121,7 @@ fn pad_header_spans(spans: &mut Vec<Span>, col: &mut usize, target: usize, style
 /// Full tab widget text (`[ name ]` plus trailing space), clipped to `geom.width`.
 fn tab_label(name: &str, geom: &TabGeom) -> String {
     let inner = geom.width.saturating_sub(5);
-    let mut inner_text = if name.chars().count() <= inner {
-        name.chars().take(inner).collect::<String>()
-    } else if inner >= 1 {
-        let mut s: String = name.chars().take(inner.saturating_sub(1)).collect();
-        s.push('…');
-        s
-    } else {
-        String::new()
-    };
-    while inner_text.chars().count() < inner {
-        inner_text.push(' ');
-    }
+    let inner_text = tab_inner_text(name, inner);
 
     let mut label = format!("[ {inner_text} ] ");
     let count = label.chars().count();
@@ -144,6 +133,51 @@ fn tab_label(name: &str, geom: &TabGeom) -> String {
         }
     }
     label
+}
+
+/// Pad or ellipsize `name` to exactly `inner` chars (0 inner → empty).
+/// If `name` ends with `•` and must shrink, keep `•` as the last character.
+fn tab_inner_text(name: &str, inner: usize) -> String {
+    if inner == 0 {
+        return String::new();
+    }
+    let modified = name.ends_with('•');
+    let stem: String = if modified {
+        name.chars()
+            .take(name.chars().count().saturating_sub(1))
+            .collect()
+    } else {
+        name.to_string()
+    };
+    let stem_len = stem.chars().count();
+    let full_len = stem_len + usize::from(modified);
+
+    if full_len <= inner {
+        let mut s = String::new();
+        s.push_str(&stem);
+        if modified {
+            s.push('•');
+        }
+        while s.chars().count() < inner {
+            s.push(' ');
+        }
+        return s;
+    }
+
+    if modified && inner >= 2 {
+        let keep = inner - 2; // room for … and •
+        let mut s: String = stem.chars().take(keep).collect();
+        s.push('…');
+        s.push('•');
+        return s;
+    }
+    if modified && inner == 1 {
+        return "•".to_string();
+    }
+    let keep = inner.saturating_sub(1);
+    let mut s: String = stem.chars().take(keep).collect();
+    s.push('…');
+    s
 }
 
 /// Split `[ inner ] ` into `(label, separator)`. When the tab is unclipped and
@@ -274,6 +308,10 @@ pub const MENU_BLOCK_COLS: usize = 27;
 pub const PLUS_COLS: usize = 3;
 pub const ARROW_COLS: usize = 3; // "[<]" / "[>]"
 pub const ARROW_PAD: usize = 1; // trailing space after an arrow
+/// Inner filename columns. `TAB_COLS = TAB_INNER_COLS + 5` (`[ ` + inner + ` ] `).
+/// Chosen so 3 tabs + `[+]` fit on 80 columns: 27 + 3*16 + 3 = 78.
+pub const TAB_INNER_COLS: usize = 11;
+pub const TAB_COLS: usize = TAB_INNER_COLS + 5;
 
 pub struct TabGeom {
     pub index: usize,
@@ -303,8 +341,8 @@ pub enum HeaderHit {
     Miss,
 }
 
-fn tab_width(name: &str) -> usize {
-    name.chars().count() + 5
+fn tab_width(_name: &str) -> usize {
+    TAB_COLS
 }
 
 /// Walk from the end, packing whole tab widths into `viewport`. A single
@@ -552,19 +590,19 @@ mod tests {
 
     #[test]
     fn tabs_that_fit_have_no_arrows_and_plus_after_last() {
-        // 1 untitled: tabs start at 27, width 13, plus at 40
+        // 1 untitled: tabs start at 27, width TAB_COLS (16), plus at 43
         let l = layout_tab_strip(&untitled_names(1), 80, 0);
         assert!(!l.overflowing);
         assert_eq!(l.left_arrow_x, None);
-        assert_eq!(l.plus_x, 27 + 13);
+        assert_eq!(l.plus_x, MENU_BLOCK_COLS + TAB_COLS);
         assert_eq!(l.tabs.len(), 1);
-        assert_eq!(hit_test_header(40, &l), HeaderHit::Plus); // middle of [+]
-        assert_eq!(hit_test_header(27, &l), HeaderHit::Tab(0));
+        assert_eq!(hit_test_header(l.plus_x, &l), HeaderHit::Plus);
+        assert_eq!(hit_test_header(MENU_BLOCK_COLS, &l), HeaderHit::Tab(0));
     }
 
     #[test]
     fn four_untitled_tabs_overflow_80_cols() {
-        // 27 + 4*13 + 3 = 82 > 80
+        // 27 + 4*16 + 3 = 94 > 80
         let l = layout_tab_strip(&untitled_names(4), 80, 0);
         assert!(l.overflowing);
         assert_eq!(l.left_arrow_x, Some(27));
@@ -611,8 +649,11 @@ mod tests {
         let l = layout_tab_strip(&names, 80, 0);
         assert!(!l.overflowing);
         assert_eq!(l.tabs.len(), 1);
-        assert_eq!(l.tabs[0].width, "main.rs•".chars().count() + 5);
-        assert_eq!(l.plus_x, MENU_BLOCK_COLS + l.tabs[0].width);
+        assert_eq!(l.tabs[0].width, TAB_COLS);
+        assert_eq!(l.plus_x, MENU_BLOCK_COLS + TAB_COLS);
+        let label = tab_label("main.rs•", &l.tabs[0]);
+        assert!(label.contains('•'));
+        assert_eq!(label.chars().count(), TAB_COLS);
     }
 
     #[test]
@@ -620,10 +661,22 @@ mod tests {
         let full = TabGeom {
             index: 0,
             x: 0,
-            width: 13,
+            width: TAB_COLS,
             clipped: false,
         };
         let s = tab_label("untitled", &full);
+        // `[ ` + inner (`untitled` + 3 pad) + ` ] ` → 4 spaces before `]`.
+        assert_eq!(s, "[ untitled    ] ");
+        assert_eq!(s.chars().count(), TAB_COLS);
+
+        // geom.width is still honored when it is not TAB_COLS.
+        let honored = TabGeom {
+            index: 0,
+            x: 0,
+            width: 13,
+            clipped: false,
+        };
+        let s = tab_label("untitled", &honored);
         assert_eq!(s, "[ untitled ] ");
         assert_eq!(s.chars().count(), 13);
 
@@ -643,13 +696,13 @@ mod tests {
         let full = TabGeom {
             index: 0,
             x: 0,
-            width: 13,
+            width: TAB_COLS,
             clipped: false,
         };
         let (label, sep) = split_tab_label("untitled", &full);
-        assert_eq!(label, "[ untitled ]");
+        assert_eq!(label, "[ untitled    ]");
         assert_eq!(sep, " ");
-        assert_eq!(label.chars().count(), 12);
+        assert_eq!(label.chars().count(), TAB_COLS - 1);
     }
 
     #[test]
@@ -679,17 +732,82 @@ mod tests {
     }
 
     #[test]
-    fn four_untitled_at_80_packs_three_tabs_and_stable_plus() {
+    fn four_untitled_at_80_packs_two_tabs_and_stable_plus() {
         let l = layout_tab_strip(&untitled_names(4), 80, 0);
-        assert_eq!(l.tabs.len(), 3);
+        assert_eq!(l.tabs.len(), 2);
         assert_eq!(l.first_visible, 0);
         assert_eq!(l.tabs[0].index, 0);
-        assert_eq!(l.tabs[0].x, 31);
-        assert_eq!(l.tabs[0].width, 13);
+        assert_eq!(l.tabs[0].x, MENU_BLOCK_COLS + ARROW_COLS + ARROW_PAD); // 31
+        assert_eq!(l.tabs[0].width, TAB_COLS);
         assert!(!l.tabs.iter().any(|t| t.clipped));
-        assert_eq!(l.right_arrow_x, Some(73));
+        assert_eq!(l.right_arrow_x, Some(31 + 42)); // 73
         assert_eq!(l.plus_x, 77);
         assert_on_screen_widgets_disjoint(&l, 80);
+    }
+
+    #[test]
+    fn all_tabs_use_the_same_fixed_width() {
+        let names = vec![
+            "a".to_string(),
+            "untitled".to_string(),
+            "highlight_cache.rs".to_string(),
+            "main.rs•".to_string(),
+        ];
+        let l = layout_tab_strip(&names, 120, 0);
+        assert!(!l.overflowing);
+        assert_eq!(l.tabs.len(), names.len());
+        for t in &l.tabs {
+            assert_eq!(t.width, TAB_COLS);
+            assert!(!t.clipped);
+        }
+        assert_eq!(l.plus_x, MENU_BLOCK_COLS + TAB_COLS * names.len());
+    }
+
+    #[test]
+    fn tab_inner_text_pads_short_names_and_ellipsizes_long() {
+        assert_eq!(
+            tab_inner_text("untitled", TAB_INNER_COLS).chars().count(),
+            TAB_INNER_COLS
+        );
+        assert_eq!(tab_inner_text("untitled", TAB_INNER_COLS), "untitled   ");
+        let long = tab_inner_text("highlight_cache.rs", TAB_INNER_COLS);
+        assert_eq!(long.chars().count(), TAB_INNER_COLS);
+        assert!(long.ends_with('…'), "got {long:?}");
+        assert!(!long.contains("cache.rs"));
+    }
+
+    #[test]
+    fn tab_inner_text_keeps_modified_bullet_when_truncating() {
+        let inner = tab_inner_text("very-long-filename.rs•", TAB_INNER_COLS);
+        assert_eq!(inner.chars().count(), TAB_INNER_COLS);
+        assert!(inner.ends_with('•'), "got {inner:?}");
+        assert!(inner.contains('…'), "got {inner:?}");
+    }
+
+    #[test]
+    fn three_fixed_tabs_still_fit_on_80_cols() {
+        let l = layout_tab_strip(&untitled_names(3), 80, 0);
+        assert!(!l.overflowing);
+        assert_eq!(l.tabs.len(), 3);
+        assert_eq!(l.plus_x, MENU_BLOCK_COLS + TAB_COLS * 3);
+        assert_eq!(l.plus_x + PLUS_COLS, 78);
+    }
+
+    #[test]
+    fn four_fixed_tabs_overflow_80_cols() {
+        let l = layout_tab_strip(&untitled_names(4), 80, 0);
+        assert!(l.overflowing);
+        assert_eq!(l.left_arrow_x, Some(MENU_BLOCK_COLS));
+        assert!(l.plus_x + PLUS_COLS <= 80);
+    }
+
+    #[test]
+    fn long_single_name_does_not_overflow_80_cols() {
+        let names = vec!["a".repeat(80)];
+        let l = layout_tab_strip(&names, 80, 0);
+        assert!(!l.overflowing);
+        assert_eq!(l.tabs[0].width, TAB_COLS);
+        assert!(!l.tabs[0].clipped);
     }
 
     fn occupy(owner: &mut [Option<&'static str>], start: usize, end: usize, label: &'static str) {
