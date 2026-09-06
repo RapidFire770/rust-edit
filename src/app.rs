@@ -61,7 +61,9 @@ pub struct App {
     // Popup states for Sprint 2
     pub show_confirm: bool,
     pub confirm_message: String,
-    pub confirm_action: Option<String>, // "close_tab", "quit" etc
+    pub confirm_action: Option<String>, // "close_tab", "close_tab_index", "quit" etc
+    /// Tab index pending an unsaved-changes confirm from a `close_tab` call.
+    pub confirm_index: Option<usize>,
     pub show_file_dialog: bool,
     pub file_dialog_is_save: bool,
     pub file_path_input: String,
@@ -208,6 +210,7 @@ impl App {
             show_confirm: false,
             confirm_message: String::new(),
             confirm_action: None,
+            confirm_index: None,
             show_file_dialog: false,
             file_dialog_is_save: false,
             file_path_input: String::new(),
@@ -365,15 +368,44 @@ impl App {
             self.show_confirm_dialog("Close tab with unsaved changes?", "close_tab");
             return;
         }
+        self.remove_tab_at(self.active);
+    }
+
+    /// Close the tab at `index` (e.g. middle-click on the tab). A modified tab
+    /// routes through the unsaved-changes confirm dialog; the pending index is
+    /// stored in `confirm_index` so `close_confirm` removes the right buffer.
+    pub fn close_tab(&mut self, index: usize) {
+        if index >= self.buffers.len() {
+            return;
+        }
+        if self.buffers[index].is_modified {
+            self.show_confirm_dialog("Close tab with unsaved changes?", "close_tab_index");
+            self.confirm_index = Some(index);
+            return;
+        }
+        self.remove_tab_at(index);
+    }
+
+    /// Remove the buffer at `index` and rebalance `active`. Resets to a fresh
+    /// placeholder when it is the last buffer. Shared by `close_current_tab`,
+    /// `close_tab`, and the confirm-dialog routing in `close_confirm`.
+    fn remove_tab_at(&mut self, index: usize) {
+        if index >= self.buffers.len() {
+            return;
+        }
         if self.buffers.len() <= 1 {
             self.buffers[0] = Buffer::placeholder();
             self.active = 0;
             self.ensure_active_tab_visible();
             return;
         }
-        self.buffers.remove(self.active);
-        if self.active >= self.buffers.len() {
-            self.active = self.buffers.len() - 1;
+        self.buffers.remove(index);
+        if self.active == index {
+            if self.active >= self.buffers.len() {
+                self.active = self.buffers.len() - 1;
+            }
+        } else if self.active > index {
+            self.active -= 1;
         }
         self.ensure_active_tab_visible();
     }
@@ -1003,16 +1035,12 @@ impl App {
             if let Some(ref action) = self.confirm_action {
                 match action.as_str() {
                     "close_tab" => {
-                        if self.buffers.len() > 1 {
-                            self.buffers.remove(self.active);
-                            if self.active >= self.buffers.len() {
-                                self.active = self.buffers.len() - 1;
-                            }
-                        } else {
-                            self.buffers[0] = Buffer::placeholder();
-                            self.active = 0;
+                        self.remove_tab_at(self.active);
+                    }
+                    "close_tab_index" => {
+                        if let Some(idx) = self.confirm_index.take() {
+                            self.remove_tab_at(idx);
                         }
-                        self.ensure_active_tab_visible();
                     }
                     "quit" => {
                         // handled in main event loop
@@ -1024,6 +1052,7 @@ impl App {
         self.show_confirm = false;
         self.confirm_message.clear();
         self.confirm_action = None;
+        self.confirm_index = None;
     }
 
     pub fn show_file_dialog(&mut self, is_save: bool) {
@@ -1990,6 +2019,92 @@ mod tests {
         assert_eq!(app.buffers.len(), 1);
         assert!(app.buffers[0].is_initial);
         assert_eq!(app.buffers[0].text(), "");
+    }
+
+    #[test]
+    fn close_tab_removes_the_specified_buffer_and_decrements_active() {
+        let mut app = App::new(&[]);
+        app.new_tab();
+        app.new_tab();
+        assert_eq!(app.buffers.len(), 3);
+        app.active = 2;
+        // Close the middle tab (index 1), which sits before the active tab.
+        app.close_tab(1);
+        assert_eq!(app.buffers.len(), 2);
+        assert_eq!(app.active, 1);
+    }
+
+    #[test]
+    fn close_tab_before_active_decrements_active() {
+        let mut app = App::new(&[]);
+        app.new_tab();
+        app.new_tab();
+        assert_eq!(app.buffers.len(), 3);
+        app.active = 2;
+        // Close index 0 (before active); active should shift down by one.
+        app.close_tab(0);
+        assert_eq!(app.buffers.len(), 2);
+        assert_eq!(app.active, 1);
+    }
+
+    #[test]
+    fn close_tab_after_active_leaves_active_unchanged() {
+        let mut app = App::new(&[]);
+        app.new_tab();
+        app.new_tab();
+        assert_eq!(app.buffers.len(), 3);
+        app.active = 0;
+        // Close index 2 (after active); active stays put.
+        app.close_tab(2);
+        assert_eq!(app.buffers.len(), 2);
+        assert_eq!(app.active, 0);
+    }
+
+    #[test]
+    fn close_tab_out_of_range_is_noop() {
+        let mut app = App::new(&[]);
+        let before = app.buffers.len();
+        app.close_tab(99);
+        assert_eq!(app.buffers.len(), before);
+    }
+
+    #[test]
+    fn close_tab_modified_routes_to_confirm_dialog() {
+        let mut app = App::new(&[]);
+        app.new_tab();
+        app.active = 1;
+        app.buffers[0].insert("dirty");
+        app.close_tab(0);
+        assert!(app.show_confirm);
+        assert_eq!(app.confirm_action.as_deref(), Some("close_tab_index"));
+        assert_eq!(app.confirm_index, Some(0));
+    }
+
+    #[test]
+    fn close_tab_index_confirm_removes_the_stored_tab() {
+        let mut app = App::new(&[]);
+        app.new_tab();
+        app.new_tab();
+        app.active = 2;
+        app.buffers[1].insert("dirty");
+        app.close_tab(1);
+        assert!(app.show_confirm);
+        app.close_confirm(true);
+        assert_eq!(app.buffers.len(), 2);
+        // index 1 removed; active was 2 and the removed tab preceded it.
+        assert_eq!(app.active, 1);
+    }
+
+    #[test]
+    fn close_tab_index_confirm_cancel_keeps_tab() {
+        let mut app = App::new(&[]);
+        app.new_tab();
+        app.buffers[0].insert("dirty");
+        app.close_tab(0);
+        assert!(app.show_confirm);
+        app.close_confirm(false);
+        assert_eq!(app.buffers.len(), 2);
+        assert!(!app.show_confirm);
     }
 
     #[test]

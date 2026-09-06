@@ -1486,6 +1486,31 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 extend_drag_to_mouse(app);
             }
         }
+        // Middle-click on a file tab closes that tab (standard TUI behavior).
+        // Reuses the header hit-test so the same tab geometry drives both the
+        // left-click focus and the middle-click close. A modified tab still
+        // routes through the unsaved-changes confirm dialog.
+        MouseEventKind::Down(MouseButton::Middle) => {
+            if !app.popup_is_open() {
+                let width = app.header_width.get();
+                let width = if width == 0 {
+                    crossterm::terminal::size()
+                        .map(|(w, _)| w as usize)
+                        .unwrap_or(80)
+                } else {
+                    width
+                };
+                let names = app.tab_names();
+                let layout = crate::ui::header::layout_tab_strip(&names, width, app.tab_scroll);
+                if let crate::ui::header::HeaderHit::Tab(i) =
+                    crate::ui::header::hit_test_header(x as usize, &layout)
+                {
+                    if i < app.buffers.len() {
+                        app.close_tab(i);
+                    }
+                }
+            }
+        }
         MouseEventKind::Up(MouseButton::Left) => {
             // End any in-progress drag selection session. Edge auto-scroll keys
             // off this flag, so it must be cleared as soon as the button releases.
@@ -2683,6 +2708,60 @@ mod plus_button_hit_test_tests {
         let tab1 = layout.tabs.iter().find(|t| t.index == 1).unwrap();
         handle_header_click(tab1.x + 1, &mut app);
         assert_eq!(app.active, 1);
+    }
+
+    #[test]
+    fn middle_click_on_non_active_tab_closes_it_and_shifts_active() {
+        let mut app = App::new(&[]);
+        app.new_tab();
+        app.new_tab();
+        assert_eq!(app.buffers.len(), 3);
+        // active is 2; middle-click tab index 1 (which sits before the active one).
+        app.clamp_tab_strip(80);
+        let names = app.tab_names();
+        let layout = crate::ui::header::layout_tab_strip(&names, 80, app.tab_scroll);
+        let tab1 = layout.tabs.iter().find(|t| t.index == 1).unwrap();
+        let before = app.buffers.len();
+        handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Middle),
+                column: (tab1.x + 1) as u16,
+                row: crate::ui::layout::HEADER_ROWS,
+                modifiers: KeyModifiers::NONE,
+            },
+            &mut app,
+        );
+        assert_eq!(app.buffers.len(), before - 1);
+        assert_eq!(app.active, 1);
+    }
+
+    #[test]
+    fn middle_click_does_not_activate_the_tab() {
+        let mut app = App::new(&[]);
+        app.new_tab();
+        app.new_tab();
+        assert_eq!(app.buffers.len(), 3);
+        // Force active to the first tab so the clicked tab is definitely not
+        // active (a left-click would have switched to it).
+        app.active = 0;
+        app.clamp_tab_strip(80);
+        let names = app.tab_names();
+        let layout = crate::ui::header::layout_tab_strip(&names, 80, app.tab_scroll);
+        let last = layout.tabs.iter().max_by_key(|t| t.index).unwrap();
+        let active_before = app.active;
+        handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Middle),
+                column: (last.x + 1) as u16,
+                row: crate::ui::layout::HEADER_ROWS,
+                modifiers: KeyModifiers::NONE,
+            },
+            &mut app,
+        );
+        // Middle-click only closes; it must not switch the active tab to the
+        // clicked one (unlike a left-click).
+        assert_eq!(app.active, active_before);
+        assert_eq!(app.buffers.len(), 2);
     }
 }
 

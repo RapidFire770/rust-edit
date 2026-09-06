@@ -133,6 +133,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
             "Mouse",
             vec![
                 ("Click tab", "Switch buffer"),
+                ("Middle-click tab", "Close tab"),
                 ("Click menu / [+]", "Open menu / new tab"),
                 ("[<] / [>] / wheel over tabs", "Scroll overflow file tabs"),
                 ("Click + drag", "Place cursor / select text"),
