@@ -4,23 +4,15 @@
 
 - [ ] Edit / new theme not working. Cannot select any colors to change or type color values.
   - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value depending on the capabitlities of Rataui and our current tech stack.
-- [x] For the file tabs, if the file name is to long it should be truncated to keep all file tabs the same width for consistency.
-- [x] Need a way to exit a file tab from the tab itself instead of just from the file menu.
 - [ ] Add an X button to the file tabs to click on and close the tabs as well if possible to fit in with the current ui design and look.
-- [x] The file tabs highlight has extra whitespace for the highlight on the right side of the closing ] for the file name.
-- [ ] In the help menu, under the mouse section for "Scroll overflow file tabs" it says you can use the mouse wheel over the tabs to scroll along with using the ui arrow buttons we added. I have tested and using the mouse wheel to scroll the tabs does not actually work.
-
 
 ### Major:
 
-- [x] Now that the line numbers are toggling on and off there is a large gap on the side of the screen where the line numbers show. The text should move to fill this gap when line numbers are not being displayed.
 
 ---
 
 # Features:
 
-- [x] If there are to many tabs open that span wider than the terminal window they push off the screen and there is no way to scroll the open tabs with the mouse or click on the + button anymore. We need some arrows ( [<] / [>] ) to appear and let the tabs be scrolled.
-- [x] When word wrap isn't on and lines are longer than the visible width of the window a horizontal scrollbar should be displayed along the bottom of the window to allow the user to scroll the line horizontally.
 - [ ] If a file is modified outside of the editor while it is currently open the program should notice and ask the user if they would like to reload the file to see the new changes. Auto reload of the file without asking the user each time should be a selectable option when the program asks the user so it doesn’t have to keep asking them each time the file is modified.
 - [ ] Spellcheck for normal text files and markdown
 - [ ] ctrl+/ to comment out lines in support programming languages
