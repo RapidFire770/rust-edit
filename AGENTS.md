@@ -13,7 +13,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
 - For smaller tasks use a subagents that will preform the task and report back to you. Preform the small changes on the the main git branch instead of using a worktree. Use a code reviewer subagent to review the work afterward. Wait for subagents to complete and create a commit once work is validated.
 - For large tasks always use the subagent-driven-development skill, if a git worktree is not setup, configure one in a .worktrees folder before handoff to the subagent.
 - Keep this AGENTS.md file updated with information about the project that other AI agents would need to know to keep the project consistent from session to session. (Project layout/structure, technology stack, tool chain, coding standards & style, testing, pitfalls and conflicts to avoid, features, etc.)
-- When a bug is fixed or feature is implemented check it off the users `docs/Todo-List.md`
+- When a bug is fixed or feature is implemented check it off the users `docs/Todo-List.md` and include it in the commit for for the final work.
 
 **Mandatory first step for any task:** Read the full Design Specification (`docs/Rust-Edit-Design-Specification-2026-06-24.md` or the version provided with this task). It contains the prioritized scope, UI rules, tradeoffs, and data model.
 

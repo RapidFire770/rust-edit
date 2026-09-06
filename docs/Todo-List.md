@@ -6,7 +6,7 @@
   - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value depending on the capabitlities of Rataui and our current tech stack.
 - [ ] For the file tabs, if the file name is to long it should be truncated to keep all file tabs the same width for consistency.
 - [ ] Need a way to exit a file tab from the tab itself instead of just from the file menu.
-- [ ] The file tabs highlight has extra whitespace for the highlight on the right side of the closing ] for the file name. 
+- [x] The file tabs highlight has extra whitespace for the highlight on the right side of the closing ] for the file name. 
 
 
 ### Major:
