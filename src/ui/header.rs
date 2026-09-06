@@ -136,6 +136,7 @@ fn tab_label(name: &str, geom: &TabGeom) -> String {
 }
 
 /// Pad or ellipsize `name` to exactly `inner` chars (0 inner → empty).
+/// Short names are centered; leftover pad goes on the right when `inner - len` is odd.
 /// If `name` ends with `•` and must shrink, keep `•` as the last character.
 fn tab_inner_text(name: &str, inner: usize) -> String {
     if inner == 0 {
@@ -153,14 +154,15 @@ fn tab_inner_text(name: &str, inner: usize) -> String {
     let full_len = stem_len + usize::from(modified);
 
     if full_len <= inner {
-        let mut s = String::new();
+        let pad = inner - full_len;
+        let left = pad / 2;
+        let right = pad - left;
+        let mut s = " ".repeat(left);
         s.push_str(&stem);
         if modified {
             s.push('•');
         }
-        while s.chars().count() < inner {
-            s.push(' ');
-        }
+        s.push_str(&" ".repeat(right));
         return s;
     }
 
@@ -665,8 +667,8 @@ mod tests {
             clipped: false,
         };
         let s = tab_label("untitled", &full);
-        // `[ ` + inner (`untitled` + 3 pad) + ` ] ` → 4 spaces before `]`.
-        assert_eq!(s, "[ untitled    ] ");
+        // Inner pad 3 (1 left, 2 right) plus chrome spaces: `[  untitled   ] `.
+        assert_eq!(s, "[  untitled   ] ");
         assert_eq!(s.chars().count(), TAB_COLS);
 
         // geom.width is still honored when it is not TAB_COLS.
@@ -700,7 +702,7 @@ mod tests {
             clipped: false,
         };
         let (label, sep) = split_tab_label("untitled", &full);
-        assert_eq!(label, "[ untitled    ]");
+        assert_eq!(label, "[  untitled   ]");
         assert_eq!(sep, " ");
         assert_eq!(label.chars().count(), TAB_COLS - 1);
     }
@@ -769,7 +771,9 @@ mod tests {
             tab_inner_text("untitled", TAB_INNER_COLS).chars().count(),
             TAB_INNER_COLS
         );
-        assert_eq!(tab_inner_text("untitled", TAB_INNER_COLS), "untitled   ");
+        // 8-char name in 11: center with leftover pad on the right.
+        assert_eq!(tab_inner_text("untitled", TAB_INNER_COLS), " untitled  ");
+        assert_eq!(tab_inner_text("a", TAB_INNER_COLS), "     a     ");
         let long = tab_inner_text("highlight_cache.rs", TAB_INNER_COLS);
         assert_eq!(long.chars().count(), TAB_INNER_COLS);
         assert!(long.ends_with('…'), "got {long:?}");
