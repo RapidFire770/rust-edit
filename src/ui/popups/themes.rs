@@ -503,11 +503,14 @@ pub fn slider_row_y(popup: Rect, channel: u8) -> u16 {
     inner_row_y(popup, 15 + u16::from(channel.min(2)))
 }
 
+/// Columns before the slider bar (`"R ["`). Shared by render and hit-testing.
+pub const SLIDER_PREFIX_W: u16 = 3;
+
 /// Screen rect of the 16-cell RGB slider bar for `channel` (0=R, 1=G, 2=B).
-/// Starts after the `"R ["` prefix (3 columns). Shared by render and mouse.
+/// Starts after [`SLIDER_PREFIX_W`]. Shared by render and mouse.
 pub fn slider_bar_area(popup: Rect, channel: u8) -> Rect {
     let y = slider_row_y(popup, channel);
-    let x = inner_x(popup).saturating_add(3);
+    let x = inner_x(popup).saturating_add(SLIDER_PREFIX_W);
     let inner_end = inner_x(popup).saturating_add(inner_width(popup));
     let max_w = inner_end.saturating_sub(x);
     Rect::new(x, y, SLIDER_BAR_W.min(max_w), 1)
@@ -770,12 +773,16 @@ fn clip_spans(spans: Vec<Span>, width: u16) -> Vec<Span> {
     out
 }
 
-fn palette_row_spans(
-    popup: Rect,
-    edit: &ThemeEditState,
-    row: u16,
-    accent: Style,
-) -> Vec<Span<'static>> {
+fn swatch_style(color: Color, selected: bool) -> Style {
+    let mut style = Style::default().bg(color);
+    if selected {
+        // Keep the premade color visible; reverse would swap it away.
+        style = style.add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+    }
+    style
+}
+
+fn palette_row_spans(popup: Rect, edit: &ThemeEditState, row: u16) -> Vec<Span<'static>> {
     let pal = palette_area(popup);
     let width = pal.width as usize;
     if width == 0 {
@@ -792,10 +799,8 @@ fn palette_row_spans(
         let Some(swatch) = swatches.get(i) else {
             continue;
         };
-        let mut style = Style::default().bg(Color::from(&swatch.color));
-        if edit.focus == EditFocus::Palette && edit.palette_index == i {
-            style = style.patch(accent).add_modifier(Modifier::REVERSED);
-        }
+        let selected = edit.focus == EditFocus::Palette && edit.palette_index == i;
+        let style = swatch_style(Color::from(&swatch.color), selected);
         let local = r.x.saturating_sub(pal.x) as usize;
         for k in 0..usize::from(r.width) {
             if let Some(slot) = styles.get_mut(local.saturating_add(k)) {
@@ -837,10 +842,16 @@ fn slider_line(
         (usize::from(value) * (bar_w - 1)) / 255
     };
     let thumb_style = if focused { accent } else { dim };
-    let mut spans = vec![
-        Span::styled(format!("{label} "), prefix_style),
-        Span::styled("[", dim),
-    ];
+    let mut spans = clip_spans(
+        pad_spans(
+            vec![
+                Span::styled(format!("{label} "), prefix_style),
+                Span::styled("[", dim),
+            ],
+            SLIDER_PREFIX_W,
+        ),
+        SLIDER_PREFIX_W,
+    );
     for i in 0..bar_w {
         if i == thumb_at {
             spans.push(Span::styled("●", thumb_style));
@@ -1098,8 +1109,8 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
     lines.extend(role_preview_lines); // n=3..10
     lines.push(Line::from("")); // n=11
     lines.push(palette_line); // n=12
-    lines.push(Line::from(palette_row_spans(popup, edit, 0, accent))); // n=13
-    lines.push(Line::from(palette_row_spans(popup, edit, 1, accent))); // n=14
+    lines.push(Line::from(palette_row_spans(popup, edit, 0))); // n=13
+    lines.push(Line::from(palette_row_spans(popup, edit, 1))); // n=14
     lines.push(r_line); // n=15
     lines.push(g_line); // n=16
     lines.push(b_line); // n=17
@@ -1293,8 +1304,55 @@ mod tests {
             assert_eq!(bar.width, SLIDER_BAR_W, "ch={ch}");
             assert_eq!(bar.y, slider_row_y(popup, ch), "ch={ch}");
             assert_eq!(bar.height, 1, "ch={ch}");
-            assert_eq!(bar.x, popup.x + 1 + 3, "ch={ch}");
+            assert_eq!(bar.x, popup.x + 1 + SLIDER_PREFIX_W, "ch={ch}");
         }
+    }
+
+    #[test]
+    fn slider_bar_offset_matches_prefix_width() {
+        let popup = edit_rect(Rect::new(0, 0, 80, 24));
+        let bar = slider_bar_area(popup, 0);
+        assert_eq!(bar.x - (popup.x + 1), SLIDER_PREFIX_W);
+
+        let line = slider_line(
+            'R',
+            128,
+            false,
+            Style::default(),
+            Style::default(),
+            Style::default(),
+        );
+        let prefix: u16 = line
+            .spans
+            .iter()
+            .take(2)
+            .map(|s| s.content.chars().count() as u16)
+            .sum();
+        assert_eq!(prefix, SLIDER_PREFIX_W);
+    }
+
+    #[test]
+    fn selected_swatch_keeps_bg_without_reverse() {
+        let color = Color::Rgb(178, 34, 34);
+        let selected = swatch_style(color, true);
+        assert_eq!(selected.bg, Some(color));
+        assert!(
+            selected.add_modifier.contains(Modifier::UNDERLINED),
+            "selected swatch should be underlined"
+        );
+        assert!(
+            selected.add_modifier.contains(Modifier::BOLD),
+            "selected swatch should be bold"
+        );
+        assert!(
+            !selected.add_modifier.contains(Modifier::REVERSED),
+            "REVERSED hides the swatch background"
+        );
+
+        let idle = swatch_style(color, false);
+        assert_eq!(idle.bg, Some(color));
+        assert!(!idle.add_modifier.contains(Modifier::REVERSED));
+        assert!(!idle.add_modifier.contains(Modifier::UNDERLINED));
     }
 
     #[test]
