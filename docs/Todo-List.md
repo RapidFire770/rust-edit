@@ -2,8 +2,8 @@
 
 ### Minor:
 
-- [ ] Edit / new theme not working. Cannot select any colors to change or type color values.
-  - The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value depending on the capabitlities of Rataui and our current tech stack.
+- [x] Edit / new theme not working. Cannot select any colors to change or type color values.
+  - [x] The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value depending on the capabitlities of Rataui and our current tech stack.
 - [ ] Add an X button to the file tabs to click on and close the tabs as well if possible to fit in with the current ui design and look.
 
 ### Major:

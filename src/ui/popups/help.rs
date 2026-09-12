@@ -121,12 +121,14 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ),
                 ("Enter", "Toggle option (Configure) / Apply theme (Themes)"),
                 ("Left / Right", "Step tab size in Configure"),
-                ("e", "Edit selected theme (forces Save-As for built-ins)"),
-                ("n", "New theme from the selected source"),
-                ("d", "Delete the selected custom theme"),
-                ("Tab", "Cycle Name → Role → Color field in the editor"),
-                ("s / Enter", "Save the in-progress theme"),
-                ("Esc", "Close popup / cancel editor"),
+                ("e / n / d", "List: edit / new / delete custom"),
+                ("Tab", "Edit: Name → Roles → Palette → R/G/B → Hex"),
+                (
+                    "Arrows",
+                    "Navigate focused widget (roles, swatches, sliders)",
+                ),
+                ("s / Enter", "Save (s ignored while typing name or hex)"),
+                ("Esc", "Close list / cancel editor"),
             ],
         ),
         (
@@ -140,6 +142,10 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Scroll wheel", "Scroll vertically"),
                 ("Click buttons", "Click any [ button ] in popups"),
                 ("Click < / >", "Step tab size in Configure"),
+                (
+                    "Click swatch or RGB bar",
+                    "Set the selected theme role color",
+                ),
             ],
         ),
     ]
