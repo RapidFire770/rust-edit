@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 
 use crate::theme::ColorDef;
 
@@ -89,28 +90,29 @@ pub enum Channel {
 }
 
 pub fn to_rgb(def: &ColorDef) -> (u8, u8, u8) {
-    match def {
-        ColorDef::Rgb(r, g, b) => (*r, *g, *b),
-        ColorDef::Named(name) => match name.to_ascii_lowercase().as_str() {
-            "black" => (0, 0, 0),
-            "dark_gray" => (85, 85, 85),
-            "gray" => (170, 170, 170),
-            "white" => (255, 255, 255),
-            "red" => (205, 0, 0),
-            "light_red" => (255, 85, 85),
-            "green" => (0, 205, 0),
-            "light_green" => (85, 255, 85),
-            "yellow" => (205, 205, 0),
-            "light_yellow" => (255, 255, 85),
-            "blue" => (0, 0, 238),
-            "light_blue" => (85, 85, 255),
-            "magenta" => (205, 0, 205),
-            "light_magenta" => (255, 85, 255),
-            "cyan" => (0, 205, 205),
-            "light_cyan" => (85, 255, 255),
-            "dark_red" => (139, 0, 0),
-            _ => (255, 255, 255),
-        },
+    // Resolve aliases via the same table as `From<ColorDef> for Color`
+    // (`grey`/`gray`, `lightblue`/`light_blue`, `darkred`/`dark_red`, …)
+    // then map ANSI variants to the slider RGB table. `Color::Rgb` is a
+    // passthrough so `dark_red` (already stored as RGB 139,0,0) is covered.
+    match Color::from(def) {
+        Color::Rgb(r, g, b) => (r, g, b),
+        Color::Black => (0, 0, 0),
+        Color::DarkGray => (85, 85, 85),
+        Color::Gray => (170, 170, 170),
+        Color::White => (255, 255, 255),
+        Color::Red => (205, 0, 0),
+        Color::LightRed => (255, 85, 85),
+        Color::Green => (0, 205, 0),
+        Color::LightGreen => (85, 255, 85),
+        Color::Yellow => (205, 205, 0),
+        Color::LightYellow => (255, 255, 85),
+        Color::Blue => (0, 0, 238),
+        Color::LightBlue => (85, 85, 255),
+        Color::Magenta => (205, 0, 205),
+        Color::LightMagenta => (255, 85, 255),
+        Color::Cyan => (0, 205, 205),
+        Color::LightCyan => (85, 255, 255),
+        _ => (255, 255, 255),
     }
 }
 
@@ -193,6 +195,33 @@ mod tests {
     fn to_rgb_named_red_is_not_white() {
         let (r, g, b) = to_rgb(&ColorDef::Named("red".into()));
         assert!(r > 100 && g < 50 && b < 50, "{r},{g},{b}");
+    }
+
+    #[test]
+    fn to_rgb_parse_input_lightblue_matches_light_blue() {
+        let parsed = ColorDef::parse_input("LightBlue").unwrap();
+        assert_eq!(
+            to_rgb(&parsed),
+            to_rgb(&ColorDef::Named("light_blue".into()))
+        );
+    }
+
+    #[test]
+    fn to_rgb_grey_alias_is_gray() {
+        let (r, g, b) = to_rgb(&ColorDef::Named("grey".into()));
+        assert_ne!(
+            (r, g, b),
+            (255, 255, 255),
+            "grey must not fall through to white"
+        );
+        assert_eq!(r, g);
+        assert_eq!(g, b);
+    }
+
+    #[test]
+    fn adjust_channel_named_becomes_rgb() {
+        let out = adjust_channel(&ColorDef::Named("red".into()), Channel::R, 1);
+        assert!(matches!(out, ColorDef::Rgb(..)), "{out:?}");
     }
 
     #[test]
