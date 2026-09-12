@@ -380,6 +380,32 @@ pub fn list_first_row_y(popup: Rect) -> u16 {
     popup.y + 1 + 1 + 1
 }
 
+/// Map a screen row `y` to a theme index in the list, accounting for the
+/// "── Custom ──" divider that shifts custom themes down by one row.
+/// Returns None when the row is not on a theme (title, blank, divider, or
+/// out of range).
+pub fn list_row_to_index(
+    y: u16,
+    popup: Rect,
+    built_in_count: usize,
+    total: usize,
+) -> Option<usize> {
+    let first = list_first_row_y(popup);
+    let rel = y.saturating_sub(first);
+    let idx = if (rel as usize) < built_in_count {
+        rel as usize
+    } else if (rel as usize) == built_in_count {
+        return None; // the divider row
+    } else {
+        rel as usize - 1 // custom section: subtract the divider offset
+    };
+    if idx < total {
+        Some(idx)
+    } else {
+        None
+    }
+}
+
 /// Footer button labels for list mode. Used by render + mouse hit-test.
 pub fn list_footer_labels() -> [&'static str; 5] {
     [
@@ -1125,6 +1151,40 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_row_to_index_accounts_for_custom_divider() {
+        // popup.y = 0 → list_first_row_y = 3.
+        let popup = Rect::new(0, 0, LIST_POPUP_W, LIST_POPUP_H);
+        let built_in_count = 6;
+        let total = 8; // 6 built-ins + 2 customs
+
+        // Built-ins: index == rel (rows 3..8).
+        assert_eq!(list_row_to_index(3, popup, built_in_count, total), Some(0));
+        assert_eq!(list_row_to_index(8, popup, built_in_count, total), Some(5));
+
+        // Divider row (9): no theme.
+        assert_eq!(list_row_to_index(9, popup, built_in_count, total), None);
+
+        // Customs: index == rel - 1 (rows 10..11).
+        assert_eq!(list_row_to_index(10, popup, built_in_count, total), Some(6));
+        assert_eq!(list_row_to_index(11, popup, built_in_count, total), Some(7));
+
+        // Out of range below the list.
+        assert_eq!(list_row_to_index(12, popup, built_in_count, total), None);
+    }
+
+    #[test]
+    fn list_row_to_index_no_customs_has_no_divider() {
+        let popup = Rect::new(0, 0, LIST_POPUP_W, LIST_POPUP_H);
+        let built_in_count = 6;
+        let total = 6;
+
+        assert_eq!(list_row_to_index(3, popup, built_in_count, total), Some(0));
+        assert_eq!(list_row_to_index(8, popup, built_in_count, total), Some(5));
+        // rel == 6 is out of range (no customs) → None.
+        assert_eq!(list_row_to_index(9, popup, built_in_count, total), None);
+    }
 
     #[test]
     fn edit_state_seeds_color_buf_from_role_zero() {

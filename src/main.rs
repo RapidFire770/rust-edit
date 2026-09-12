@@ -1860,15 +1860,11 @@ fn themes_popup_handle_hover(app: &mut App, pos: (usize, usize), term: (u16, u16
 
     // List-mode row hover.
     if app.themes_mode == ThemesMode::List {
-        let first = popups::themes::list_first_row_y(popup);
         let registry = crate::themes::ThemeRegistry::load();
+        let built_in_count = registry.built_ins().len();
         let total = registry.all().len();
-        let rel = (y as u16).saturating_sub(first);
-        if (rel as usize) < total {
-            app.themes_list_hover = Some(rel as usize);
-        } else {
-            app.themes_list_hover = None;
-        }
+        app.themes_list_hover =
+            popups::themes::list_row_to_index(y as u16, popup, built_in_count, total);
     }
 }
 
@@ -1936,12 +1932,12 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
 
     // List-mode: row click applies the theme.
     if app.themes_mode == ThemesMode::List {
-        let first = popups::themes::list_first_row_y(popup);
         let registry = crate::themes::ThemeRegistry::load();
+        let built_in_count = registry.built_ins().len();
         let total = registry.all().len();
-        let rel = (y as u16).saturating_sub(first);
-        if (rel as usize) < total {
-            app.themes_selected = rel as usize;
+        if let Some(idx) = popups::themes::list_row_to_index(y as u16, popup, built_in_count, total)
+        {
+            app.themes_selected = idx;
             app.apply_theme_by_index(app.themes_selected);
         }
         return;
