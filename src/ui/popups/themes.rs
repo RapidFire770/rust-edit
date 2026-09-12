@@ -3,9 +3,9 @@
 // Two modes (selected via `ThemesMode` on `App`):
 //   * List  — built-ins then customs, click/enter to apply, e/n/d to
 //             edit/new/delete.
-//   * Edit  — name field + per-role color editor with a live code preview,
-//             Tab cycles focus between the name field, role list, and color
-//             input; Enter saves.
+//   * Edit  — name field + scrolled color-role list + live preview, with
+//             reserved palette/slider rows; Tab cycles Name/Role/Palette/
+//             sliders/Hex; Enter saves.
 //
 // State lives on `App` (state-on-App convention from confirm/file_browser);
 // this module only renders + exposes geometry helpers the mouse handler reuses.
@@ -20,7 +20,9 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::theme::{ColorDef, Theme};
-use crate::ui::color_picker::{adjust_channel, premade, Channel, SWATCH_COLS};
+use crate::ui::color_picker::{
+    adjust_channel, premade, Channel, SLIDER_BAR_W, SWATCH_COLS, SWATCH_ROWS,
+};
 use crate::App;
 
 /// Which screen of the Themes popup is active.
@@ -141,6 +143,19 @@ impl ThemeEditState {
         self.role_selected = new as usize;
         self.color_buf = color_buf_for(&field_value(&self.theme, self.role_selected));
         self.color_err = None;
+        if self.role_selected < self.role_scroll as usize {
+            self.role_scroll = self.role_selected as u16;
+        }
+        if self.role_selected >= self.role_scroll as usize + ROLE_VISIBLE as usize {
+            self.role_scroll = (self.role_selected + 1 - ROLE_VISIBLE as usize) as u16;
+        }
+    }
+
+    /// Scroll the role window without changing the selected role (mouse wheel).
+    pub fn scroll_roles(&mut self, delta: i32) {
+        let max = (ROLE_FIELDS.len() as u16).saturating_sub(ROLE_VISIBLE);
+        let next = (i32::from(self.role_scroll) + delta).clamp(0, i32::from(max));
+        self.role_scroll = next as u16;
     }
 
     /// Append a char to whichever field has focus.
@@ -200,12 +215,8 @@ impl ThemeEditState {
     }
 
     /// Apply `color` to the selected role and refresh `color_buf`.
-    /// No-op on the fake `name` role (Task 3 drops it).
     fn apply_color(&mut self, color: ColorDef) {
-        let Some((_, accessor)) = ROLE_FIELDS.get(self.role_selected) else {
-            return;
-        };
-        if *accessor == "name" {
+        if self.role_selected >= ROLE_FIELDS.len() {
             return;
         }
         set_field_value(&mut self.theme, self.role_selected, color);
@@ -385,8 +396,12 @@ pub fn themes_button_x_ranges(x_start: u16, labels: &[&str]) -> Vec<(u16, u16)> 
 
 // ===================== Edit mode geometry =====================
 
-pub const EDIT_POPUP_W: u16 = 64;
-pub const EDIT_POPUP_H: u16 = 18;
+pub const EDIT_POPUP_W: u16 = 76;
+pub const EDIT_POPUP_H: u16 = 22;
+pub const ROLE_VISIBLE: u16 = 8;
+
+/// Left pane width in inner columns (includes 2 cells reserved for a future swatch).
+const ROLE_INNER_COLS: u16 = 38;
 
 pub fn edit_rect(area: Rect) -> Rect {
     let x = (area.width.saturating_sub(EDIT_POPUP_W)) / 2;
@@ -399,27 +414,91 @@ pub fn edit_rect(area: Rect) -> Rect {
     )
 }
 
-/// X column where the right-hand "Color Roles" pane starts.
-pub const ROLE_PANE_X: u16 = 34;
-/// X column where the role's color value starts within the roles pane.
-pub const ROLE_VALUE_X: u16 = 14;
+fn inner_first_y(popup: Rect) -> u16 {
+    popup.y.saturating_add(1)
+}
+
+fn inner_last_y(popup: Rect) -> u16 {
+    popup.y.saturating_add(popup.height.saturating_sub(2))
+}
+
+/// Screen Y of inner content row `n` (0-based, after the top border). Clamped
+/// into the inner vertical range so helpers stay monotonic on small terminals.
+fn inner_row_y(popup: Rect, n: u16) -> u16 {
+    let first = inner_first_y(popup);
+    let last = inner_last_y(popup);
+    first.saturating_add(n).clamp(first, last.max(first))
+}
+
+fn inner_width(popup: Rect) -> u16 {
+    popup.width.saturating_sub(2)
+}
+
+fn inner_x(popup: Rect) -> u16 {
+    popup.x.saturating_add(1)
+}
+
+fn clamp_inner_height(popup: Rect, y: u16, want: u16) -> u16 {
+    let last = inner_last_y(popup);
+    let max_h = last.saturating_sub(y).saturating_add(1);
+    want.min(max_h)
+}
+
+pub fn name_row_y(popup: Rect) -> u16 {
+    inner_row_y(popup, 0)
+}
+
+pub fn roles_area(popup: Rect) -> Rect {
+    let y = inner_row_y(popup, 3);
+    let w = ROLE_INNER_COLS.min(inner_width(popup));
+    Rect::new(
+        inner_x(popup),
+        y,
+        w,
+        clamp_inner_height(popup, y, ROLE_VISIBLE),
+    )
+}
+
+pub fn preview_area(popup: Rect) -> Rect {
+    let roles = roles_area(popup);
+    let x = inner_x(popup).saturating_add(roles.width);
+    let inner_end = inner_x(popup).saturating_add(inner_width(popup));
+    let w = inner_end.saturating_sub(x);
+    Rect::new(x, roles.y, w, roles.height)
+}
+
+pub fn palette_area(popup: Rect) -> Rect {
+    let y = inner_row_y(popup, 13);
+    Rect::new(
+        inner_x(popup),
+        y,
+        inner_width(popup),
+        clamp_inner_height(popup, y, SWATCH_ROWS),
+    )
+}
+
+pub fn slider_row_y(popup: Rect, channel: u8) -> u16 {
+    inner_row_y(popup, 15 + u16::from(channel.min(2)))
+}
+
+pub fn hex_row_y(popup: Rect) -> u16 {
+    inner_row_y(popup, 18)
+}
+
+pub fn footer_row_y(popup: Rect) -> u16 {
+    inner_row_y(popup, 19)
+}
 
 /// Footer labels for edit mode.
-pub fn edit_footer_labels() -> [&'static str; 4] {
-    [
-        "[ Tab=Next ]",
-        "[ Enter=Save ]",
-        "[ Esc=Cancel ]",
-        "[ s=Save ]",
-    ]
+pub fn edit_footer_labels() -> [&'static str; 2] {
+    ["[ Save ]", "[ Cancel ]"]
 }
 
 // ===================== Field table =====================
 
 /// The editable color roles, in display order. The index here is what
-/// `role_selected` refers to.
+/// `role_selected` refers to. Name is a separate text field, not a role.
 pub const ROLE_FIELDS: &[(&str, &str)] = &[
-    ("name", "name"),
     ("header_bg", "header_bg"),
     ("header_fg", "header_fg"),
     ("editor_bg", "editor_bg"),
@@ -441,7 +520,6 @@ pub const ROLE_FIELDS: &[(&str, &str)] = &[
 pub fn field_value(theme: &Theme, role_idx: usize) -> ColorDef {
     let (_, accessor) = ROLE_FIELDS[role_idx];
     match accessor {
-        "name" => ColorDef::Named(theme.name.clone()),
         "header_bg" => theme.header_bg.clone(),
         "header_fg" => theme.header_fg.clone(),
         "editor_bg" => theme.editor_bg.clone(),
@@ -465,11 +543,6 @@ pub fn field_value(theme: &Theme, role_idx: usize) -> ColorDef {
 fn set_field_value(theme: &mut Theme, role_idx: usize, value: ColorDef) {
     let (_, accessor) = ROLE_FIELDS[role_idx];
     match accessor {
-        "name" => {
-            if let ColorDef::Named(n) = value {
-                theme.name = n;
-            }
-        }
         "header_bg" => theme.header_bg = value,
         "header_fg" => theme.header_fg = value,
         "editor_bg" => theme.editor_bg = value,
@@ -631,12 +704,151 @@ fn push_theme_row(
     ]));
 }
 
+fn span_cols(spans: &[Span]) -> usize {
+    spans.iter().map(|s| s.content.chars().count()).sum()
+}
+
+fn pad_spans(mut spans: Vec<Span>, width: u16) -> Vec<Span> {
+    let used = span_cols(&spans);
+    if (used as u16) < width {
+        spans.push(Span::raw(" ".repeat((width as usize).saturating_sub(used))));
+    }
+    spans
+}
+
+fn clip_spans(spans: Vec<Span>, width: u16) -> Vec<Span> {
+    let mut out = Vec::new();
+    let mut used = 0usize;
+    let max = width as usize;
+    for s in spans {
+        if used >= max {
+            break;
+        }
+        let n = s.content.chars().count();
+        if used + n <= max {
+            used += n;
+            out.push(s);
+        } else {
+            let take = max - used;
+            let clipped: String = s.content.chars().take(take).collect();
+            out.push(Span::styled(clipped, s.style));
+            break;
+        }
+    }
+    out
+}
+
+fn preview_sample_lines(preview_theme: &Theme) -> Vec<Line<'static>> {
+    vec![
+        Line::from(vec![
+            Span::styled(
+                "fn ",
+                Style::default()
+                    .fg(Color::from(&preview_theme.keyword))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "main",
+                Style::default().fg(Color::from(&preview_theme.function)),
+            ),
+            Span::styled(
+                "() {",
+                Style::default().fg(Color::from(&preview_theme.editor_fg)),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled(
+                "let ",
+                Style::default()
+                    .fg(Color::from(&preview_theme.keyword))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "x",
+                Style::default().fg(Color::from(&preview_theme.editor_fg)),
+            ),
+            Span::styled(
+                " = ",
+                Style::default().fg(Color::from(&preview_theme.editor_fg)),
+            ),
+            Span::styled(
+                "42",
+                Style::default().fg(Color::from(&preview_theme.number)),
+            ),
+            Span::styled(
+                ";",
+                Style::default().fg(Color::from(&preview_theme.editor_fg)),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled(
+                "let ",
+                Style::default()
+                    .fg(Color::from(&preview_theme.keyword))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "s",
+                Style::default().fg(Color::from(&preview_theme.editor_fg)),
+            ),
+            Span::styled(
+                " = ",
+                Style::default().fg(Color::from(&preview_theme.editor_fg)),
+            ),
+            Span::styled(
+                "\"hi\"",
+                Style::default().fg(Color::from(&preview_theme.string)),
+            ),
+            Span::styled(
+                "; ",
+                Style::default().fg(Color::from(&preview_theme.editor_fg)),
+            ),
+            Span::styled(
+                "// comment",
+                Style::default().fg(Color::from(&preview_theme.comment)),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "}",
+            Style::default().fg(Color::from(&preview_theme.editor_fg)),
+        )),
+        Line::from(vec![
+            Span::styled(
+                "type ",
+                Style::default()
+                    .fg(Color::from(&preview_theme.keyword))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "T",
+                Style::default().fg(Color::from(&preview_theme.type_name)),
+            ),
+            Span::styled(
+                " = ",
+                Style::default().fg(Color::from(&preview_theme.editor_fg)),
+            ),
+            Span::styled(
+                "String",
+                Style::default().fg(Color::from(&preview_theme.type_name)),
+            ),
+            Span::styled(
+                ";",
+                Style::default().fg(Color::from(&preview_theme.editor_fg)),
+            ),
+        ]),
+    ]
+}
+
 fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
     let edit = match &app.themes_edit {
         Some(e) => e,
         None => return, // defensive: should always be set in Edit mode
     };
     let popup = edit_rect(area);
+    let roles = roles_area(popup);
+    let preview = preview_area(popup);
     let block = Block::default()
         .title(format!("Edit Theme: {}", edit.name))
         .borders(Borders::ALL)
@@ -649,217 +861,130 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
     let dim_dim = Style::default()
         .fg(Color::from(&theme.editor_fg))
         .add_modifier(Modifier::DIM);
-    let err_style = Style::default().fg(Color::LightRed);
+    let err_style = Style::default().fg(Color::from(&theme.keyword));
 
-    // ----- Left pane: live preview of sample code in the in-progress theme -----
-    let preview_theme = &edit.theme;
-    let mut preview_lines: Vec<Line> = Vec::new();
-    preview_lines.push(Line::from(Span::styled(
-        "Preview",
-        Style::default().fg(Color::from(&preview_theme.line_number_fg)),
-    )));
-    // Sample lines colored by role, so the user sees each accent in context.
-    let samples: [(&str, Color); 5] = [
-        ("fn main() {", Color::from(&preview_theme.keyword)),
-        ("    let x = 42;", Color::from(&preview_theme.number)),
-        (
-            "    let s = \"hi\"; // comment",
-            Color::from(&preview_theme.string),
-        ),
-        ("}", Color::from(&preview_theme.editor_fg)),
-        ("type T = String;", Color::from(&preview_theme.type_name)),
-    ];
-    // The comment sample mixes string + comment; re-split for realism.
-    preview_lines.push(Line::from(vec![
-        Span::styled(
-            "fn ",
-            Style::default()
-                .fg(Color::from(&preview_theme.keyword))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "main",
-            Style::default().fg(Color::from(&preview_theme.function)),
-        ),
-        Span::styled(
-            "() {",
-            Style::default().fg(Color::from(&preview_theme.editor_fg)),
-        ),
-    ]));
-    preview_lines.push(Line::from(vec![
-        Span::raw("    "),
-        Span::styled(
-            "let ",
-            Style::default()
-                .fg(Color::from(&preview_theme.keyword))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "x",
-            Style::default().fg(Color::from(&preview_theme.editor_fg)),
-        ),
-        Span::styled(
-            " = ",
-            Style::default().fg(Color::from(&preview_theme.editor_fg)),
-        ),
-        Span::styled(
-            "42",
-            Style::default().fg(Color::from(&preview_theme.number)),
-        ),
-        Span::styled(
-            ";",
-            Style::default().fg(Color::from(&preview_theme.editor_fg)),
-        ),
-    ]));
-    preview_lines.push(Line::from(vec![
-        Span::raw("    "),
-        Span::styled(
-            "let ",
-            Style::default()
-                .fg(Color::from(&preview_theme.keyword))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "s",
-            Style::default().fg(Color::from(&preview_theme.editor_fg)),
-        ),
-        Span::styled(
-            " = ",
-            Style::default().fg(Color::from(&preview_theme.editor_fg)),
-        ),
-        Span::styled(
-            "\"hi\"",
-            Style::default().fg(Color::from(&preview_theme.string)),
-        ),
-        Span::styled(
-            "; ",
-            Style::default().fg(Color::from(&preview_theme.editor_fg)),
-        ),
-        Span::styled(
-            "// comment",
-            Style::default().fg(Color::from(&preview_theme.comment)),
-        ),
-    ]));
-    preview_lines.push(Line::from(Span::styled(
-        "}",
-        Style::default().fg(Color::from(&preview_theme.editor_fg)),
-    )));
-    preview_lines.push(Line::from(vec![
-        Span::styled(
-            "type ",
-            Style::default()
-                .fg(Color::from(&preview_theme.keyword))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "T",
-            Style::default().fg(Color::from(&preview_theme.type_name)),
-        ),
-        Span::styled(
-            " = ",
-            Style::default().fg(Color::from(&preview_theme.editor_fg)),
-        ),
-        Span::styled(
-            "String",
-            Style::default().fg(Color::from(&preview_theme.type_name)),
-        ),
-        Span::styled(
-            ";",
-            Style::default().fg(Color::from(&preview_theme.editor_fg)),
-        ),
-    ]));
-    let _ = samples; // (samples kept as documentation of intent; spans built inline)
-
-    // ----- Right pane: role list -----
-    let mut role_lines: Vec<Line> = Vec::new();
-    for (i, (label, _)) in ROLE_FIELDS.iter().enumerate() {
-        let active = i == edit.role_selected;
-        let style = if active { accent } else { dim };
-        let value_str = if *label == "name" {
-            edit.theme.name.clone()
-        } else {
-            color_buf_for(&field_value(&edit.theme, i))
-        };
-        let marker = if active { ">" } else { " " };
-        let label_padded = format!("{:<14}", label);
-        let value_padded = format!("{:<14}", value_str);
-        role_lines.push(Line::from(vec![
-            Span::styled(format!("{marker} "), style),
-            Span::styled(label_padded, style),
-            Span::styled(value_padded, dim),
-        ]));
-    }
-
-    // ----- Assemble: interleave the two panes line by line -----
-    let mut lines: Vec<Line> = Vec::new();
-    // Two-column header line: "Preview" (left) + "Color Roles" (right).
-    let header = Line::from(vec![
-        Span::styled("Preview", dim_dim),
-        Span::raw("                              "),
-        Span::styled("Color Roles", dim_dim),
-    ]);
-    lines.push(header);
-
-    let max_panes = preview_lines.len().max(role_lines.len());
-    for i in 0..max_panes {
-        let left = preview_lines
-            .get(i)
-            .cloned()
-            .unwrap_or_else(|| Line::from(""));
-        let right = role_lines.get(i).cloned().unwrap_or_else(|| Line::from(""));
-        // Pad left to ROLE_PANE_X then append right.
-        let mut combined: Vec<Span> = left.spans.clone();
-        // Ensure at least ROLE_PANE_X columns of left content.
-        let left_len: usize = combined.iter().map(|s| s.content.chars().count()).sum();
-        if (left_len as u16) < ROLE_PANE_X {
-            combined.push(Span::raw(
-                " ".repeat((ROLE_PANE_X as usize).saturating_sub(left_len)),
-            ));
-        }
-        combined.extend(right.spans);
-        lines.push(Line::from(combined));
-    }
-
-    // ----- Name + color input row -----
-    lines.push(Line::from(""));
-    let name_focus = edit.focus == EditFocus::Name;
-    let name_style = if name_focus { accent } else { dim };
-    lines.push(Line::from(vec![
-        Span::styled("Name:  ", dim),
+    let name_style = if edit.focus == EditFocus::Name {
+        accent
+    } else {
+        dim
+    };
+    let name_line = Line::from(vec![
+        Span::styled("Name: ", dim),
         Span::styled("[", name_style),
         Span::styled(format!("{:<16}", edit.name), name_style),
         Span::styled("]", name_style),
-    ]));
+    ]);
 
-    let color_focus = edit.focus == EditFocus::Hex;
-    let color_style = if color_focus { accent } else { dim };
-    let (selected_label, _) = ROLE_FIELDS[edit.role_selected];
+    let mut header_spans = pad_spans(vec![Span::styled("Roles", dim_dim)], roles.width);
+    header_spans.push(Span::styled("Preview", dim_dim));
+    let header_line = Line::from(header_spans);
+
+    let preview_lines = preview_sample_lines(&edit.theme);
+    let start = edit.role_scroll as usize;
+    let vis = ROLE_VISIBLE as usize;
+    let mut role_preview_lines: Vec<Line> = Vec::with_capacity(vis);
+    for row in 0..vis {
+        let idx = start + row;
+        let mut left = if let Some((label, _)) = ROLE_FIELDS.get(idx) {
+            let active = idx == edit.role_selected;
+            let style = if active { accent } else { dim };
+            let marker = if active { ">" } else { " " };
+            let label_padded = format!("{:<14}", label);
+            let value_str = color_buf_for(&field_value(&edit.theme, idx));
+            // Two cells reserved for a future swatch (Task 4).
+            vec![
+                Span::styled(format!("{marker} "), style),
+                Span::raw("  "),
+                Span::styled(label_padded, style),
+                Span::styled(format!(" {value_str}"), dim),
+            ]
+        } else {
+            Vec::new()
+        };
+        left = pad_spans(left, roles.width);
+        if let Some(prev) = preview_lines.get(row) {
+            left.extend(clip_spans(prev.spans.clone(), preview.width));
+        }
+        role_preview_lines.push(Line::from(left));
+    }
+
+    let palette_style = if edit.focus == EditFocus::Palette {
+        accent
+    } else {
+        dim
+    };
+    let slider_style = |focus: EditFocus| {
+        if edit.focus == focus {
+            accent
+        } else {
+            dim
+        }
+    };
+    // Labels only; Task 4 paints chips / bars. SLIDER_BAR_W reserves bar columns.
+    let slider_pad = " ".repeat(usize::from(SLIDER_BAR_W));
+    let palette_line = Line::from(Span::styled("Palette", palette_style));
+    let r_line = Line::from(Span::styled(
+        format!("R {slider_pad}"),
+        slider_style(EditFocus::SliderR),
+    ));
+    let g_line = Line::from(Span::styled(
+        format!("G {slider_pad}"),
+        slider_style(EditFocus::SliderG),
+    ));
+    let b_line = Line::from(Span::styled(
+        format!("B {slider_pad}"),
+        slider_style(EditFocus::SliderB),
+    ));
+
+    let hex_style = if edit.focus == EditFocus::Hex {
+        accent
+    } else {
+        dim
+    };
+    let selected_label = ROLE_FIELDS
+        .get(edit.role_selected)
+        .map(|(l, _)| *l)
+        .unwrap_or("");
     let err_span = match &edit.color_err {
         Some(e) => Span::styled(format!("  ! {e}"), err_style),
         None => Span::raw(""),
     };
-    lines.push(Line::from(vec![
-        Span::styled("Color: ", dim),
-        Span::styled("[", color_style),
-        Span::styled(format!("{:<16}", edit.color_buf), color_style),
-        Span::styled("]", color_style),
-        Span::styled(format!("  ({})", selected_label), dim_dim),
+    let hex_line = Line::from(vec![
+        Span::styled("Hex: ", dim),
+        Span::styled("[", hex_style),
+        Span::styled(format!("{:<16}", edit.color_buf), hex_style),
+        Span::styled("]", hex_style),
+        Span::styled(format!("  ({selected_label})"), dim_dim),
         err_span,
-    ]));
+    ]);
 
-    // ----- Footer -----
-    lines.push(Line::from(""));
     let labels = edit_footer_labels();
-    let mut spans: Vec<Span> = vec![Span::raw(" ")];
+    let mut footer_spans: Vec<Span> = vec![Span::raw(" ")];
     for (i, l) in labels.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::raw("  "));
+            footer_spans.push(Span::raw("  "));
         }
         let hovered = app.themes_button_hover == Some(i);
         let style = if hovered { accent } else { dim };
-        spans.push(Span::styled(*l, style));
+        footer_spans.push(Span::styled(*l, style));
     }
-    lines.push(Line::from(spans));
+    let footer_line = Line::from(footer_spans);
+
+    // Exactly 20 inner lines matching name_row_y / roles_area / hex / footer.
+    let mut lines: Vec<Line> = Vec::with_capacity(20);
+    lines.push(name_line); // n=0
+    lines.push(Line::from("")); // n=1
+    lines.push(header_line); // n=2
+    lines.extend(role_preview_lines); // n=3..10
+    lines.push(Line::from("")); // n=11
+    lines.push(palette_line); // n=12
+    lines.push(Line::from("")); // n=13 swatch row (Task 4)
+    lines.push(Line::from("")); // n=14 swatch row (Task 4)
+    lines.push(r_line); // n=15
+    lines.push(g_line); // n=16
+    lines.push(b_line); // n=17
+    lines.push(hex_line); // n=18
+    lines.push(footer_line); // n=19
 
     let para = Paragraph::new(lines).block(block).style(dim);
     f.render_widget(ratatui::widgets::Clear, popup);
@@ -874,8 +999,8 @@ mod tests {
     fn edit_state_seeds_color_buf_from_role_zero() {
         let theme = Theme::dark_red();
         let st = ThemeEditState::new(theme.clone(), None);
-        // Role 0 is `name` which is stored as Named; the buf should hold the name.
-        assert_eq!(st.color_buf, theme.name);
+        // Role 0 is header_bg (dark-red firebrick).
+        assert_eq!(st.color_buf, "#b22222");
         assert_eq!(st.role_selected, 0);
         assert_eq!(st.focus, EditFocus::Name);
     }
@@ -884,19 +1009,19 @@ mod tests {
     fn move_role_reloads_color_buf() {
         let theme = Theme::dark_red();
         let mut st = ThemeEditState::new(theme.clone(), None);
-        st.move_role(1); // role 1 = header_bg
+        st.move_role(1); // role 1 = header_fg
         assert_eq!(st.role_selected, 1);
-        // header_bg is RGB(178,34, 34) -> #b22222
-        assert_eq!(st.color_buf, "#b22222");
+        // header_fg is RGB(255,255,255) -> #ffffff
+        assert_eq!(st.color_buf, "#ffffff");
     }
 
     #[test]
     fn commit_color_validates_and_applies() {
         let mut st = ThemeEditState::new(Theme::dark_red(), Some("tmp".to_string()));
-        st.role_selected = 1; // header_bg
+        st.role_selected = 1; // header_fg
         st.color_buf = "#00ff00".to_string();
         assert!(st.commit_color());
-        assert_eq!(st.theme.header_bg, ColorDef::Rgb(0, 255, 0));
+        assert_eq!(st.theme.header_fg, ColorDef::Rgb(0, 255, 0));
         assert!(st.color_err.is_none());
 
         st.color_buf = "garbage".to_string();
@@ -919,8 +1044,8 @@ mod tests {
         // (the set_field_value match arms enforce this at compile time, but we
         // also assert the count matches the Theme struct's color roles).
         let theme = Theme::light();
-        // 17 entries: name + 16 color roles.
-        assert_eq!(ROLE_FIELDS.len(), 17);
+        // 16 color roles (name is a separate text field, not a role).
+        assert_eq!(ROLE_FIELDS.len(), 16);
         // Reading each must not panic.
         for i in 0..ROLE_FIELDS.len() {
             let _ = field_value(&theme, i);
@@ -942,7 +1067,7 @@ mod tests {
     fn hex_field_accepts_d_and_does_not_reset_draft() {
         let mut st = ThemeEditState::new(Theme::dark_red(), Some("tmp".into()));
         st.focus = EditFocus::Hex;
-        st.role_selected = 1; // header_bg
+        st.role_selected = 1; // header_fg
         st.color_buf.clear();
         for c in ['#', 'd', 'd', '0', '0', '0', '0'] {
             handle_edit_key(&mut st, KeyCode::Char(c));
@@ -990,7 +1115,6 @@ mod tests {
     fn palette_right_applies_premade_to_color_role() {
         let mut st = ThemeEditState::new(Theme::dark_red(), Some("tmp".into()));
         st.focus = EditFocus::Palette;
-        st.role_selected = 1; // header_bg
         let cmd = handle_edit_key(&mut st, KeyCode::Right);
         assert_eq!(cmd, ThemesEditCmd::None);
         assert_eq!(st.palette_index, 1);
@@ -1012,5 +1136,32 @@ mod tests {
             handle_edit_key(&mut st, KeyCode::Enter),
             ThemesEditCmd::Save
         );
+    }
+
+    #[test]
+    fn role_fields_are_the_16_color_roles() {
+        assert_eq!(ROLE_FIELDS.len(), 16);
+        assert!(ROLE_FIELDS.iter().all(|(l, _)| *l != "name"));
+    }
+
+    #[test]
+    fn edit_inner_widgets_fit_80x24() {
+        let popup = edit_rect(Rect::new(0, 0, 80, 24));
+        assert_eq!(popup.height, EDIT_POPUP_H);
+        assert_eq!(popup.width, EDIT_POPUP_W);
+        let inner_last = popup.y + popup.height - 2;
+        for y in [
+            name_row_y(popup),
+            footer_row_y(popup),
+            hex_row_y(popup),
+            slider_row_y(popup, 0),
+            palette_area(popup).y,
+            roles_area(popup).y,
+        ] {
+            assert!(y >= popup.y + 1 && y <= inner_last, "y={y} popup={popup:?}");
+        }
+        assert_eq!(roles_area(popup).height, ROLE_VISIBLE);
+        assert_eq!(footer_row_y(popup), popup.y + 1 + 19);
+        assert_eq!(name_row_y(popup), popup.y + 1);
     }
 }

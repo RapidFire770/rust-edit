@@ -1855,7 +1855,7 @@ fn themes_popup_handle_hover(app: &mut App, pos: (usize, usize), term: (u16, u16
             let p = popups::themes::edit_rect(term_area);
             (
                 p,
-                p.y + popups::themes::EDIT_POPUP_H - 1,
+                popups::themes::footer_row_y(p),
                 popups::themes::edit_footer_labels().to_vec(),
             )
         }
@@ -1871,8 +1871,13 @@ fn themes_popup_handle_hover(app: &mut App, pos: (usize, usize), term: (u16, u16
         return;
     }
 
-    // Footer button hover.
-    if y as u16 == footer_y.saturating_sub(1) {
+    // Footer button hover. List keeps its historical saturating_sub offset;
+    // Edit hits `footer_row_y` exactly (Configure style).
+    let on_footer = match app.themes_mode {
+        ThemesMode::List => y as u16 == footer_y.saturating_sub(1),
+        ThemesMode::Edit => y as u16 == footer_y,
+    };
+    if on_footer {
         let ranges = popups::themes::themes_button_x_ranges(popup.x + 1, &footer_labels);
         app.themes_button_hover = hit_button_row(x as u16, &ranges);
     } else {
@@ -1895,7 +1900,7 @@ fn themes_popup_handle_hover(app: &mut App, pos: (usize, usize), term: (u16, u16
 
 /// Mouse click for the Themes popup (both modes).
 fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &mut bool) {
-    use popups::themes::ThemesMode;
+    use popups::themes::{EditFocus, ThemesMode};
     let (x, y) = pos;
     let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
     let term_area = Rect::new(0, 0, tw, th);
@@ -1912,7 +1917,7 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
             let p = popups::themes::edit_rect(term_area);
             (
                 p,
-                p.y + popups::themes::EDIT_POPUP_H - 1,
+                popups::themes::footer_row_y(p),
                 popups::themes::edit_footer_labels().to_vec(),
             )
         }
@@ -1930,8 +1935,12 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
     }
     *skip_editor = true;
 
-    // Footer button click.
-    if y as u16 == footer_y.saturating_sub(1) {
+    // Footer button click. List keeps saturating_sub; Edit hits footer_row_y.
+    let on_footer = match app.themes_mode {
+        ThemesMode::List => y as u16 == footer_y.saturating_sub(1),
+        ThemesMode::Edit => y as u16 == footer_y,
+    };
+    if on_footer {
         let ranges = popups::themes::themes_button_x_ranges(popup.x + 1, &footer_labels);
         if let Some(idx) = hit_button_row(x as u16, &ranges) {
             match app.themes_mode {
@@ -1943,8 +1952,7 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
                     _ => app.close_themes(),
                 },
                 ThemesMode::Edit => match idx {
-                    0 => themes_popup_handle_tab(app),
-                    1 | 3 => themes_popup_try_save(app),
+                    0 => themes_popup_try_save(app),
                     _ => themes_popup_handle_esc(app),
                 },
             }
@@ -1962,19 +1970,40 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
             app.themes_selected = rel as usize;
             app.apply_theme_by_index(app.themes_selected);
         }
-    } else {
-        // Edit-mode: clicking a role row selects it and loads its value.
-        let roles_top = popup.y + 2; // border + header
-        let roles_height = popups::themes::EDIT_POPUP_H.saturating_sub(6);
-        let rel_role = (y as u16).saturating_sub(roles_top);
-        if rel_role < roles_height && rel_role < popups::themes::ROLE_FIELDS.len() as u16 {
-            if let Some(edit) = app.themes_edit.as_mut() {
-                edit.role_selected = rel_role as usize;
+        return;
+    }
+
+    if y as u16 == popups::themes::name_row_y(popup) {
+        if let Some(edit) = app.themes_edit.as_mut() {
+            edit.focus = EditFocus::Name;
+        }
+        return;
+    }
+    if y as u16 == popups::themes::hex_row_y(popup) {
+        if let Some(edit) = app.themes_edit.as_mut() {
+            edit.focus = EditFocus::Hex;
+        }
+        return;
+    }
+
+    let roles = popups::themes::roles_area(popup);
+    if (y as u16) >= roles.y
+        && (y as u16) < roles.y.saturating_add(roles.height)
+        && (x as u16) >= roles.x
+        && (x as u16) < roles.x.saturating_add(roles.width)
+    {
+        let rel = (y as u16).saturating_sub(roles.y);
+        if let Some(edit) = app.themes_edit.as_mut() {
+            let idx = (edit.role_scroll as usize).saturating_add(rel as usize);
+            if (rel as usize) < popups::themes::ROLE_VISIBLE as usize
+                && idx < popups::themes::ROLE_FIELDS.len()
+            {
+                edit.role_selected = idx;
                 use popups::themes::color_buf_for;
                 use popups::themes::field_value;
                 edit.color_buf = color_buf_for(&field_value(&edit.theme, edit.role_selected));
                 edit.color_err = None;
-                edit.focus = popups::themes::EditFocus::Hex;
+                edit.focus = EditFocus::Role;
             }
         }
     }
