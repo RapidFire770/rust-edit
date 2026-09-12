@@ -119,9 +119,9 @@ fn blink_is_due(last_blink: Instant, interval: Duration, should_blink: bool) -> 
     should_blink && last_blink.elapsed() >= interval
 }
 
-/// Where a vertical mouse-wheel burst should go. Help and the file browser
-/// scroll their own content; every other popup swallows the wheel so it
-/// cannot leak through to the editor underneath.
+/// Where a vertical mouse-wheel burst should go. Help, the file browser,
+/// and Themes scroll their own content; every other popup swallows the
+/// wheel so it cannot leak through to the editor underneath.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WheelTarget {
     Editor,
@@ -129,12 +129,14 @@ enum WheelTarget {
     FileBrowser,
     Swallow,
     TabStrip,
+    Themes,
 }
 
 fn wheel_target(app: &App, wheel_col: u16, wheel_row: u16) -> WheelTarget {
     match app.popup_focus() {
         Some(PopupFocus::Help) => WheelTarget::Help,
         Some(PopupFocus::FileBrowser) => WheelTarget::FileBrowser,
+        Some(PopupFocus::Themes) => WheelTarget::Themes,
         Some(_) => WheelTarget::Swallow,
         None => {
             if (wheel_row as usize) < crate::ui::layout::HEADER_ROWS as usize
@@ -434,6 +436,15 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                     }
                     WheelTarget::Help => {
                         apply_help_scroll(app, wheel_delta as i32);
+                    }
+                    WheelTarget::Themes => {
+                        if app.themes_mode == popups::themes::ThemesMode::Edit {
+                            if let Some(edit) = app.themes_edit.as_mut() {
+                                edit.scroll_roles(wheel_delta.signum() as i32);
+                            }
+                        } else {
+                            themes_popup_handle_vert(app, wheel_delta.signum() as i32);
+                        }
                     }
                     WheelTarget::Swallow => {}
                     WheelTarget::TabStrip => {
@@ -2006,6 +2017,40 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
                 edit.focus = EditFocus::Role;
             }
         }
+        return;
+    }
+
+    let pal = popups::themes::palette_area(popup);
+    if let Some(i) = crate::ui::color_picker::hit_swatch(pal, x as u16, y as u16) {
+        if let Some(edit) = app.themes_edit.as_mut() {
+            edit.apply_swatch_at(i);
+            edit.focus = EditFocus::Palette;
+        }
+        return;
+    }
+
+    for ch in 0u8..3 {
+        if y as u16 != popups::themes::slider_row_y(popup, ch) {
+            continue;
+        }
+        let bar = popups::themes::slider_bar_area(popup, ch);
+        let (channel, focus) = match ch {
+            0 => (crate::ui::color_picker::Channel::R, EditFocus::SliderR),
+            1 => (crate::ui::color_picker::Channel::G, EditFocus::SliderG),
+            _ => (crate::ui::color_picker::Channel::B, EditFocus::SliderB),
+        };
+        if let Some(edit) = app.themes_edit.as_mut() {
+            edit.focus = focus;
+            let col = x as u16;
+            if col >= bar.x && col < bar.x.saturating_add(bar.width) {
+                let v = crate::ui::color_picker::slider_value_at_x(
+                    col.saturating_sub(bar.x),
+                    crate::ui::color_picker::SLIDER_BAR_W,
+                );
+                edit.set_channel_value(channel, v);
+            }
+        }
+        return;
     }
 }
 
@@ -3055,6 +3100,9 @@ mod wheel_target_tests {
     fn wheel_target_is_focused_popup_not_editor() {
         let mut app = App::new(&[]);
         assert_eq!(wheel_target(&app, 0, 10), WheelTarget::Editor);
+        app.open_themes();
+        assert_eq!(wheel_target(&app, 0, 10), WheelTarget::Themes);
+        app.close_themes();
         app.open_configure();
         assert_eq!(wheel_target(&app, 0, 10), WheelTarget::Swallow);
         app.close_configure();

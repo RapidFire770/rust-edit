@@ -21,7 +21,7 @@ use ratatui::Frame;
 
 use crate::theme::{ColorDef, Theme};
 use crate::ui::color_picker::{
-    adjust_channel, premade, Channel, SLIDER_BAR_W, SWATCH_COLS, SWATCH_ROWS,
+    adjust_channel, premade, swatch_rect, to_rgb, Channel, SLIDER_BAR_W, SWATCH_COLS, SWATCH_ROWS,
 };
 use crate::App;
 
@@ -231,6 +231,28 @@ impl ThemeEditState {
             return;
         };
         self.apply_color(swatch.color.clone());
+    }
+
+    /// Select premade swatch `i` and apply it to the current role.
+    pub fn apply_swatch_at(&mut self, i: usize) {
+        let swatches = premade();
+        let Some(swatch) = swatches.get(i) else {
+            return;
+        };
+        self.palette_index = i;
+        self.apply_color(swatch.color.clone());
+    }
+
+    /// Set one RGB channel of the selected role, storing the result as `ColorDef::Rgb`.
+    pub fn set_channel_value(&mut self, ch: Channel, value: u8) {
+        let current = field_value(&self.theme, self.role_selected);
+        let (r, g, b) = to_rgb(&current);
+        let next = match ch {
+            Channel::R => ColorDef::Rgb(value, g, b),
+            Channel::G => ColorDef::Rgb(r, value, b),
+            Channel::B => ColorDef::Rgb(r, g, value),
+        };
+        self.apply_color(next);
     }
 
     fn move_focus_vert(&mut self, dir: i32) {
@@ -479,6 +501,16 @@ pub fn palette_area(popup: Rect) -> Rect {
 
 pub fn slider_row_y(popup: Rect, channel: u8) -> u16 {
     inner_row_y(popup, 15 + u16::from(channel.min(2)))
+}
+
+/// Screen rect of the 16-cell RGB slider bar for `channel` (0=R, 1=G, 2=B).
+/// Starts after the `"R ["` prefix (3 columns). Shared by render and mouse.
+pub fn slider_bar_area(popup: Rect, channel: u8) -> Rect {
+    let y = slider_row_y(popup, channel);
+    let x = inner_x(popup).saturating_add(3);
+    let inner_end = inner_x(popup).saturating_add(inner_width(popup));
+    let max_w = inner_end.saturating_sub(x);
+    Rect::new(x, y, SLIDER_BAR_W.min(max_w), 1)
 }
 
 pub fn hex_row_y(popup: Rect) -> u16 {
@@ -738,6 +770,89 @@ fn clip_spans(spans: Vec<Span>, width: u16) -> Vec<Span> {
     out
 }
 
+fn palette_row_spans(
+    popup: Rect,
+    edit: &ThemeEditState,
+    row: u16,
+    accent: Style,
+) -> Vec<Span<'static>> {
+    let pal = palette_area(popup);
+    let width = pal.width as usize;
+    if width == 0 {
+        return Vec::new();
+    }
+    let mut styles = vec![Style::default(); width];
+    let swatches = premade();
+    let start = usize::from(row).saturating_mul(usize::from(SWATCH_COLS));
+    let end = start.saturating_add(usize::from(SWATCH_COLS));
+    for i in start..end {
+        let Some(r) = swatch_rect(pal, i) else {
+            continue;
+        };
+        let Some(swatch) = swatches.get(i) else {
+            continue;
+        };
+        let mut style = Style::default().bg(Color::from(&swatch.color));
+        if edit.focus == EditFocus::Palette && edit.palette_index == i {
+            style = style.patch(accent).add_modifier(Modifier::REVERSED);
+        }
+        let local = r.x.saturating_sub(pal.x) as usize;
+        for k in 0..usize::from(r.width) {
+            if let Some(slot) = styles.get_mut(local.saturating_add(k)) {
+                *slot = style;
+            }
+        }
+    }
+    coalesce_style_cells(&styles)
+}
+
+fn coalesce_style_cells(styles: &[Style]) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < styles.len() {
+        let style = styles[i];
+        let mut n = 1;
+        while i + n < styles.len() && styles[i + n] == style {
+            n += 1;
+        }
+        spans.push(Span::styled(" ".repeat(n), style));
+        i += n;
+    }
+    spans
+}
+
+fn slider_line(
+    label: char,
+    value: u8,
+    focused: bool,
+    accent: Style,
+    dim: Style,
+    dim_dim: Style,
+) -> Line<'static> {
+    let prefix_style = if focused { accent } else { dim };
+    let bar_w = usize::from(SLIDER_BAR_W);
+    let thumb_at = if bar_w <= 1 {
+        0
+    } else {
+        (usize::from(value) * (bar_w - 1)) / 255
+    };
+    let thumb_style = if focused { accent } else { dim };
+    let mut spans = vec![
+        Span::styled(format!("{label} "), prefix_style),
+        Span::styled("[", dim),
+    ];
+    for i in 0..bar_w {
+        if i == thumb_at {
+            spans.push(Span::styled("●", thumb_style));
+        } else {
+            spans.push(Span::styled("─", dim_dim));
+        }
+    }
+    spans.push(Span::styled("]", dim));
+    spans.push(Span::styled(format!(" {value}"), dim));
+    Line::from(spans)
+}
+
 fn preview_sample_lines(preview_theme: &Theme) -> Vec<Line<'static>> {
     vec![
         Line::from(vec![
@@ -890,12 +1005,13 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
             let style = if active { accent } else { dim };
             let marker = if active { ">" } else { " " };
             let label_padded = format!("{:<14}", label);
-            let value_str = color_buf_for(&field_value(&edit.theme, idx));
-            // Two cells reserved for a future swatch (Task 4).
+            let value = field_value(&edit.theme, idx);
+            let value_str = color_buf_for(&value);
             vec![
                 Span::styled(format!("{marker} "), style),
-                Span::raw("  "),
                 Span::styled(label_padded, style),
+                Span::raw(" "),
+                Span::styled("  ", Style::default().bg(Color::from(&value))),
                 Span::styled(format!(" {value_str}"), dim),
             ]
         } else {
@@ -913,28 +1029,32 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
     } else {
         dim
     };
-    let slider_style = |focus: EditFocus| {
-        if edit.focus == focus {
-            accent
-        } else {
-            dim
-        }
-    };
-    // Labels only; Task 4 paints chips / bars. SLIDER_BAR_W reserves bar columns.
-    let slider_pad = " ".repeat(usize::from(SLIDER_BAR_W));
     let palette_line = Line::from(Span::styled("Palette", palette_style));
-    let r_line = Line::from(Span::styled(
-        format!("R {slider_pad}"),
-        slider_style(EditFocus::SliderR),
-    ));
-    let g_line = Line::from(Span::styled(
-        format!("G {slider_pad}"),
-        slider_style(EditFocus::SliderG),
-    ));
-    let b_line = Line::from(Span::styled(
-        format!("B {slider_pad}"),
-        slider_style(EditFocus::SliderB),
-    ));
+    let (sr, sg, sb) = to_rgb(&field_value(&edit.theme, edit.role_selected));
+    let r_line = slider_line(
+        'R',
+        sr,
+        edit.focus == EditFocus::SliderR,
+        accent,
+        dim,
+        dim_dim,
+    );
+    let g_line = slider_line(
+        'G',
+        sg,
+        edit.focus == EditFocus::SliderG,
+        accent,
+        dim,
+        dim_dim,
+    );
+    let b_line = slider_line(
+        'B',
+        sb,
+        edit.focus == EditFocus::SliderB,
+        accent,
+        dim,
+        dim_dim,
+    );
 
     let hex_style = if edit.focus == EditFocus::Hex {
         accent
@@ -978,8 +1098,8 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
     lines.extend(role_preview_lines); // n=3..10
     lines.push(Line::from("")); // n=11
     lines.push(palette_line); // n=12
-    lines.push(Line::from("")); // n=13 swatch row (Task 4)
-    lines.push(Line::from("")); // n=14 swatch row (Task 4)
+    lines.push(Line::from(palette_row_spans(popup, edit, 0, accent))); // n=13
+    lines.push(Line::from(palette_row_spans(popup, edit, 1, accent))); // n=14
     lines.push(r_line); // n=15
     lines.push(g_line); // n=16
     lines.push(b_line); // n=17
@@ -1163,5 +1283,53 @@ mod tests {
         assert_eq!(roles_area(popup).height, ROLE_VISIBLE);
         assert_eq!(footer_row_y(popup), popup.y + 1 + 19);
         assert_eq!(name_row_y(popup), popup.y + 1);
+    }
+
+    #[test]
+    fn slider_bar_area_matches_row_and_width() {
+        let popup = edit_rect(Rect::new(0, 0, 80, 24));
+        for ch in 0u8..3 {
+            let bar = slider_bar_area(popup, ch);
+            assert_eq!(bar.width, SLIDER_BAR_W, "ch={ch}");
+            assert_eq!(bar.y, slider_row_y(popup, ch), "ch={ch}");
+            assert_eq!(bar.height, 1, "ch={ch}");
+            assert_eq!(bar.x, popup.x + 1 + 3, "ch={ch}");
+        }
+    }
+
+    #[test]
+    fn palette_area_hit_swatch_0_and_12() {
+        use crate::ui::color_picker::{hit_swatch, swatch_rect};
+        let popup = edit_rect(Rect::new(0, 0, 80, 24));
+        let pal = palette_area(popup);
+        let r0 = swatch_rect(pal, 0).expect("swatch 0 fits");
+        let r12 = swatch_rect(pal, 12).expect("swatch 12 fits");
+        assert_eq!(hit_swatch(pal, r0.x, r0.y), Some(0));
+        assert_eq!(hit_swatch(pal, r12.x, r12.y), Some(12));
+        assert_ne!(r0.y, r12.y);
+    }
+
+    #[test]
+    fn apply_swatch_at_sets_index_and_role() {
+        let mut st = ThemeEditState::new(Theme::dark_red(), Some("tmp".into()));
+        st.apply_swatch_at(12);
+        assert_eq!(st.palette_index, 12);
+        let expected = premade()[12].color.clone();
+        assert_eq!(st.theme.header_bg, expected);
+        assert_eq!(st.color_buf, color_buf_for(&expected));
+        assert!(st.dirty);
+    }
+
+    #[test]
+    fn set_channel_value_updates_header_bg_and_hex() {
+        let mut st = ThemeEditState::new(Theme::dark_red(), Some("tmp".into()));
+        // Role 0 is header_bg: dark-red firebrick #b22222 = (178, 34, 34).
+        st.set_channel_value(Channel::R, 10);
+        assert_eq!(st.theme.header_bg, ColorDef::Rgb(10, 34, 34));
+        assert_eq!(st.color_buf, "#0a2222");
+        assert!(st.dirty);
+        st.set_channel_value(Channel::G, 200);
+        assert_eq!(st.theme.header_bg, ColorDef::Rgb(10, 200, 34));
+        assert_eq!(st.color_buf, "#0ac822");
     }
 }
