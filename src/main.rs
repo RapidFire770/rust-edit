@@ -1701,14 +1701,8 @@ fn hit_button_row(x: u16, ranges: &[(u16, u16)]) -> Option<usize> {
 // Principle 2). State mutations go through `App` methods where possible.
 
 fn themes_popup_handle_vert(app: &mut App, delta: i32) {
-    use popups::themes::ThemesMode;
-    if app.themes_mode == ThemesMode::Edit {
-        if let Some(edit) = app.themes_edit.as_mut() {
-            edit.move_role(delta);
-        }
-        return;
-    }
-    // List mode: cycle through built-ins + customs.
+    // List mode only: Edit wheel calls `scroll_roles` directly; Edit arrows go
+    // through `handle_edit_key`.
     let registry = crate::themes::ThemeRegistry::load();
     let n = registry.all().len();
     if n == 0 {
@@ -1719,11 +1713,7 @@ fn themes_popup_handle_vert(app: &mut App, delta: i32) {
 }
 
 fn themes_popup_handle_enter(app: &mut App) {
-    use popups::themes::ThemesMode;
-    if app.themes_mode == ThemesMode::Edit {
-        themes_popup_try_save(app);
-        return;
-    }
+    // List mode only: Edit Enter is handled by `handle_edit_key`.
     app.apply_theme_by_index(app.themes_selected);
 }
 
@@ -1735,33 +1725,6 @@ fn themes_popup_handle_esc(app: &mut App) {
         app.themes_mode = ThemesMode::List;
     } else {
         app.close_themes();
-    }
-}
-
-fn themes_popup_handle_tab(app: &mut App) {
-    use popups::themes::ThemesMode;
-    if app.themes_mode == ThemesMode::Edit {
-        if let Some(edit) = app.themes_edit.as_mut() {
-            edit.cycle_focus();
-        }
-    }
-}
-
-fn themes_popup_handle_backspace(app: &mut App) {
-    if let Some(edit) = app.themes_edit.as_mut() {
-        edit.backspace();
-    }
-}
-
-fn themes_popup_handle_char(app: &mut App, ch: char) {
-    use popups::themes::EditFocus;
-    if let Some(edit) = app.themes_edit.as_mut() {
-        // Only forward printable chars in name/color fields. Role list and
-        // list-mode ignore text input.
-        match edit.focus {
-            EditFocus::Name | EditFocus::Hex => edit.type_char(ch),
-            _ => {}
-        }
     }
 }
 
@@ -2339,15 +2302,6 @@ fn handle_themes_key(code: KeyCode, app: &mut App) {
         }
         KeyCode::Char('s') => {
             themes_popup_try_save(app);
-        }
-        KeyCode::Tab => {
-            themes_popup_handle_tab(app);
-        }
-        KeyCode::Backspace => {
-            themes_popup_handle_backspace(app);
-        }
-        KeyCode::Char(ch) => {
-            themes_popup_handle_char(app, ch);
         }
         _ => {}
     }
@@ -3089,6 +3043,35 @@ mod popup_focus_key_tests {
         handle_file_browser_key(KeyCode::Char('t'), &mut app);
         handle_file_browser_key(KeyCode::Char('e'), &mut app);
         assert_eq!(app.browser_filename, "note");
+    }
+
+    #[test]
+    fn handle_themes_key_edit_mode_types_list_shortcuts_into_name() {
+        use popups::themes::{EditFocus, ThemesMode};
+
+        let mut app = App::new(&[]);
+        app.open_themes();
+        assert_eq!(app.themes_mode, ThemesMode::List);
+
+        // List-mode `e` still enters Edit.
+        handle_themes_key(KeyCode::Char('e'), &mut app);
+        assert_eq!(app.themes_mode, ThemesMode::Edit);
+        let edit = app.themes_edit.as_ref().expect("edit state after list e");
+        assert_eq!(edit.focus, EditFocus::Name);
+        let start_name = edit.name.clone();
+
+        handle_themes_key(KeyCode::Char('e'), &mut app);
+        handle_themes_key(KeyCode::Char('n'), &mut app);
+        handle_themes_key(KeyCode::Char('d'), &mut app);
+
+        assert_eq!(
+            app.themes_mode,
+            ThemesMode::Edit,
+            "e/n/d must not restart/new/delete while editing"
+        );
+        let edit = app.themes_edit.as_ref().expect("edit state after typing");
+        assert_eq!(edit.focus, EditFocus::Name);
+        assert_eq!(edit.name, format!("{start_name}end"));
     }
 }
 
