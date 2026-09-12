@@ -12,6 +12,7 @@
 
 #![allow(dead_code)]
 
+use crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -19,6 +20,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::theme::{ColorDef, Theme};
+use crate::ui::color_picker::{adjust_channel, premade, Channel, SWATCH_COLS};
 use crate::App;
 
 /// Which screen of the Themes popup is active.
@@ -35,7 +37,25 @@ pub enum EditFocus {
     #[default]
     Name,
     Role,
-    Color,
+    Palette,
+    SliderR,
+    SliderG,
+    SliderB,
+    Hex, // was Color
+}
+
+impl EditFocus {
+    pub fn is_text(self) -> bool {
+        matches!(self, EditFocus::Name | EditFocus::Hex)
+    }
+}
+
+/// Result of a single editor-mode keystroke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemesEditCmd {
+    None,
+    Save,
+    Cancel,
 }
 
 /// Editor-mode state. Owned by `App.themes_edit`; `None` while in list mode.
@@ -52,6 +72,8 @@ pub struct ThemeEditState {
     pub role_scroll: u16,
     /// Which input field currently receives keystrokes.
     pub focus: EditFocus,
+    /// Selected premade swatch (0..24).
+    pub palette_index: usize,
     /// Color-value text buffer (e.g. `#ff8800`). Validated on each keystroke.
     pub color_buf: String,
     /// Last validation error for `color_buf` (shown inline, dim red).
@@ -74,6 +96,7 @@ impl ThemeEditState {
             role_selected: role,
             role_scroll: 0,
             focus: EditFocus::Name,
+            palette_index: 0,
             color_buf: initial_color,
             color_err: None,
             dirty: false,
@@ -84,8 +107,12 @@ impl ThemeEditState {
     pub fn cycle_focus(&mut self) {
         self.focus = match self.focus {
             EditFocus::Name => EditFocus::Role,
-            EditFocus::Role => EditFocus::Color,
-            EditFocus::Color => EditFocus::Name,
+            EditFocus::Role => EditFocus::Palette,
+            EditFocus::Palette => EditFocus::SliderR,
+            EditFocus::SliderR => EditFocus::SliderG,
+            EditFocus::SliderG => EditFocus::SliderB,
+            EditFocus::SliderB => EditFocus::Hex,
+            EditFocus::Hex => EditFocus::Name,
         };
     }
 
@@ -128,7 +155,7 @@ impl ThemeEditState {
                 self.name.push(c);
                 self.dirty = true;
             }
-            EditFocus::Color => {
+            EditFocus::Hex => {
                 self.color_buf.push(c);
                 self.dirty = true;
                 // Live-preview: try to apply immediately so the preview pane
@@ -139,8 +166,12 @@ impl ThemeEditState {
                     self.color_err = None;
                 }
             }
-            EditFocus::Role => {
-                // Role list doesn't accept text; ignore.
+            EditFocus::Role
+            | EditFocus::Palette
+            | EditFocus::SliderR
+            | EditFocus::SliderG
+            | EditFocus::SliderB => {
+                // Non-text targets don't accept typed characters.
             }
         }
     }
@@ -151,7 +182,7 @@ impl ThemeEditState {
                 self.name.pop();
                 self.dirty = true;
             }
-            EditFocus::Color => {
+            EditFocus::Hex => {
                 self.color_buf.pop();
                 self.dirty = true;
                 // Refresh preview from the buffer's last valid prefix.
@@ -160,8 +191,137 @@ impl ThemeEditState {
                     self.color_err = None;
                 }
             }
-            EditFocus::Role => {}
+            EditFocus::Role
+            | EditFocus::Palette
+            | EditFocus::SliderR
+            | EditFocus::SliderG
+            | EditFocus::SliderB => {}
         }
+    }
+
+    /// Apply `color` to the selected role and refresh `color_buf`.
+    /// No-op on the fake `name` role (Task 3 drops it).
+    fn apply_color(&mut self, color: ColorDef) {
+        let Some((_, accessor)) = ROLE_FIELDS.get(self.role_selected) else {
+            return;
+        };
+        if *accessor == "name" {
+            return;
+        }
+        set_field_value(&mut self.theme, self.role_selected, color);
+        self.color_buf = color_buf_for(&field_value(&self.theme, self.role_selected));
+        self.color_err = None;
+        self.dirty = true;
+    }
+
+    fn apply_palette_swatch(&mut self) {
+        let swatches = premade();
+        let Some(swatch) = swatches.get(self.palette_index) else {
+            return;
+        };
+        self.apply_color(swatch.color.clone());
+    }
+
+    fn move_focus_vert(&mut self, dir: i32) {
+        match self.focus {
+            EditFocus::Role => self.move_role(dir),
+            EditFocus::Palette => {
+                let n = premade().len();
+                self.palette_index = wrap_index(
+                    self.palette_index,
+                    dir.saturating_mul(i32::from(SWATCH_COLS)),
+                    n,
+                );
+                self.apply_palette_swatch();
+            }
+            EditFocus::SliderR | EditFocus::SliderG | EditFocus::SliderB => {
+                self.focus = cycle_slider(self.focus, dir);
+            }
+            _ => {}
+        }
+    }
+
+    fn move_focus_horiz(&mut self, dir: i32) {
+        match self.focus {
+            EditFocus::Palette => {
+                let n = premade().len();
+                self.palette_index = wrap_index(self.palette_index, dir, n);
+                self.apply_palette_swatch();
+            }
+            EditFocus::SliderR | EditFocus::SliderG | EditFocus::SliderB => {
+                let ch = match self.focus {
+                    EditFocus::SliderR => Channel::R,
+                    EditFocus::SliderG => Channel::G,
+                    EditFocus::SliderB => Channel::B,
+                    _ => return,
+                };
+                let current = field_value(&self.theme, self.role_selected);
+                let next = adjust_channel(&current, ch, (dir * 8) as i16);
+                self.apply_color(next);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn wrap_index(idx: usize, delta: i32, n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    let n = n as i32;
+    (idx as i32 + delta).rem_euclid(n) as usize
+}
+
+fn cycle_slider(focus: EditFocus, dir: i32) -> EditFocus {
+    match (focus, dir.signum()) {
+        (EditFocus::SliderR, 1) => EditFocus::SliderG,
+        (EditFocus::SliderG, 1) => EditFocus::SliderB,
+        (EditFocus::SliderB, 1) => EditFocus::SliderR,
+        (EditFocus::SliderR, -1) => EditFocus::SliderB,
+        (EditFocus::SliderG, -1) => EditFocus::SliderR,
+        (EditFocus::SliderB, -1) => EditFocus::SliderG,
+        (other, _) => other,
+    }
+}
+
+/// Route an editor-mode keystroke. List-mode shortcuts must not be handled here.
+pub fn handle_edit_key(edit: &mut ThemeEditState, code: KeyCode) -> ThemesEditCmd {
+    match code {
+        KeyCode::Esc => ThemesEditCmd::Cancel,
+        KeyCode::Enter => {
+            let _ = edit.commit_color();
+            ThemesEditCmd::Save
+        }
+        KeyCode::Tab => {
+            edit.cycle_focus();
+            ThemesEditCmd::None
+        }
+        KeyCode::Backspace => {
+            edit.backspace();
+            ThemesEditCmd::None
+        }
+        KeyCode::Up | KeyCode::Char('k') if !edit.focus.is_text() => {
+            edit.move_focus_vert(-1);
+            ThemesEditCmd::None
+        }
+        KeyCode::Down | KeyCode::Char('j') if !edit.focus.is_text() => {
+            edit.move_focus_vert(1);
+            ThemesEditCmd::None
+        }
+        KeyCode::Left if !edit.focus.is_text() => {
+            edit.move_focus_horiz(-1);
+            ThemesEditCmd::None
+        }
+        KeyCode::Right if !edit.focus.is_text() => {
+            edit.move_focus_horiz(1);
+            ThemesEditCmd::None
+        }
+        KeyCode::Char('s') if !edit.focus.is_text() => ThemesEditCmd::Save,
+        KeyCode::Char(c) if edit.focus.is_text() => {
+            edit.type_char(c);
+            ThemesEditCmd::None
+        }
+        _ => ThemesEditCmd::None,
     }
 }
 
@@ -671,7 +831,7 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
         Span::styled("]", name_style),
     ]));
 
-    let color_focus = edit.focus == EditFocus::Color;
+    let color_focus = edit.focus == EditFocus::Hex;
     let color_style = if color_focus { accent } else { dim };
     let (selected_label, _) = ROLE_FIELDS[edit.role_selected];
     let err_span = match &edit.color_err {
@@ -765,5 +925,92 @@ mod tests {
         for i in 0..ROLE_FIELDS.len() {
             let _ = field_value(&theme, i);
         }
+    }
+
+    #[test]
+    fn name_field_accepts_letters_used_as_list_shortcuts() {
+        let mut st = ThemeEditState::new(Theme::dark_red(), Some(String::new()));
+        st.focus = EditFocus::Name;
+        for c in ['e', 'n', 'd', 's', 'j', 'k'] {
+            let cmd = handle_edit_key(&mut st, KeyCode::Char(c));
+            assert_eq!(cmd, ThemesEditCmd::None);
+        }
+        assert_eq!(st.name, "endsjk");
+    }
+
+    #[test]
+    fn hex_field_accepts_d_and_does_not_reset_draft() {
+        let mut st = ThemeEditState::new(Theme::dark_red(), Some("tmp".into()));
+        st.focus = EditFocus::Hex;
+        st.role_selected = 1; // header_bg
+        st.color_buf.clear();
+        for c in ['#', 'd', 'd', '0', '0', '0', '0'] {
+            handle_edit_key(&mut st, KeyCode::Char(c));
+        }
+        assert_eq!(st.color_buf, "#dd0000");
+        assert_eq!(st.name, "tmp");
+    }
+
+    #[test]
+    fn s_saves_from_role_focus_not_from_name() {
+        let mut st = ThemeEditState::new(Theme::dark_red(), Some("tmp".into()));
+        st.focus = EditFocus::Name;
+        assert_eq!(
+            handle_edit_key(&mut st, KeyCode::Char('s')),
+            ThemesEditCmd::None
+        );
+        assert_eq!(st.name, "tmps");
+        st.focus = EditFocus::Role;
+        assert_eq!(
+            handle_edit_key(&mut st, KeyCode::Char('s')),
+            ThemesEditCmd::Save
+        );
+    }
+
+    #[test]
+    fn cycle_focus_visits_all_edit_targets() {
+        let mut st = ThemeEditState::new(Theme::dark_red(), Some(String::new()));
+        assert_eq!(st.focus, EditFocus::Name);
+        let order = [
+            EditFocus::Role,
+            EditFocus::Palette,
+            EditFocus::SliderR,
+            EditFocus::SliderG,
+            EditFocus::SliderB,
+            EditFocus::Hex,
+            EditFocus::Name,
+        ];
+        for expected in order {
+            st.cycle_focus();
+            assert_eq!(st.focus, expected);
+        }
+    }
+
+    #[test]
+    fn palette_right_applies_premade_to_color_role() {
+        let mut st = ThemeEditState::new(Theme::dark_red(), Some("tmp".into()));
+        st.focus = EditFocus::Palette;
+        st.role_selected = 1; // header_bg
+        let cmd = handle_edit_key(&mut st, KeyCode::Right);
+        assert_eq!(cmd, ThemesEditCmd::None);
+        assert_eq!(st.palette_index, 1);
+        let expected = premade()[1].color.clone();
+        assert_eq!(st.theme.header_bg, expected);
+        assert_eq!(st.color_buf, color_buf_for(&expected));
+        assert!(st.color_err.is_none());
+        assert!(st.dirty);
+    }
+
+    #[test]
+    fn esc_cancels_and_enter_saves() {
+        let mut st = ThemeEditState::new(Theme::dark_red(), Some("tmp".into()));
+        assert_eq!(
+            handle_edit_key(&mut st, KeyCode::Esc),
+            ThemesEditCmd::Cancel
+        );
+        assert_eq!(
+            handle_edit_key(&mut st, KeyCode::Enter),
+            ThemesEditCmd::Save
+        );
     }
 }

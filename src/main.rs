@@ -1748,8 +1748,8 @@ fn themes_popup_handle_char(app: &mut App, ch: char) {
         // Only forward printable chars in name/color fields. Role list and
         // list-mode ignore text input.
         match edit.focus {
-            EditFocus::Name | EditFocus::Color => edit.type_char(ch),
-            EditFocus::Role => {}
+            EditFocus::Name | EditFocus::Hex => edit.type_char(ch),
+            _ => {}
         }
     }
 }
@@ -1974,7 +1974,7 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
                 use popups::themes::field_value;
                 edit.color_buf = color_buf_for(&field_value(&edit.theme, edit.role_selected));
                 edit.color_err = None;
-                edit.focus = popups::themes::EditFocus::Color;
+                edit.focus = popups::themes::EditFocus::Hex;
             }
         }
     }
@@ -2227,6 +2227,20 @@ fn handle_configure_key(code: KeyCode, app: &mut App) {
 }
 
 fn handle_themes_key(code: KeyCode, app: &mut App) {
+    use popups::themes::{ThemesEditCmd, ThemesMode};
+    if app.themes_mode == ThemesMode::Edit {
+        let cmd = if let Some(edit) = app.themes_edit.as_mut() {
+            popups::themes::handle_edit_key(edit, code)
+        } else {
+            return;
+        };
+        match cmd {
+            ThemesEditCmd::Save => themes_popup_try_save(app),
+            ThemesEditCmd::Cancel => themes_popup_handle_esc(app),
+            ThemesEditCmd::None => {}
+        }
+        return;
+    }
     match code {
         KeyCode::Esc => {
             themes_popup_handle_esc(app);
