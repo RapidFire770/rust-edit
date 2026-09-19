@@ -474,6 +474,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             for event in events.clone() {
                 match event {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        app.format_status = None;
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             if app.popup_is_open() {
                                 match popup_ctrl_action(key.code, app) {
@@ -1287,6 +1288,10 @@ fn handle_help_click(x: usize, y: usize, app: &mut App) {
 fn handle_mouse(mouse: MouseEvent, app: &mut App) {
     let (x, y) = (mouse.column, mouse.row);
     app.last_mouse_pos = Some((x, y));
+
+    if matches!(mouse.kind, MouseEventKind::Down(_)) {
+        app.format_status = None;
+    }
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
@@ -2481,7 +2486,13 @@ fn ui(f: &mut Frame, app: &mut App) {
         );
     }
     if app.show_word_count {
-        popups::word_count::render(f, area, app.current_theme(), &app.word_count_text);
+        popups::word_count::render(
+            f,
+            area,
+            app.current_theme(),
+            &app.info_popup_title,
+            &app.word_count_text,
+        );
     }
 
     if app.show_configure {

@@ -1,4 +1,4 @@
-// Word count popup.
+// Titled info popup (Word Count, format errors, …).
 
 #![allow(dead_code)]
 
@@ -10,9 +10,9 @@ use ratatui::Frame;
 
 use crate::theme::Theme;
 
-pub fn render(f: &mut Frame, area: Rect, theme: &Theme, text: &str) {
+pub fn render(f: &mut Frame, area: Rect, theme: &Theme, title: &str, text: &str) {
     let block = Block::default()
-        .title("Word Count")
+        .title(title)
         .borders(Borders::ALL)
         .style(theme.editor_bg_style());
 
@@ -22,7 +22,8 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, text: &str) {
         .block(block)
         .style(Style::default().fg(Color::from(&theme.editor_fg)));
 
-    let w = 40u16;
+    let longest = text.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+    let w = (longest.saturating_add(4).clamp(40, 72) as u16).min(area.width);
     let h = (text.lines().count() as u16 + 4).min(20);
     let x = (area.width.saturating_sub(w)) / 2;
     let y = (area.height.saturating_sub(h)) / 2;

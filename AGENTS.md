@@ -3,7 +3,7 @@
 **Project:** Rust-Edit — Feature-rich terminal text & code editor (TUI)  
 **Primary Framework:** Ratatui v0.30+  
 **Status:** Phase 1 complete (June 2026). MVP + high-value additions shipped.   
-**Last Updated:** September 12, 2026
+**Last Updated:** September 19, 2026
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
 
@@ -157,6 +157,7 @@ rust-edit/
 - Syntax highlighting: `HighlightCache` (`src/highlight_cache.rs`) stores syntect `ParseState`/`HighlightState` checkpoints every 64 lines plus an overscanned span window and a frontier. `App::refresh_highlight_cache` is a cache fill, not a full viewport reparse. Scrolling inside the padded window is a hit. Mid-file multi-line constructs resume from the last checkpoint — never `HighlightLines::new` at the viewport. Cache key is `(language, generation, Buffer.id)` so two gen-0 tabs cannot alias. Under wrap, `wrap::visible_logical_window` translates the screen-row scroll into a logical-line window (clamping past-end scroll to the last page). Syntect rayon-style parallel highlighting is not used for a single buffer (grammars are sequential). A background highlight thread is deferred until large-file *jumps* still hitch after checkpoints exist. `editor.rs` reads `line_spans` and paints via `ui::spans::paint_line_spans` (batched tokens, not per-character Spans). `render_wrapped` uses `wrap::first_logical_line_for_screen_row` so cache fill and paint cannot disagree on the first visible logical line.
 - Event coalescing: `run_app` drains queued events and sums consecutive mouse-wheel deltas into one scroll → one redraw per burst.
 - Popup focus: at most one centered popup owns input (`App::popup_focus`). Other popups cannot open. Global shortcuts are swallowed except Ctrl+Q. Quit confirm paints last and stacks on top of the current popup without dismissing it. File browser may stack only on the file dialog (Browse…). Save As browse has a Name field plus `[ Use folder ]` (joins cwd + the typed filename; never invents `untitled`). Open browse still only confirms files. Mouse and wheel follow `popup_focus`, not independent `show_*` flags.
+- Info popup / format notice: `show_word_count` + `word_count_text` + `info_popup_title`. Word Count sets the title to `"Word Count"`; `App::show_info_popup(title, body)` reuses the same popup (`PopupFocus::WordCount`) for format errors. It is a no-op if another popup is already focused. `format_status: Option<String>` is a transient status-bar notice that replaces the `Ctrl+Q quit | F1 help` hint; `run_app` clears it on Key Press and Mouse Down before dispatching.
 - Themes popup: List vs Edit. Edit has Name, 16 color roles (name is NOT a role), premade swatches, RGB sliders, hex. `handle_edit_key` owns Edit keystrokes; list shortcuts `e/n/d` must not run in Edit. Geometry helpers in `themes.rs` are the single paint/hit-test source (like Configure).
 
 ---

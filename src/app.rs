@@ -23,6 +23,8 @@ pub struct App {
     pub find_state: Option<FindState>,
     pub show_word_count: bool,
     pub word_count_text: String,
+    pub info_popup_title: String,
+    pub format_status: Option<String>,
     /// Active tab in the help popup.
     pub help_tab: crate::ui::popups::help::HelpTab,
     /// Scroll offset (row, col) for the help popup content. Used to scroll the
@@ -192,6 +194,8 @@ impl App {
             find_state: None,
             show_word_count: false,
             word_count_text: String::new(),
+            info_popup_title: "Word Count".into(),
+            format_status: None,
             help_tab: crate::ui::popups::help::HelpTab::default(),
             help_content_scroll: (0, 0),
             active_menu: None,
@@ -817,7 +821,17 @@ impl App {
                 sw, sc
             ));
         }
+        self.info_popup_title = "Word Count".into();
         self.word_count_text = info;
+        self.show_word_count = true;
+    }
+
+    pub fn show_info_popup(&mut self, title: &str, body: String) {
+        if self.popup_is_open() && !self.show_word_count {
+            return;
+        }
+        self.info_popup_title = title.to_string();
+        self.word_count_text = body;
         self.show_word_count = true;
     }
 
@@ -2353,6 +2367,33 @@ mod tests {
         assert!(!app.show_file_dialog);
         assert!(!app.show_word_count);
         assert!(!app.show_help);
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Configure));
+    }
+
+    #[test]
+    fn word_count_sets_info_popup_title() {
+        let mut app = App::new(&[]);
+        app.compute_and_show_word_count();
+        assert_eq!(app.info_popup_title, "Word Count");
+        assert_eq!(app.popup_focus(), Some(PopupFocus::WordCount));
+    }
+
+    #[test]
+    fn show_info_popup_reuses_word_count_focus() {
+        let mut app = App::new(&[]);
+        app.show_info_popup("Format Document", "rustfmt failed".into());
+        assert_eq!(app.info_popup_title, "Format Document");
+        assert_eq!(app.word_count_text, "rustfmt failed");
+        assert_eq!(app.popup_focus(), Some(PopupFocus::WordCount));
+    }
+
+    #[test]
+    fn show_info_popup_does_not_steal_other_popups() {
+        let mut app = App::new(&[]);
+        app.open_configure();
+        app.show_info_popup("Format Document", "nope".into());
+        assert!(app.show_configure);
+        assert!(!app.show_word_count);
         assert_eq!(app.popup_focus(), Some(PopupFocus::Configure));
     }
 
