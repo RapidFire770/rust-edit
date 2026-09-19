@@ -1206,7 +1206,8 @@ impl App {
     }
 
     pub fn reload_buffer(&mut self, idx: usize) -> Result<(), String> {
-        let path = self.buffers
+        let path = self
+            .buffers
             .get(idx)
             .and_then(|b| b.path.clone())
             .ok_or_else(|| "no path".to_string())?;
