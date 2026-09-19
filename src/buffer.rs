@@ -107,6 +107,15 @@ pub struct Buffer {
     /// Unique identity for this buffer instance. Used as the highlight-cache
     /// `source` so two gen-0 files cannot alias each other.
     pub id: u64,
+    /// Last accepted on-disk identity. `None` for untitled buffers, or after
+    /// the file disappeared and we have already recorded that.
+    pub disk_stamp: Option<crate::file_watch::FileStamp>,
+    /// Session-only: skip the reload prompt for future *clean* external
+    /// changes to this buffer. Set by `[ Always ]`. Never persisted.
+    pub auto_reload: bool,
+    /// True after we have shown a "deleted on disk" notice for the current
+    /// missing streak, so we do not spam the status bar.
+    pub disk_gone_notified: bool,
 
     /// Undo stack (full state snapshots for robust undo of text + caret + view).
     #[allow(clippy::type_complexity)]
@@ -145,6 +154,9 @@ impl Buffer {
             max_line_width: 0,
             max_line_width_gen: u64::MAX,
             id: next_buffer_id(),
+            disk_stamp: None,
+            auto_reload: false,
+            disk_gone_notified: false,
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
             max_undo: 100,
@@ -164,6 +176,9 @@ impl Buffer {
             .as_ref()
             .map(|p| Language::from_path(p.as_ref()))
             .unwrap_or_default();
+        let disk_stamp = path
+            .as_ref()
+            .and_then(|p| crate::file_watch::FileStamp::of(p));
         Self {
             rope,
             path,
@@ -182,6 +197,9 @@ impl Buffer {
             max_line_width: 0,
             max_line_width_gen: u64::MAX,
             id: next_buffer_id(),
+            disk_stamp,
+            auto_reload: false,
+            disk_gone_notified: false,
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
             max_undo: 100,
@@ -927,11 +945,20 @@ impl Buffer {
         self.adjust_scroll();
     }
 
+    /// Replace the document from disk contents. One undo snapshot, cursor
+    /// remapped like `replace_document`, then `is_modified = false`.
+    pub fn reload_from(&mut self, new_text: &str) {
+        self.replace_document(new_text);
+        self.is_modified = false;
+    }
+
     /// Set path + re-detect language + clear modified.
     pub fn set_path(&mut self, path: PathBuf) {
         self.language = Language::from_path(&path);
+        self.disk_stamp = crate::file_watch::FileStamp::of(&path);
         self.path = Some(path);
         self.is_modified = false;
+        self.disk_gone_notified = false;
     }
 
     // ===== Word-wrap-aware scroll/cursor helpers =====
@@ -1835,5 +1862,44 @@ mod tests {
         b.replace_document("abcdef\n");
         assert!(b.selection.is_none());
         assert!(b.selection_anchor.is_none());
+    }
+
+    #[test]
+    fn from_str_with_path_captures_disk_stamp() {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "rust-edit-buf-stamp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&p, "hi\n").unwrap();
+        let b = Buffer::from_str("hi\n", Some(p.clone()));
+        assert_eq!(b.disk_stamp, crate::file_watch::FileStamp::of(&p));
+        assert!(!b.auto_reload);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn from_str_without_path_has_no_stamp() {
+        let b = Buffer::from_str("x", None);
+        assert!(b.disk_stamp.is_none());
+    }
+
+    #[test]
+    fn reload_from_replaces_text_clears_modified_keeps_id() {
+        let mut b = Buffer::from_str("old\n", None);
+        let id = b.id;
+        b.cursor = b.rope.len_bytes();
+        b.insert("!");
+        assert!(b.is_modified);
+        b.reload_from("new\n");
+        assert_eq!(b.text(), "new\n");
+        assert!(!b.is_modified);
+        assert_eq!(b.id, id);
+        b.undo();
+        assert_eq!(b.text(), "old\n!");
     }
 }

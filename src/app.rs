@@ -471,6 +471,8 @@ impl App {
         if let Some(ref path) = buf.path.clone() {
             if std::fs::write(path, buf.text()).is_ok() {
                 buf.is_modified = false;
+                buf.disk_stamp = crate::file_watch::FileStamp::of(path);
+                buf.disk_gone_notified = false;
                 // Remember the directory for future Save As operations
                 if let Some(parent) = path.parent() {
                     self.last_save_directory = Some(parent.to_path_buf());
