@@ -201,6 +201,20 @@ fn read_pipe_thread<R: Read + Send + 'static>(pipe: Option<R>) -> mpsc::Receiver
     rx
 }
 
+fn recv_until(rx: mpsc::Receiver<Vec<u8>>, deadline: Instant) -> Result<Vec<u8>, RunError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let wait = if remaining.is_zero() {
+        Duration::from_millis(1)
+    } else {
+        remaining
+    };
+    match rx.recv_timeout(wait) {
+        Ok(buf) => Ok(buf),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(RunError::TimedOut),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Ok(Vec::new()),
+    }
+}
+
 impl CommandRunner for SystemRunner {
     fn run(&self, spec: &CommandSpec, stdin: &str) -> Result<CommandOutput, RunError> {
         let mut cmd = Command::new(spec.program);
@@ -256,8 +270,20 @@ impl CommandRunner for SystemRunner {
             }
         };
 
-        let stdout = stdout_rx.recv().unwrap_or_default();
-        let stderr = stderr_rx.recv().unwrap_or_default();
+        let stdout = match recv_until(stdout_rx, deadline) {
+            Ok(buf) => buf,
+            Err(err) => {
+                let _ = child.kill();
+                return Err(err);
+            }
+        };
+        let stderr = match recv_until(stderr_rx, deadline) {
+            Ok(buf) => buf,
+            Err(err) => {
+                let _ = child.kill();
+                return Err(err);
+            }
+        };
         Ok(CommandOutput {
             status_ok: status.success(),
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -661,6 +687,7 @@ mod orchestrate_tests {
 #[cfg(test)]
 mod system_runner_tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn missing_binary_is_not_found() {
@@ -703,5 +730,43 @@ mod system_runner_tests {
             cwd: None,
         };
         assert_eq!(SystemRunner.run(&spec, ""), Err(RunError::TimedOut));
+    }
+
+    #[test]
+    fn empty_cwd_still_echoes_stdin() {
+        let spec = CommandSpec {
+            program: "cat",
+            args: vec![],
+            cwd: Some(PathBuf::from("")),
+        };
+        let out = SystemRunner.run(&spec, "hello\n").unwrap();
+        assert!(out.status_ok);
+        assert_eq!(out.stdout, "hello\n");
+    }
+
+    #[test]
+    fn recv_until_times_out_when_sender_holds() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let deadline = Instant::now() + Duration::from_millis(50);
+        assert_eq!(recv_until(rx, deadline), Err(RunError::TimedOut));
+        drop(tx);
+    }
+
+    #[test]
+    fn recv_until_empty_on_disconnect() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        drop(tx);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        assert_eq!(recv_until(rx, deadline), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn recv_until_past_deadline_does_not_hang() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let deadline = Instant::now() - Duration::from_secs(1);
+        let started = Instant::now();
+        assert_eq!(recv_until(rx, deadline), Err(RunError::TimedOut));
+        assert!(started.elapsed() < Duration::from_millis(100));
+        drop(tx);
     }
 }
