@@ -365,16 +365,13 @@ mod spec_tests {
 #[cfg(test)]
 mod orchestrate_tests {
     use super::*;
-    use std::cell::RefCell;
 
     struct MockRunner {
         result: Result<CommandOutput, RunError>,
-        last_program: RefCell<Option<String>>,
     }
 
     impl CommandRunner for MockRunner {
-        fn run(&self, spec: &CommandSpec, _stdin: &str) -> Result<CommandOutput, RunError> {
-            *self.last_program.borrow_mut() = Some(spec.program.to_string());
+        fn run(&self, _spec: &CommandSpec, _stdin: &str) -> Result<CommandOutput, RunError> {
             self.result.clone()
         }
     }
@@ -392,7 +389,6 @@ mod orchestrate_tests {
     fn missing_tool_falls_back_to_builtin() {
         let runner = MockRunner {
             result: Err(RunError::NotFound),
-            last_program: RefCell::new(None),
         };
         let out = format_document(rust_req("fn main(){  }\t\n"), &runner);
         match out {
@@ -413,7 +409,6 @@ mod orchestrate_tests {
                 stdout: formatted.into(),
                 stderr: String::new(),
             }),
-            last_program: RefCell::new(None),
         };
         let out = format_document(rust_req("fn main(){}\n"), &runner);
         assert_eq!(
@@ -434,7 +429,6 @@ mod orchestrate_tests {
                 stdout: src.into(),
                 stderr: String::new(),
             }),
-            last_program: RefCell::new(None),
         };
         assert_eq!(
             format_document(rust_req(src), &runner),
@@ -446,15 +440,20 @@ mod orchestrate_tests {
 
     #[test]
     fn tool_failure_does_not_apply_builtin() {
+        let stdout = "fn main() {}\n";
         let runner = MockRunner {
             result: Ok(CommandOutput {
                 status_ok: false,
-                stdout: String::new(),
+                stdout: stdout.into(),
                 stderr: "error: this file doesn't compile".into(),
             }),
-            last_program: RefCell::new(None),
         };
-        match format_document(rust_req("fn main(){"), &runner) {
+        let out = format_document(rust_req("fn main(){"), &runner);
+        assert!(
+            !matches!(&out, FormatOutcome::Changed { text, .. } if text == stdout),
+            "failed tool stdout must not be applied: {out:?}"
+        );
+        match out {
             FormatOutcome::Failed { message } => {
                 assert!(message.contains("doesn't compile"), "{message}");
                 assert!(message.contains("rustfmt"), "{message}");
@@ -471,7 +470,6 @@ mod orchestrate_tests {
                 stdout: String::new(),
                 stderr: String::new(),
             }),
-            last_program: RefCell::new(None),
         };
         assert!(matches!(
             format_document(rust_req("fn main() {}\n"), &runner),
@@ -487,7 +485,6 @@ mod orchestrate_tests {
                 stdout: String::new(),
                 stderr: String::new(),
             }),
-            last_program: RefCell::new(None),
         };
         assert!(matches!(
             format_document(rust_req("\n"), &runner),
@@ -503,7 +500,6 @@ mod orchestrate_tests {
                 stdout: "\n".into(),
                 stderr: String::new(),
             }),
-            last_program: RefCell::new(None),
         };
         assert_eq!(
             format_document(rust_req("fn main() {}\n"), &runner),
@@ -518,13 +514,30 @@ mod orchestrate_tests {
     fn timeout_is_failure_not_fallback() {
         let runner = MockRunner {
             result: Err(RunError::TimedOut),
-            last_program: RefCell::new(None),
         };
         match format_document(rust_req("fn main() {}\n"), &runner) {
             FormatOutcome::Failed { message } => {
                 assert!(message.to_lowercase().contains("timed out"))
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn io_error_is_failure_not_fallback() {
+        let runner = MockRunner {
+            result: Err(RunError::Io("broken pipe".into())),
+        };
+        match format_document(rust_req("fn main(){  }\t\n"), &runner) {
+            FormatOutcome::Failed { message } => {
+                assert!(message.contains("rustfmt"), "{message}");
+                assert!(message.contains("broken pipe"), "{message}");
+            }
+            FormatOutcome::Changed {
+                via: FormatVia::Builtin,
+                ..
+            } => panic!("IO error must not fall back to builtin"),
+            other => panic!("expected Failed, got {other:?}"),
         }
     }
 
