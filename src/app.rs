@@ -424,10 +424,12 @@ impl App {
         if self.buffers.len() <= 1 {
             self.buffers[0] = Buffer::placeholder();
             self.active = 0;
+            self.clear_reload_queue();
             self.ensure_active_tab_visible();
             return;
         }
         self.buffers.remove(index);
+        self.remap_reload_queue_after_remove(index);
         if self.active == index {
             if self.active >= self.buffers.len() {
                 self.active = self.buffers.len() - 1;
@@ -436,6 +438,35 @@ impl App {
             self.active -= 1;
         }
         self.ensure_active_tab_visible();
+    }
+
+    fn clear_reload_queue(&mut self) {
+        self.reload_queue.clear();
+        self.reload_index = None;
+        self.show_reload = false;
+        self.reload_message.clear();
+        self.reload_button_hover = None;
+    }
+
+    fn remap_reload_queue_after_remove(&mut self, removed: usize) {
+        if self.reload_index == Some(removed) {
+            self.reload_index = None;
+            self.show_reload = false;
+            self.reload_message.clear();
+            self.reload_button_hover = None;
+        } else if let Some(i) = self.reload_index {
+            if i > removed {
+                self.reload_index = Some(i - 1);
+            }
+        }
+        let mut next = VecDeque::new();
+        for i in self.reload_queue.drain(..) {
+            if i == removed {
+                continue;
+            }
+            next.push_back(if i > removed { i - 1 } else { i });
+        }
+        self.reload_queue = next;
     }
 
     pub fn new_tab(&mut self) {
@@ -1127,7 +1158,7 @@ impl App {
                         && (self.config.auto_reload_all || self.buffers[i].auto_reload)
                         && !(save_blocks_active && i == self.active);
                     if auto {
-                        if self.reload_buffer(i).is_ok() {
+                        if self.reload_buffer(i).is_ok() || self.enqueue_reload(i) {
                             changed = true;
                         }
                     } else if self.enqueue_reload(i) {
@@ -1185,8 +1216,9 @@ impl App {
             if idx < self.buffers.len() {
                 match choice {
                     ReloadChoice::Always => {
-                        self.buffers[idx].auto_reload = true;
-                        let _ = self.reload_buffer(idx);
+                        if self.reload_buffer(idx).is_ok() {
+                            self.buffers[idx].auto_reload = true;
+                        }
                     }
                     ReloadChoice::Reload => {
                         let _ = self.reload_buffer(idx);
@@ -1224,6 +1256,9 @@ impl App {
         self.buffers[idx].disk_gone_notified = false;
         if idx == self.active {
             self.highlight_cache.invalidate();
+            if self.is_find_active() {
+                self.update_find_matches();
+            }
         }
         let name = file_display_name(&path);
         self.format_status = Some(format!("Reloaded {name}"));
@@ -3192,6 +3227,31 @@ mod tests {
         app.check_external_changes();
         assert!(!app.show_reload);
         assert_eq!(app.active_buffer().text(), "three\n");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reload_refreshes_find_matches_for_active_buffer() {
+        let path = watch_tmp("find", "foo bar foo\n");
+        let mut app = watch_app();
+        app.open_file_in_tab(&path).unwrap();
+        app.toggle_find();
+        if let Some(fs) = &mut app.find_state {
+            fs.query = "foo".into();
+        }
+        app.update_find_matches();
+        let before = app.find_state.as_ref().unwrap().matches.clone();
+        assert_eq!(before.len(), 2);
+        fs::write(&path, "foo foo foo\n").unwrap();
+        app.check_external_changes();
+        app.close_reload(ReloadChoice::Reload);
+        let after = app.find_state.as_ref().unwrap().matches.clone();
+        assert_eq!(
+            after.len(),
+            3,
+            "find ranges must be recomputed after reload"
+        );
+        assert_ne!(after, before);
         let _ = fs::remove_file(&path);
     }
 }
