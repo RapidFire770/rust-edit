@@ -24,6 +24,11 @@ pub struct Config {
     /// serde round-trips cleanly across platforms.
     #[serde(default)]
     pub recent_files: Vec<String>,
+
+    /// When true, clean buffers reload from disk without prompting.
+    /// Dirty buffers still prompt. Default false (ask per file).
+    #[serde(default)]
+    pub auto_reload_all: bool,
 }
 
 impl Default for Config {
@@ -35,6 +40,7 @@ impl Default for Config {
             word_wrap: false,
 
             recent_files: Vec::new(),
+            auto_reload_all: false,
         }
     }
 }
@@ -95,6 +101,13 @@ impl Config {
     /// Toggle line-number visibility and persist.
     pub fn set_show_line_numbers(&mut self, on: bool) {
         self.show_line_numbers = on;
+        self.save();
+    }
+
+    /// Toggle auto-reload of all clean files and persist (except in tests).
+    pub fn set_auto_reload_all(&mut self, on: bool) {
+        self.auto_reload_all = on;
+        #[cfg(not(test))]
         self.save();
     }
 
@@ -187,6 +200,26 @@ mod tests {
         assert_eq!(cfg.recent_files.len(), RECENT_FILES_MAX);
         // The last one recorded should be at the front; the three oldest dropped.
         assert!(cfg.recent_files[0].contains(&format!("cap{}", RECENT_FILES_MAX + 2)));
+    }
+
+    #[test]
+    fn auto_reload_all_defaults_false_and_roundtrips() {
+        let cfg = Config::default();
+        assert!(!cfg.auto_reload_all);
+        let mut cfg = cfg;
+        cfg.auto_reload_all = true;
+        let s = toml::to_string(&cfg).unwrap();
+        let back: Config = toml::from_str(&s).unwrap();
+        assert!(back.auto_reload_all);
+    }
+
+    #[test]
+    fn missing_auto_reload_all_in_toml_defaults_false() {
+        let cfg: Config = toml::from_str(
+            "tab_size = 4\ntheme = \"dark-red\"\nshow_line_numbers = true\nword_wrap = false\n",
+        )
+        .unwrap();
+        assert!(!cfg.auto_reload_all);
     }
 
     #[test]
