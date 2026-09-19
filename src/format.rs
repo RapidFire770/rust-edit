@@ -194,7 +194,11 @@ fn format_error_message(program: &str, stderr: &str, fallback: &str) -> String {
         let mut s = stderr.trim().to_string();
         const CAP: usize = 8 * 1024;
         if s.len() > CAP {
-            s.truncate(CAP);
+            let mut cap = CAP;
+            while cap > 0 && !s.is_char_boundary(cap) {
+                cap -= 1;
+            }
+            s.truncate(cap);
             s.push_str("\n…");
         }
         s
@@ -217,7 +221,7 @@ pub fn format_document(req: FormatRequest<'_>, runner: &dyn CommandRunner) -> Fo
             message: format_error_message(spec.program, "", &e),
         },
         Ok(out) if out.status_ok => {
-            if out.stdout.trim().is_empty() && !req.text.trim().is_empty() {
+            if out.stdout.is_empty() && !req.text.is_empty() {
                 FormatOutcome::Failed {
                     message: format_error_message(spec.program, &out.stderr, "produced no output"),
                 }
@@ -473,6 +477,41 @@ mod orchestrate_tests {
             format_document(rust_req("fn main() {}\n"), &runner),
             FormatOutcome::Failed { .. }
         ));
+    }
+
+    #[test]
+    fn empty_stdout_on_newline_only_input_is_failure() {
+        let runner = MockRunner {
+            result: Ok(CommandOutput {
+                status_ok: true,
+                stdout: String::new(),
+                stderr: String::new(),
+            }),
+            last_program: RefCell::new(None),
+        };
+        assert!(matches!(
+            format_document(rust_req("\n"), &runner),
+            FormatOutcome::Failed { .. }
+        ));
+    }
+
+    #[test]
+    fn whitespace_only_stdout_is_applied() {
+        let runner = MockRunner {
+            result: Ok(CommandOutput {
+                status_ok: true,
+                stdout: "\n".into(),
+                stderr: String::new(),
+            }),
+            last_program: RefCell::new(None),
+        };
+        assert_eq!(
+            format_document(rust_req("fn main() {}\n"), &runner),
+            FormatOutcome::Changed {
+                text: "\n".into(),
+                via: FormatVia::External("rustfmt"),
+            }
+        );
     }
 
     #[test]
