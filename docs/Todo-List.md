@@ -8,13 +8,13 @@
 - [ ] Add an X button to the file tabs to click on and close the tabs as well if possible to fit in with the current ui design and look.
 
 ### Major:
-- [ ] The format document option in the tools menu does not have any function. This should be implemented to format the document according to the user's preferences or use a coding language's formatter if available.
+- [ ] The format document option in the tools menu does not have any function. This should be implemented to format the document according to the user's preferences or use a coding language's formatter if available (e.g. rustfmt).
 
 
 ---
 
 # Features:
-- [ ] Create an installer script for the program and use the logo-design-sample.jpg to make a svg logo for the program.
+- [ ] Create an installer script for the program and use the logo.svg for the program.
 - [ ] If a file is modified outside of the editor while it is currently open the program should notice and ask the user if they would like to reload the file to see the new changes. Auto reload of the file without asking the user each time should be a selectable option when the program asks the user so it doesn't have to keep asking them each time the file is modified.
 - [ ] Spellcheck for normal text files and markdown
 - [ ] ctrl+/ to comment out lines in support programming languages
