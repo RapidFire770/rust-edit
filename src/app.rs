@@ -926,6 +926,13 @@ impl App {
                 self.config
                     .set_show_line_numbers(!self.config.show_line_numbers);
             }
+            3 => {
+                let on = !self.config.auto_reload_all;
+                self.config.set_auto_reload_all(on);
+                if on {
+                    let _ = self.check_external_changes();
+                }
+            }
 
             _ => {}
         }
@@ -3167,5 +3174,23 @@ mod tests {
         assert_ne!(app.reload_index, first);
         let _ = fs::remove_file(&a);
         let _ = fs::remove_file(&b);
+    }
+
+    #[test]
+    fn configure_toggle_auto_reload_all_flushes_clean_files() {
+        let path = watch_tmp("cfg", "one\n");
+        let mut app = watch_app();
+        app.open_file_in_tab(&path).unwrap();
+        fs::write(&path, "two!\n").unwrap();
+        app.check_external_changes();
+        assert!(app.show_reload);
+        app.close_reload(ReloadChoice::Keep);
+        app.configure_adjust(crate::ui::popups::configure::ROW_AUTO_RELOAD, 0);
+        assert!(app.config.auto_reload_all);
+        fs::write(&path, "three\n").unwrap();
+        app.check_external_changes();
+        assert!(!app.show_reload);
+        assert_eq!(app.active_buffer().text(), "three\n");
+        let _ = fs::remove_file(&path);
     }
 }

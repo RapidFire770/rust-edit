@@ -18,21 +18,22 @@ use crate::App;
 
 /// Number of editable rows. Kept in sync with the match arms in
 /// `App::configure_adjust` and the render loop below.
-pub const ROW_COUNT: usize = 3;
+pub const ROW_COUNT: usize = 4;
 
 // Row indices — single source of truth so App + render + mouse agree.
 pub const ROW_TAB_SIZE: usize = 0;
 pub const ROW_WORD_WRAP: usize = 1;
 pub const ROW_LINE_NUMBERS: usize = 2;
+pub const ROW_AUTO_RELOAD: usize = 3;
 
-/// Inner content height of the popup (title + blank + 3 rows + blank + footer).
+/// Inner content height of the popup (title + blank + 4 rows + blank + footer).
 pub const POPUP_W: u16 = 46;
-pub const POPUP_H: u16 = 9;
+pub const POPUP_H: u16 = 10;
 
 // Row content geometry, shared by the render loop and the mouse hit-test so
 // they cannot drift apart. Each row is: prefix + padded label + value.
 const PREFIX_LEN: u16 = 2; // "> " (active) / "  " (inactive)
-const LABEL_LEN: u16 = 14; // fixed padded label width
+const LABEL_LEN: u16 = 16; // fixed padded label width ("Auto-reload all")
                            // The tab-size value is "< N >" (N is 1..=8, always one digit). Offsets from
                            // the value's start column.
 const TAB_DEC_OFFSET: u16 = 0; // "<"
@@ -52,16 +53,16 @@ pub fn footer_labels() -> [&'static str; 2] {
 
 /// Screen y of the footer button row, given the popup rect.
 pub fn footer_row_y(popup: Rect) -> u16 {
-    // Layout: border(1) + title(1) + blank(1) + 3 rows + blank(1) + footer(1)
-    //       = popup.y + 1 + 1 + 1 + 3 + 1 = popup.y + 7
-    popup.y + 7
+    // Layout: border(1) + title(1) + blank(1) + 4 rows + blank(1) + footer(1)
+    //       = popup.y + 1 + 1 + 1 + 4 + 1 = popup.y + 8
+    popup.y + 8
 }
 
 /// Inner-row y positions (absolute screen coords) for each editable row, so the
 /// mouse handler can hit-test without re-deriving the layout.
 pub fn row_ys(popup: Rect) -> [u16; ROW_COUNT] {
     let start = popup.y + 1 + 1 + 1; // border + title + blank
-    [start, start + 1, start + 2]
+    [start, start + 1, start + 2, start + 3]
 }
 
 /// Screen x of the tab-size row's "<" (decrease) and ">" (increase) arrows.
@@ -100,6 +101,10 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
         (
             "Line numbers".to_string(),
             if cfg.show_line_numbers { "[x]" } else { "[ ]" }.to_string(),
+        ),
+        (
+            "Auto-reload all".to_string(),
+            if cfg.auto_reload_all { "[x]" } else { "[ ]" }.to_string(),
         ),
     ];
 
