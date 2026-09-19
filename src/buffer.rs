@@ -906,6 +906,27 @@ impl Buffer {
         self.rope.to_string()
     }
 
+    /// Replace the whole document with `new_text` as a single undoable edit.
+    /// Keeps `id`, `path`, `language`, and `is_initial`. Cursor is remapped by
+    /// the pre-edit `(line, col)` and clamped to the new text. No-op (no undo
+    /// push, no modified flag) when the text is unchanged.
+    pub fn replace_document(&mut self, new_text: &str) {
+        if new_text == self.text() {
+            return;
+        }
+        let (line, col) = self.cursor_position();
+        self.push_undo();
+        self.rope = Rope::from_str(new_text);
+        self.selection = None;
+        self.selection_anchor = None;
+        let last_line = self.line_count().saturating_sub(1);
+        let mapped_line = line.min(last_line);
+        self.cursor = self.byte_at_visual(mapped_line, col);
+        self.is_modified = true;
+        self.bump_generation();
+        self.adjust_scroll();
+    }
+
     /// Set path + re-detect language + clear modified.
     pub fn set_path(&mut self, path: PathBuf) {
         self.language = Language::from_path(&path);
@@ -1766,5 +1787,53 @@ mod tests {
             col >= h && col < h + w,
             "EOL caret col {col} must stay in [{h}, {h}+{w}), got hscroll={h}"
         );
+    }
+
+    #[test]
+    fn replace_document_is_undoable_and_keeps_id() {
+        let mut b = Buffer::from_str("hello", None);
+        let id = b.id;
+        b.cursor = 2; // on 'l'
+        b.replace_document("hello world\n");
+        assert_eq!(b.text(), "hello world\n");
+        assert_eq!(b.id, id, "highlight-cache identity must not change");
+        assert!(b.is_modified);
+        assert!(b.can_undo());
+        b.undo();
+        assert_eq!(b.text(), "hello");
+        assert_eq!(b.cursor, 2);
+    }
+
+    #[test]
+    fn replace_document_maps_cursor_by_line_col() {
+        let mut b = Buffer::from_str("abc\ndef\n", None);
+        b.cursor = b.byte_at_visual(1, 2); // col 2 is 'f' (d=0,e=1,f=2)
+        let (line, col) = b.cursor_position();
+        assert_eq!((line, col), (1, 2));
+        b.replace_document("ABC\nDE\n");
+        let (nl, nc) = b.cursor_position();
+        assert_eq!(nl, 1);
+        assert_eq!(
+            nc,
+            2.min(b.line(1).trim_end_matches(['\n', '\r']).chars().count())
+        );
+    }
+
+    #[test]
+    fn replace_document_noop_when_identical() {
+        let mut b = Buffer::from_str("same\n", None);
+        b.replace_document("same\n");
+        assert!(!b.can_undo());
+        assert!(!b.is_modified);
+    }
+
+    #[test]
+    fn replace_document_clears_selection() {
+        let mut b = Buffer::from_str("abcdef", None);
+        b.selection = Some(1..3);
+        b.selection_anchor = Some(1);
+        b.replace_document("abcdef\n");
+        assert!(b.selection.is_none());
+        assert!(b.selection_anchor.is_none());
     }
 }
