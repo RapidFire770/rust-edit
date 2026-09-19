@@ -107,7 +107,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("F1", "Toggle this help"),
                 ("Shift+W", "Word count"),
                 ("Alt+Z", "Toggle word wrap"),
-                ("Ctrl+Shift+F", "Format document (rustfmt/black/prettier)"),
+                ("Ctrl+Shift+F", "Format document (language tool or editor tab size)"),
                 ("1 / 2 / 3", "Help tab: Shortcuts / Languages / About"),
             ],
         ),

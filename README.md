@@ -18,7 +18,7 @@ Inspired by the UI mockup in `docs/ui-design-sample-2.jpg`.
 - **Undo / redo** with full state snapshots.
 - **Theming** — Dark Red (default), Light, and High Contrast, switchable live from the Settings popup; colors come from the theme, never hard-coded.
 - **Configurable** — TOML config under your XDG config dir (tab size, theme, line numbers).
-- **Word count**, **format document** (shells out to `rustfmt`/`black`/`prettier` when present).
+- **Word count**, **format document** (uses `rustfmt` / `black` / `prettier` / `clang-format` when on PATH; otherwise expands tabs to your tab size, strips trailing whitespace, and ensures a trailing newline).
 - **Horizontal and vertical scrolling** — auto-follows the cursor on long lines; manual scroll via wheel, `Alt+H`/`Alt+L`, and `PgUp`/`PgDn`; a bottom scrollbar appears when wrap is off and a line is longer than the window.
 - **Full mouse support** — tabs, menus, cursor placement, text selection, scrolling, and clickable buttons in every popup. Mouse is on par with the keyboard, not an afterthought.
 - **Tabbed Help popup** (`?` or `F1`) with categorized shortcuts, supported languages, and about.

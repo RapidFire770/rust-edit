@@ -116,6 +116,7 @@ rust-edit/
 │   ├── config.rs              # Config loading/saving (toml + XDG)
 │   ├── theme.rs               # Theme struct + color roles + built-in themes + serde
 │   ├── highlight_cache.rs     # Parse-state checkpoints + overscan span window
+│   ├── format.rs              # Format Document: rustfmt/black/prettier/clang-format + builtin pass
 │   ├── syntax.rs              # Syntect wrapper, highlight_range / from_state resume
 │   ├── ui/
 │   │   ├── mod.rs

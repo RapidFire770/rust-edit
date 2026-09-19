@@ -226,7 +226,7 @@ pub fn render_dropdown(
         "Find (Ctrl+F)",
         "Find & Replace (Ctrl+H)",
         "Word Count (Alt+W)",
-        "Format Document",
+        "Format Document (Ctrl+Shift+F)",
         "Toggle Word Wrap (Alt+Z)",
     ];
     let settings_items = vec!["Configure...", "Themes...", "Help (F1)"];

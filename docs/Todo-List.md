@@ -8,7 +8,7 @@
 - [ ] Add an X button to the file tabs to click on and close the tabs as well if possible to fit in with the current ui design and look.
 
 ### Major:
-- [ ] The format document option in the tools menu does not have any function. This should be implemented to format the document according to the user's preferences or use a coding language's formatter if available (e.g. rustfmt).
+- [x] The format document option in the tools menu does not have any function. This should be implemented to format the document according to the user's preferences or use a coding language's formatter if available (e.g. rustfmt).
 
 
 ---
