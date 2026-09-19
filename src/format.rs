@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 /// - Expand every remaining `\t` to `tab_size` spaces (`tab_size` is clamped to at least 1).
 /// - Strip trailing spaces/tabs per line; drop `\r` so CRLF becomes LF.
 /// - Non-empty input is given a trailing `\n` if it lacks one. Extra blank lines at EOF are kept.
-#[allow(dead_code)] // Wired up by later Format Document tasks (language tools + menu).
 pub fn builtin_format(text: &str, tab_size: u8) -> String {
     if text.is_empty() {
         return String::new();
@@ -37,7 +36,6 @@ pub fn builtin_format(text: &str, tab_size: u8) -> String {
     out
 }
 
-#[allow(dead_code)] // Wired up by later Format Document tasks (language tools + menu).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
     pub program: &'static str,
@@ -45,7 +43,6 @@ pub struct CommandSpec {
     pub cwd: Option<PathBuf>,
 }
 
-#[allow(dead_code)]
 fn dummy_filename(language: Language) -> &'static str {
     match language {
         Language::Rust => "buffer.rs",
@@ -61,20 +58,17 @@ fn dummy_filename(language: Language) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 fn stdin_filename(language: Language, path: Option<&Path>) -> String {
     path.map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| dummy_filename(language).to_string())
 }
 
-#[allow(dead_code)]
 fn parent_cwd(path: Option<&Path>) -> Option<PathBuf> {
     path.and_then(|p| p.parent()).map(Path::to_path_buf)
 }
 
 /// Build the stdin/stdout invocation for a language tool, or `None` if this
 /// language only has the builtin pass.
-#[allow(dead_code)] // Wired up by later Format Document tasks (language tools + menu).
 pub fn command_spec(language: Language, path: Option<&Path>) -> Option<CommandSpec> {
     let cwd = parent_cwd(path);
     match language {
@@ -124,7 +118,6 @@ pub fn command_spec(language: Language, path: Option<&Path>) -> Option<CommandSp
     }
 }
 
-#[allow(dead_code)] // Wired up by later Format Document tasks (App menu + SystemRunner).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormatVia {
     External(&'static str),
@@ -132,7 +125,6 @@ pub enum FormatVia {
 }
 
 impl FormatVia {
-    #[allow(dead_code)]
     pub fn label(&self) -> &'static str {
         match self {
             FormatVia::External(name) => name,
@@ -141,7 +133,6 @@ impl FormatVia {
     }
 }
 
-#[allow(dead_code)] // Wired up by later Format Document tasks (App menu + SystemRunner).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormatOutcome {
     Changed { text: String, via: FormatVia },
@@ -149,7 +140,6 @@ pub enum FormatOutcome {
     Failed { message: String },
 }
 
-#[allow(dead_code)] // Wired up by later Format Document tasks (App menu + SystemRunner).
 pub struct FormatRequest<'a> {
     pub language: Language,
     pub path: Option<&'a Path>,
@@ -157,7 +147,6 @@ pub struct FormatRequest<'a> {
     pub tab_size: u8,
 }
 
-#[allow(dead_code)] // Wired up by later Format Document tasks (App menu + SystemRunner).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutput {
     pub status_ok: bool,
@@ -165,7 +154,6 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
-#[allow(dead_code)] // Wired up by later Format Document tasks (App menu + SystemRunner).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunError {
     NotFound,
@@ -173,7 +161,6 @@ pub enum RunError {
     Io(String),
 }
 
-#[allow(dead_code)] // Wired up by later Format Document tasks (App menu + SystemRunner).
 pub trait CommandRunner {
     fn run(&self, spec: &CommandSpec, stdin: &str) -> Result<CommandOutput, RunError>;
 }
@@ -186,7 +173,6 @@ const WAIT_TIMEOUT: Duration = Duration::from_millis(200);
 const WAIT_TIMEOUT: Duration = FORMAT_TIMEOUT;
 
 /// Spawns a language formatter with piped IO and a hard timeout.
-#[allow(dead_code)] // Wired up by later Format Document tasks (App menu).
 pub struct SystemRunner;
 
 fn read_pipe_thread<R: Read + Send + 'static>(pipe: Option<R>) -> mpsc::Receiver<Vec<u8>> {
@@ -325,7 +311,6 @@ fn format_error_message(program: &str, stderr: &str, fallback: &str) -> String {
     format!("{program}: {body}")
 }
 
-#[allow(dead_code)] // Wired up by later Format Document tasks (App menu + SystemRunner).
 pub fn format_document(req: FormatRequest<'_>, runner: &dyn CommandRunner) -> FormatOutcome {
     let Some(spec) = command_spec(req.language, req.path) else {
         return builtin_outcome(req.text, req.tab_size);
