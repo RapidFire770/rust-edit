@@ -46,6 +46,14 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Ctrl+Alt+S", "Save As"),
                 ("Ctrl+W", "Close tab"),
                 ("Ctrl+Q", "Quit"),
+                (
+                    "Disk change",
+                    "Prompt to reload a file edited outside the editor",
+                ),
+                (
+                    "[ Always ]",
+                    "Reload this file silently for the rest of the session",
+                ),
                 ("[ Browse… ]", "Open the file browser from Open/Save As"),
                 (
                     "[ Use folder ]",
@@ -118,6 +126,10 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
             "Configure & Themes",
             vec![
                 ("Settings menu", "Configure... / Themes... / Help"),
+                (
+                    "Auto-reload all",
+                    "Configure: reload every clean file without asking",
+                ),
                 (
                     "j / k, Up / Down",
                     "Move selection in Configure / Themes list",

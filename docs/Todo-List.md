@@ -15,7 +15,7 @@
 
 # Features:
 - [ ] Create an installer script for the program and use the logo.svg for the program.
-- [ ] If a file is modified outside of the editor while it is currently open the program should notice and ask the user if they would like to reload the file to see the new changes. Auto reload of the file without asking the user each time should be a selectable option when the program asks the user so it doesn't have to keep asking them each time the file is modified.
+- [x] If a file is modified outside of the editor while it is currently open the program should notice and ask the user if they would like to reload the file to see the new changes. Auto reload of the file without asking the user each time should be a selectable option when the program asks the user so it doesn't have to keep asking them each time the file is modified.
 - [ ] Spellcheck for normal text files and markdown
 - [ ] ctrl+/ to comment out lines in support programming languages
 - [ ] Create an installer script for the program.
