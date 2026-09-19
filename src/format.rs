@@ -2,7 +2,12 @@
 //! editor-preference pass (tab size, trailing whitespace, final newline).
 
 use crate::buffer::Language;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// Conservative in-editor formatting using the user's tab size.
 ///
@@ -171,6 +176,94 @@ pub enum RunError {
 #[allow(dead_code)] // Wired up by later Format Document tasks (App menu + SystemRunner).
 pub trait CommandRunner {
     fn run(&self, spec: &CommandSpec, stdin: &str) -> Result<CommandOutput, RunError>;
+}
+
+#[cfg_attr(test, allow(dead_code))]
+const FORMAT_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const WAIT_TIMEOUT: Duration = Duration::from_millis(200);
+#[cfg(not(test))]
+const WAIT_TIMEOUT: Duration = FORMAT_TIMEOUT;
+
+/// Spawns a language formatter with piped IO and a hard timeout.
+#[allow(dead_code)] // Wired up by later Format Document tasks (App menu).
+pub struct SystemRunner;
+
+fn read_pipe_thread<R: Read + Send + 'static>(pipe: Option<R>) -> mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut reader) = pipe {
+            let _ = reader.read_to_end(&mut buf);
+        }
+        let _ = tx.send(buf);
+    });
+    rx
+}
+
+impl CommandRunner for SystemRunner {
+    fn run(&self, spec: &CommandSpec, stdin: &str) -> Result<CommandOutput, RunError> {
+        let mut cmd = Command::new(spec.program);
+        cmd.args(&spec.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(cwd) = &spec.cwd {
+            if !cwd.as_os_str().is_empty() {
+                cmd.current_dir(cwd);
+            }
+        }
+
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Err(RunError::NotFound);
+            }
+            Err(err) => return Err(RunError::Io(err.to_string())),
+        };
+
+        let stdin_pipe = child.stdin.take();
+        let input = stdin.to_owned();
+        thread::spawn(move || {
+            if let Some(mut stdin) = stdin_pipe {
+                let _ = stdin.write_all(input.as_bytes());
+                drop(stdin);
+            }
+        });
+
+        let stdout_rx = read_pipe_thread(child.stdout.take());
+        let stderr_rx = read_pipe_thread(child.stderr.take());
+
+        let deadline = Instant::now() + WAIT_TIMEOUT;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(RunError::TimedOut);
+                    }
+                    // The editor event loop is synchronous; Format Document is an
+                    // explicit user command.
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(err) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(RunError::Io(err.to_string()));
+                }
+            }
+        };
+
+        let stdout = stdout_rx.recv().unwrap_or_default();
+        let stderr = stderr_rx.recv().unwrap_or_default();
+        Ok(CommandOutput {
+            status_ok: status.success(),
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        })
+    }
 }
 
 fn builtin_outcome(text: &str, tab_size: u8) -> FormatOutcome {
@@ -562,5 +655,53 @@ mod orchestrate_tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod system_runner_tests {
+    use super::*;
+
+    #[test]
+    fn missing_binary_is_not_found() {
+        let spec = CommandSpec {
+            program: "rust-edit-no-such-formatter-xyz",
+            args: vec![],
+            cwd: None,
+        };
+        assert_eq!(SystemRunner.run(&spec, "x"), Err(RunError::NotFound));
+    }
+
+    #[test]
+    fn cat_echoes_stdin() {
+        let spec = CommandSpec {
+            program: "cat",
+            args: vec![],
+            cwd: None,
+        };
+        let out = SystemRunner.run(&spec, "hello\n").unwrap();
+        assert!(out.status_ok);
+        assert_eq!(out.stdout, "hello\n");
+    }
+
+    #[test]
+    fn false_is_nonzero_status() {
+        let spec = CommandSpec {
+            program: "false",
+            args: vec![],
+            cwd: None,
+        };
+        let out = SystemRunner.run(&spec, "").unwrap();
+        assert!(!out.status_ok);
+    }
+
+    #[test]
+    fn sleep_is_killed_on_timeout() {
+        let spec = CommandSpec {
+            program: "sleep",
+            args: vec!["30".into()],
+            cwd: None,
+        };
+        assert_eq!(SystemRunner.run(&spec, ""), Err(RunError::TimedOut));
     }
 }
