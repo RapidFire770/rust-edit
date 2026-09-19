@@ -565,6 +565,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                         return Ok(());
                                     }
                                 }
+                                PopupFocus::Reload => {}
                                 PopupFocus::FileBrowser => handle_file_browser_key(key.code, app),
                                 PopupFocus::FileDialog => handle_file_dialog_key(key.code, app),
                                 PopupFocus::Help => handle_help_key(key.code, app),
@@ -1007,6 +1008,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
                 app.browser_button_selected = popups::file_browser::FOCUS_LIST;
             }
         }
+        Some(PopupFocus::Reload) => {}
         Some(PopupFocus::Confirm) => {
             let msg = app.confirm_message.clone();
             let popup = popups::confirm::confirm_rect(term_area, &msg);
@@ -1343,6 +1345,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 if let Some(focus) = app.popup_focus() {
                     match focus {
                         PopupFocus::Confirm => handle_confirm_click(x, y, app),
+                        PopupFocus::Reload => {}
                         PopupFocus::FileBrowser => handle_file_browser_click(x, y, app),
                         PopupFocus::FileDialog => handle_file_dialog_click(x, y, app),
                         PopupFocus::Configure => handle_configure_click(x, y, app),

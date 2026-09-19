@@ -5,11 +5,20 @@
 
 use crate::buffer::Buffer;
 use crate::config::Config;
+use crate::file_watch::{classify, DiskEvent, FileStamp};
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use crate::ui::find::{FindFocus, FindState};
 use crate::utils::clipboard::ClipboardWrapper;
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReloadChoice {
+    Reload,
+    Always,
+    Keep,
+}
 
 #[derive(Default)] // Debug removed because SyntaxHighlighter doesn't impl it
 pub struct App {
@@ -76,6 +85,14 @@ pub struct App {
     /// Button hover states (per popup)
     pub file_dialog_button_hover: Option<usize>, // 0 = Save/Open, 1 = Cancel
     pub confirm_button_hover: Option<usize>, // 0 = Confirm, 1 = Cancel
+    /// External-change reload prompt. Stacks above other popups, below confirm.
+    pub show_reload: bool,
+    pub reload_message: String,
+    pub reload_index: Option<usize>,
+    /// 0 = Reload, 1 = Always, 2 = Keep.
+    pub reload_selected: usize,
+    pub reload_button_hover: Option<usize>,
+    pub reload_queue: VecDeque<usize>,
     // ----- File browser popup state -----
     /// True while the directory-listing popup is open over the file dialog.
     pub show_file_browser: bool,
@@ -150,6 +167,7 @@ pub struct App {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopupFocus {
     Confirm,
+    Reload,
     FileBrowser,
     FileDialog,
     Themes,
@@ -223,6 +241,12 @@ impl App {
             confirm_selected: 0,
             file_dialog_button_hover: None,
             confirm_button_hover: None,
+            show_reload: false,
+            reload_message: String::new(),
+            reload_index: None,
+            reload_selected: 0,
+            reload_button_hover: None,
+            reload_queue: VecDeque::new(),
             show_file_browser: false,
             browser_cwd: PathBuf::new(),
             browser_entries: Vec::new(),
@@ -997,6 +1021,8 @@ impl App {
     pub fn popup_focus(&self) -> Option<PopupFocus> {
         if self.show_confirm {
             Some(PopupFocus::Confirm)
+        } else if self.show_reload {
+            Some(PopupFocus::Reload)
         } else if self.show_file_browser {
             Some(PopupFocus::FileBrowser)
         } else if self.show_file_dialog {
@@ -1062,6 +1088,138 @@ impl App {
         self.confirm_message.clear();
         self.confirm_action = None;
         self.confirm_index = None;
+        self.present_next_reload_prompt();
+    }
+
+    /// Poll every pathed buffer for outside disk changes.
+    /// Returns true if a reload, prompt, or status notice happened.
+    pub fn check_external_changes(&mut self) -> bool {
+        let mut changed = false;
+        let save_blocks_active = self.show_file_dialog && self.file_dialog_is_save;
+        let n = self.buffers.len();
+        for i in 0..n {
+            let Some(path) = self.buffers[i].path.clone() else {
+                continue;
+            };
+            let now = FileStamp::of(&path);
+            match classify(self.buffers[i].disk_stamp, now) {
+                DiskEvent::Unchanged => {}
+                DiskEvent::Deleted => {
+                    if !self.buffers[i].disk_gone_notified {
+                        let name = file_display_name(&path);
+                        self.format_status = Some(format!("{name} was deleted on disk"));
+                        self.buffers[i].disk_gone_notified = true;
+                        self.buffers[i].disk_stamp = None;
+                        changed = true;
+                    }
+                }
+                DiskEvent::Modified | DiskEvent::Appeared => {
+                    self.buffers[i].disk_gone_notified = false;
+                    let dirty = self.buffers[i].is_modified;
+                    let auto = !dirty
+                        && (self.config.auto_reload_all || self.buffers[i].auto_reload)
+                        && !(save_blocks_active && i == self.active);
+                    if auto {
+                        if self.reload_buffer(i).is_ok() {
+                            changed = true;
+                        }
+                    } else if self.enqueue_reload(i) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if self.present_next_reload_prompt() {
+            changed = true;
+        }
+        changed
+    }
+
+    fn enqueue_reload(&mut self, idx: usize) -> bool {
+        if self.reload_index == Some(idx) || self.reload_queue.contains(&idx) {
+            return false;
+        }
+        if idx == self.active {
+            self.reload_queue.push_front(idx);
+        } else {
+            self.reload_queue.push_back(idx);
+        }
+        true
+    }
+
+    fn present_next_reload_prompt(&mut self) -> bool {
+        if self.show_confirm || self.show_reload {
+            return false;
+        }
+        while let Some(idx) = self.reload_queue.pop_front() {
+            if idx >= self.buffers.len() {
+                continue;
+            }
+            let Some(path) = self.buffers[idx].path.clone() else {
+                continue;
+            };
+            match classify(self.buffers[idx].disk_stamp, FileStamp::of(&path)) {
+                DiskEvent::Modified | DiskEvent::Appeared => {
+                    self.reload_index = Some(idx);
+                    self.reload_message = reload_prompt_message(&self.buffers[idx]);
+                    self.show_reload = true;
+                    self.reload_selected = 0;
+                    self.reload_button_hover = None;
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    pub fn close_reload(&mut self, choice: ReloadChoice) {
+        if let Some(idx) = self.reload_index.take() {
+            if idx < self.buffers.len() {
+                match choice {
+                    ReloadChoice::Always => {
+                        self.buffers[idx].auto_reload = true;
+                        let _ = self.reload_buffer(idx);
+                    }
+                    ReloadChoice::Reload => {
+                        let _ = self.reload_buffer(idx);
+                    }
+                    ReloadChoice::Keep => {
+                        if let Some(path) = self.buffers[idx].path.clone() {
+                            self.buffers[idx].disk_stamp = FileStamp::of(&path);
+                        }
+                    }
+                }
+            }
+        }
+        self.show_reload = false;
+        self.reload_message.clear();
+        self.reload_button_hover = None;
+        self.present_next_reload_prompt();
+    }
+
+    pub fn reload_buffer(&mut self, idx: usize) -> Result<(), String> {
+        let path = self.buffers
+            .get(idx)
+            .and_then(|b| b.path.clone())
+            .ok_or_else(|| "no path".to_string())?;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                let msg = e.to_string();
+                self.format_status = Some(format!("Reload failed: {msg}"));
+                return Err(msg);
+            }
+        };
+        self.buffers[idx].reload_from(&text);
+        self.buffers[idx].disk_stamp = FileStamp::of(&path);
+        self.buffers[idx].disk_gone_notified = false;
+        if idx == self.active {
+            self.highlight_cache.invalidate();
+        }
+        let name = file_display_name(&path);
+        self.format_status = Some(format!("Reloaded {name}"));
+        Ok(())
     }
 
     pub fn show_file_dialog(&mut self, is_save: bool) {
@@ -1683,6 +1841,38 @@ fn find_matches_in_text(
         i += 1;
     }
     matches
+}
+
+fn file_display_name(path: &Path) -> String {
+    let raw = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    ellipsize_name(&raw, 40)
+}
+
+fn ellipsize_name(name: &str, max_chars: usize) -> String {
+    let count = name.chars().count();
+    if count <= max_chars {
+        return name.to_string();
+    }
+    let keep = max_chars.saturating_sub(1);
+    let mut out: String = name.chars().take(keep).collect();
+    out.push('…');
+    out
+}
+
+fn reload_prompt_message(buf: &Buffer) -> String {
+    let name = buf
+        .path
+        .as_ref()
+        .map(|p| file_display_name(p))
+        .unwrap_or_else(|| "untitled".to_string());
+    if buf.is_modified {
+        format!("{name} changed on disk and you have unsaved edits. Reload and discard them?")
+    } else {
+        format!("{name} changed on disk. Reload?")
+    }
 }
 
 #[cfg(test)]
@@ -2795,5 +2985,187 @@ mod tests {
                 || !app.word_count_text.is_empty()
         );
         assert!(app.format_status.is_none());
+    }
+
+    fn watch_tmp(name: &str, contents: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "rust-edit-watch-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&p, contents).unwrap();
+        p
+    }
+
+    fn watch_app() -> App {
+        let mut app = App::new(&[]);
+        app.config.auto_reload_all = false;
+        app
+    }
+
+    #[test]
+    fn external_edit_of_clean_buffer_opens_reload_prompt() {
+        let path = watch_tmp("clean", "one\n");
+        let mut app = watch_app();
+        app.open_file_in_tab(&path).unwrap();
+        fs::write(&path, "two\n").unwrap();
+        app.check_external_changes();
+        assert!(app.show_reload);
+        assert_eq!(app.reload_index, Some(0));
+        assert!(app.reload_message.to_lowercase().contains("changed"));
+        assert_eq!(app.active_buffer().text(), "one\n");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reload_confirm_replaces_text_and_clears_prompt() {
+        let path = watch_tmp("confirm", "one\n");
+        let mut app = watch_app();
+        app.open_file_in_tab(&path).unwrap();
+        fs::write(&path, "two\n").unwrap();
+        app.check_external_changes();
+        app.close_reload(ReloadChoice::Reload);
+        assert!(!app.show_reload);
+        assert_eq!(app.active_buffer().text(), "two\n");
+        assert!(!app.active_buffer().is_modified);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn keep_adopts_stamp_so_same_bytes_do_not_reprompt() {
+        let path = watch_tmp("keep", "one\n");
+        let mut app = watch_app();
+        app.open_file_in_tab(&path).unwrap();
+        fs::write(&path, "two\n").unwrap();
+        app.check_external_changes();
+        app.close_reload(ReloadChoice::Keep);
+        assert!(!app.show_reload);
+        assert_eq!(app.active_buffer().text(), "one\n");
+        app.check_external_changes();
+        assert!(!app.show_reload, "same disk identity must not prompt again");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn always_sets_buffer_flag_and_future_clean_edits_auto_reload() {
+        let path = watch_tmp("always", "one\n");
+        let mut app = watch_app();
+        app.open_file_in_tab(&path).unwrap();
+        fs::write(&path, "two\n").unwrap();
+        app.check_external_changes();
+        app.close_reload(ReloadChoice::Always);
+        assert!(app.active_buffer().auto_reload);
+        assert_eq!(app.active_buffer().text(), "two\n");
+        fs::write(&path, "three\n").unwrap();
+        app.check_external_changes();
+        assert!(!app.show_reload);
+        assert_eq!(app.active_buffer().text(), "three\n");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn auto_reload_all_skips_prompt_for_clean_buffer() {
+        let path = watch_tmp("all", "one\n");
+        let mut app = watch_app();
+        app.config.set_auto_reload_all(true);
+        app.open_file_in_tab(&path).unwrap();
+        fs::write(&path, "two\n").unwrap();
+        app.check_external_changes();
+        assert!(!app.show_reload);
+        assert_eq!(app.active_buffer().text(), "two\n");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn dirty_buffer_never_auto_reloads() {
+        let path = watch_tmp("dirty", "one\n");
+        let mut app = watch_app();
+        app.config.set_auto_reload_all(true);
+        app.open_file_in_tab(&path).unwrap();
+        app.active_buffer_mut().insert("x");
+        fs::write(&path, "two\n").unwrap();
+        app.check_external_changes();
+        assert!(app.show_reload);
+        assert!(app.reload_message.to_lowercase().contains("unsaved"));
+        assert!(app.active_buffer().text().contains('x'));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn own_save_does_not_prompt() {
+        let path = watch_tmp("save", "one\n");
+        let mut app = watch_app();
+        app.open_file_in_tab(&path).unwrap();
+        app.active_buffer_mut().insert("x");
+        assert!(app.save_current());
+        app.check_external_changes();
+        assert!(!app.show_reload);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn untitled_buffer_is_ignored() {
+        let mut app = watch_app();
+        app.check_external_changes();
+        assert!(!app.show_reload);
+    }
+
+    #[test]
+    fn deleted_file_notifies_once_and_keeps_buffer() {
+        let path = watch_tmp("gone", "one\n");
+        let mut app = watch_app();
+        app.open_file_in_tab(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        app.check_external_changes();
+        assert!(!app.show_reload);
+        assert_eq!(app.active_buffer().text(), "one\n");
+        assert!(app
+            .format_status
+            .as_deref()
+            .unwrap()
+            .to_lowercase()
+            .contains("deleted"));
+        app.format_status = None;
+        app.check_external_changes();
+        assert!(app.format_status.is_none(), "must not spam");
+    }
+
+    #[test]
+    fn reload_prompt_does_not_open_over_unsaved_confirm() {
+        let path = watch_tmp("over", "one\n");
+        let mut app = watch_app();
+        app.open_file_in_tab(&path).unwrap();
+        app.show_confirm_dialog("Quit with unsaved changes?", "quit");
+        fs::write(&path, "two\n").unwrap();
+        app.check_external_changes();
+        assert!(app.show_confirm);
+        assert!(!app.show_reload);
+        app.close_confirm(false);
+        assert!(app.show_reload);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn second_file_queues_until_first_prompt_closes() {
+        let a = watch_tmp("qa", "a\n");
+        let b = watch_tmp("qb", "b\n");
+        let mut app = watch_app();
+        app.open_file_in_tab(&a).unwrap();
+        app.open_file_in_tab(&b).unwrap();
+        fs::write(&a, "A\n").unwrap();
+        fs::write(&b, "B\n").unwrap();
+        app.check_external_changes();
+        assert!(app.show_reload);
+        let first = app.reload_index;
+        app.close_reload(ReloadChoice::Keep);
+        assert!(app.show_reload);
+        assert_ne!(app.reload_index, first);
+        let _ = fs::remove_file(&a);
+        let _ = fs::remove_file(&b);
     }
 }
