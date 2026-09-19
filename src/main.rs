@@ -540,7 +540,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 KeyCode::Char('f')
                                     if key.modifiers.contains(KeyModifiers::SHIFT) =>
                                 {
-                                    let _ = app.format_current_document();
+                                    app.format_current_document();
                                 }
                                 KeyCode::Char('z') => {
                                     if key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -2415,7 +2415,7 @@ fn handle_menu_action(app: &mut App) {
         }
         ("Tools", 2) => app.compute_and_show_word_count(),
         ("Tools", 3) => {
-            let _ = app.format_current_document();
+            app.format_current_document();
         }
         ("Tools", 4) => app.toggle_word_wrap(),
         ("Settings", 0) => app.open_configure(),

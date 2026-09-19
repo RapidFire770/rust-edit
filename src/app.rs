@@ -951,49 +951,42 @@ impl App {
         }
     }
 
-    /// Format the current document using external formatter if available.
-    /// Returns true on success.
+    /// Format the current document. Language tools on PATH win; otherwise the
+    /// conservative builtin pass runs. Returns true if the buffer text changed.
     pub fn format_current_document(&mut self) -> bool {
-        let buf = self.active_buffer_mut();
-        let lang = buf.language;
-        let cmd = match lang {
-            crate::buffer::Language::Rust => "rustfmt",
-            crate::buffer::Language::Python => "black",
-            crate::buffer::Language::Javascript | crate::buffer::Language::Typescript => "prettier",
-            crate::buffer::Language::Json
-            | crate::buffer::Language::Toml
-            | crate::buffer::Language::Yaml => "prettier",
-            _ => return false,
+        self.format_status = None;
+        let tab_size = self.config.tab_size;
+        let (language, path, text) = {
+            let buf = self.active_buffer();
+            (buf.language, buf.path.clone(), buf.text())
         };
-
-        let input = buf.text();
-        let output = std::process::Command::new(cmd)
-            .arg("-") // stdin
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                use std::io::Write;
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(input.as_bytes());
-                }
-                child.wait_with_output()
-            });
-
-        match output {
-            Ok(out) if out.status.success() => {
-                let formatted = String::from_utf8_lossy(&out.stdout).to_string();
-                if !formatted.trim().is_empty() && formatted != input {
-                    // replace content (simple, could be smarter with rope)
-                    *buf = crate::buffer::Buffer::from_str(&formatted, buf.path.clone());
-                    buf.is_modified = true;
-                    true
-                } else {
-                    false
-                }
+        let outcome = crate::format::format_document(
+            crate::format::FormatRequest {
+                language,
+                path: path.as_deref(),
+                text: &text,
+                tab_size,
+            },
+            &crate::format::SystemRunner,
+        );
+        match outcome {
+            crate::format::FormatOutcome::Changed {
+                text: new_text,
+                via,
+            } => {
+                self.active_buffer_mut().replace_document(&new_text);
+                self.format_status = Some(format!("Formatted with {}", via.label()));
+                self.update_find_matches();
+                true
             }
-            _ => false,
+            crate::format::FormatOutcome::Unchanged { via } => {
+                self.format_status = Some(format!("Already formatted ({})", via.label()));
+                false
+            }
+            crate::format::FormatOutcome::Failed { message } => {
+                self.show_info_popup("Format Document", message);
+                false
+            }
         }
     }
 
@@ -1693,6 +1686,7 @@ fn find_matches_in_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::CommandRunner;
     use std::fs;
     use std::path::Path;
 
@@ -2698,5 +2692,105 @@ mod tests {
         let mut app = App::new(&[]);
         app.config.show_line_numbers = false;
         assert_eq!(app.gutter_width(), 0);
+    }
+
+    #[test]
+    fn format_plain_buffer_applies_builtin_and_is_undoable() {
+        let mut app = App::new(&[]);
+        {
+            let buf = app.active_buffer_mut();
+            buf.insert("hello  \n\tworld");
+        }
+        let id = app.active_buffer().id;
+        app.format_current_document();
+        let buf = app.active_buffer();
+        assert_eq!(buf.text(), "hello\n    world\n");
+        assert_eq!(buf.id, id);
+        assert!(buf.is_modified);
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Formatted with editor preferences")
+        );
+        app.undo();
+        assert_eq!(app.active_buffer().text(), "hello  \n\tworld");
+    }
+
+    #[test]
+    fn format_already_clean_plain_sets_unchanged_status() {
+        let mut app = App::new(&[]);
+        app.buffers[0] = Buffer::from_str("hello\n", None);
+        app.format_current_document();
+        assert_eq!(app.active_buffer().text(), "hello\n");
+        assert!(!app.active_buffer().is_modified);
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Already formatted (editor preferences)")
+        );
+        assert!(
+            !app.show_word_count,
+            "success must not open the error popup"
+        );
+    }
+
+    #[test]
+    fn format_rust_uses_rustfmt_when_present() {
+        if crate::format::SystemRunner
+            .run(
+                &crate::format::CommandSpec {
+                    program: "rustfmt",
+                    args: vec!["--version".into()],
+                    cwd: None,
+                },
+                "",
+            )
+            .is_err()
+        {
+            return;
+        }
+        let mut app = App::new(&[]);
+        app.buffers[0] = Buffer::from_str("fn main(){println!(\"x\");}\n", None);
+        app.buffers[0].language = crate::buffer::Language::Rust;
+        app.format_current_document();
+        let text = app.active_buffer().text();
+        assert!(text.contains("fn main() {\n"), "{text}");
+        assert!(
+            app.format_status
+                .as_deref()
+                .is_some_and(|s| s.contains("rustfmt")),
+            "{:?}",
+            app.format_status
+        );
+        assert!(!app.show_word_count);
+    }
+
+    #[test]
+    fn format_rust_syntax_error_opens_info_popup_and_keeps_text() {
+        if crate::format::SystemRunner
+            .run(
+                &crate::format::CommandSpec {
+                    program: "rustfmt",
+                    args: vec!["--version".into()],
+                    cwd: None,
+                },
+                "",
+            )
+            .is_err()
+        {
+            return;
+        }
+        let mut app = App::new(&[]);
+        let src = "fn main() {\n";
+        app.buffers[0] = Buffer::from_str(src, None);
+        app.buffers[0].language = crate::buffer::Language::Rust;
+        app.format_current_document();
+        assert_eq!(app.active_buffer().text(), src);
+        assert!(app.show_word_count);
+        assert_eq!(app.info_popup_title, "Format Document");
+        assert!(
+            app.word_count_text.to_lowercase().contains("rustfmt")
+                || app.word_count_text.contains("error")
+                || !app.word_count_text.is_empty()
+        );
+        assert!(app.format_status.is_none());
     }
 }
