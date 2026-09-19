@@ -18,8 +18,8 @@ mod wrap;
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseButton, MouseEvent, MouseEventKind,
+        self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
+        Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -32,7 +32,7 @@ use ratatui::{
 use std::io::stdout;
 use std::time::{Duration, Instant};
 
-use crate::app::{App, PopupFocus};
+use crate::app::{App, PopupFocus, ReloadChoice};
 #[cfg(test)]
 use crate::buffer::Buffer;
 use crate::ui::find::FindFocus;
@@ -44,7 +44,12 @@ fn main() -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableFocusChange
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -55,7 +60,8 @@ fn main() -> Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableFocusChange
     )?;
     terminal.show_cursor()?;
 
@@ -70,6 +76,8 @@ fn main() -> Result<()> {
 const BLINK_INTERVAL: Duration = Duration::from_millis(533);
 /// Long poll when the cursor is hidden.
 const IDLE_POLL: Duration = Duration::from_secs(3600);
+/// Max wait between disk-stamp checks when any buffer has a path.
+const DISK_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct HoverVisual {
@@ -79,6 +87,7 @@ struct HoverVisual {
     browser_button_selected: usize,
     browser_list_hover: Option<usize>,
     confirm_button_hover: Option<usize>,
+    reload_button_hover: Option<usize>,
     configure_row_hover: Option<usize>,
     configure_button_hover: Option<usize>,
     themes_list_hover: Option<usize>,
@@ -95,6 +104,7 @@ fn hover_visual(app: &App) -> HoverVisual {
         browser_button_selected: app.browser_button_selected,
         browser_list_hover: app.browser_list_hover,
         confirm_button_hover: app.confirm_button_hover,
+        reload_button_hover: app.reload_button_hover,
         configure_row_hover: app.configure_row_hover,
         configure_button_hover: app.configure_button_hover,
         themes_list_hover: app.themes_list_hover,
@@ -243,6 +253,7 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
         || app.show_file_dialog
         || app.show_file_browser
         || app.show_confirm
+        || app.show_reload
         || app.active_menu.is_some()
     {
         return None;
@@ -380,11 +391,14 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             } else {
                 None
             };
-            let poll_timeout = if edge.is_some() {
+            let mut poll_timeout = if edge.is_some() {
                 Duration::from_millis(30)
             } else {
                 next_blink_timeout(last_blink, BLINK_INTERVAL, cursor_should_blink)
             };
+            if app.buffers.iter().any(|b| b.path.is_some()) {
+                poll_timeout = poll_timeout.min(DISK_POLL);
+            }
 
             let first = if event::poll(poll_timeout)? {
                 event::read()?
@@ -410,13 +424,15 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                     app.active_buffer_mut().scroll_horizontal(dcol);
                 }
                 extend_drag_to_mouse(app);
+                let _ = app.check_external_changes();
                 break 'wait;
             } else {
-                // Timed out, toggle blink state and redraw
+                // Timed out: blink (if needed) and poll disk stamps.
                 if cursor_should_blink {
                     cursor_blink_on = !cursor_blink_on;
                     last_blink = Instant::now();
                 }
+                let _ = app.check_external_changes();
                 break 'wait;
             };
             let mut events = vec![first];
@@ -565,7 +581,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                         return Ok(());
                                     }
                                 }
-                                PopupFocus::Reload => {}
+                                PopupFocus::Reload => handle_reload_key(key.code, app),
                                 PopupFocus::FileBrowser => handle_file_browser_key(key.code, app),
                                 PopupFocus::FileDialog => handle_file_dialog_key(key.code, app),
                                 PopupFocus::Help => handle_help_key(key.code, app),
@@ -859,6 +875,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                     }
                     Event::Mouse(mouse) => handle_mouse(mouse, app),
                     Event::Resize(_, _) => {}
+                    Event::FocusGained => {
+                        let _ = app.check_external_changes();
+                    }
                     _ => {}
                 }
             }
@@ -871,8 +890,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             if app.should_quit {
                 return Ok(());
             }
+            let disk_changed = app.check_external_changes();
             if batch_needs_redraw(&events, wheel_delta, hover_before, hover_visual(app))
                 || cursor_pos_before != cursor_pos_after
+                || disk_changed
             {
                 break 'wait; // real change → redraw
             }
@@ -923,6 +944,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
     app.browser_button_hover = None;
     app.browser_list_hover = None;
     app.confirm_button_hover = None;
+    app.reload_button_hover = None;
     app.configure_row_hover = None;
     app.configure_button_hover = None;
     app.themes_list_hover = None;
@@ -1008,7 +1030,19 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
                 app.browser_button_selected = popups::file_browser::FOCUS_LIST;
             }
         }
-        Some(PopupFocus::Reload) => {}
+        Some(PopupFocus::Reload) => {
+            let popup = popups::reload::reload_rect(term_area, &app.reload_message);
+            let btn_y = popups::reload::button_row_y(popup) as usize;
+            if y as usize == btn_y {
+                let labels = popups::reload::button_labels();
+                let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x + 1, &labels);
+                let hit = hit_button_row(x, &ranges);
+                app.reload_button_hover = hit;
+                if let Some(idx) = hit {
+                    app.reload_selected = idx;
+                }
+            }
+        }
         Some(PopupFocus::Confirm) => {
             let msg = app.confirm_message.clone();
             let popup = popups::confirm::confirm_rect(term_area, &msg);
@@ -1099,6 +1133,31 @@ fn active_wrap_layout(app: &App) -> Option<crate::wrap::WrapLayout> {
         buf.visible_width.max(1),
         app.config.tab_size,
     ))
+}
+
+fn handle_reload_click(x: usize, y: usize, app: &mut App) {
+    let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+    let term_area = Rect::new(0, 0, tw, th);
+    let popup = popups::reload::reload_rect(term_area, &app.reload_message);
+    if x >= popup.x as usize
+        && x < (popup.x + popup.width) as usize
+        && y >= popup.y as usize
+        && y < (popup.y + popup.height) as usize
+    {
+        let btn_y = popups::reload::button_row_y(popup) as usize;
+        if y == btn_y {
+            if let Some(idx) = app.reload_button_hover {
+                let choice = match idx {
+                    0 => ReloadChoice::Reload,
+                    1 => ReloadChoice::Always,
+                    _ => ReloadChoice::Keep,
+                };
+                app.close_reload(choice);
+            }
+        }
+    } else {
+        app.close_reload(ReloadChoice::Keep);
+    }
 }
 
 fn handle_confirm_click(x: usize, y: usize, app: &mut App) {
@@ -1345,7 +1404,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 if let Some(focus) = app.popup_focus() {
                     match focus {
                         PopupFocus::Confirm => handle_confirm_click(x, y, app),
-                        PopupFocus::Reload => {}
+                        PopupFocus::Reload => handle_reload_click(x, y, app),
                         PopupFocus::FileBrowser => handle_file_browser_click(x, y, app),
                         PopupFocus::FileDialog => handle_file_dialog_click(x, y, app),
                         PopupFocus::Configure => handle_configure_click(x, y, app),
@@ -2039,6 +2098,39 @@ fn popup_ctrl_action(code: KeyCode, app: &App) -> Option<PopupCtrl> {
     }
 }
 
+fn handle_reload_key(code: KeyCode, app: &mut App) {
+    match code {
+        KeyCode::Left | KeyCode::BackTab => {
+            app.reload_selected = if app.reload_selected == 0 {
+                2
+            } else {
+                app.reload_selected - 1
+            };
+        }
+        KeyCode::Right | KeyCode::Tab => {
+            app.reload_selected = (app.reload_selected + 1) % 3;
+        }
+        KeyCode::Char('y' | 'Y' | 'r' | 'R') => {
+            app.close_reload(ReloadChoice::Reload);
+        }
+        KeyCode::Char('a' | 'A') => {
+            app.close_reload(ReloadChoice::Always);
+        }
+        KeyCode::Char('n' | 'N' | 'k' | 'K') | KeyCode::Esc => {
+            app.close_reload(ReloadChoice::Keep);
+        }
+        KeyCode::Enter => {
+            let choice = match app.reload_selected {
+                0 => ReloadChoice::Reload,
+                1 => ReloadChoice::Always,
+                _ => ReloadChoice::Keep,
+            };
+            app.close_reload(choice);
+        }
+        _ => {}
+    }
+}
+
 /// Returns true when the caller should leave `run_app` immediately (quit confirmed).
 fn handle_confirm_key(code: KeyCode, app: &mut App) -> bool {
     match code {
@@ -2335,6 +2427,7 @@ fn any_modal_open(app: &App) -> bool {
         || app.show_file_dialog
         || app.show_file_browser
         || app.show_confirm
+        || app.show_reload
         || app.active_menu.is_some()
         || app.find_state.is_some()
 }
@@ -2526,6 +2619,10 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     if let Some(ref menu) = app.active_menu {
         crate::ui::header::render_dropdown(f, menu, area, app.current_theme(), app.menu_selected);
+    }
+
+    if app.show_reload {
+        popups::reload::render(f, area, app.current_theme(), app);
     }
 
     // Quit confirm always paints last so it stacks above every other popup.
@@ -3085,6 +3182,50 @@ mod popup_focus_key_tests {
         assert_eq!(edit.focus, EditFocus::Name);
         assert_eq!(edit.name, format!("{start_name}end"));
     }
+
+    fn reload_prompt_app() -> (App, std::path::PathBuf) {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "rust-edit-reload-key-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&p, "one\n").unwrap();
+        let mut app = App::new(&[]);
+        app.config.auto_reload_all = false;
+        app.open_file_in_tab(&p).unwrap();
+        std::fs::write(&p, "two!\n").unwrap();
+        app.check_external_changes();
+        assert!(app.show_reload);
+        (app, p)
+    }
+
+    #[test]
+    fn handle_reload_y_reloads_and_esc_keeps() {
+        let (mut app, path) = reload_prompt_app();
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Reload));
+        handle_reload_key(KeyCode::Char('y'), &mut app);
+        assert!(!app.show_reload);
+        assert_eq!(app.active_buffer().text(), "two!\n");
+        let _ = std::fs::remove_file(&path);
+
+        let (mut app, path) = reload_prompt_app();
+        handle_reload_key(KeyCode::Esc, &mut app);
+        assert!(!app.show_reload);
+        assert_eq!(app.active_buffer().text(), "one\n");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn confirm_still_wins_over_reload() {
+        let (mut app, path) = reload_prompt_app();
+        app.show_confirm_dialog("Quit with unsaved changes?", "quit");
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Confirm));
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 #[cfg(test)]
@@ -3171,6 +3312,40 @@ mod popup_mouse_focus_tests {
         assert!(!app.show_word_count);
         assert_eq!(app.active_buffer().cursor, cursor_before);
         assert!(!app.mouse_drag_active);
+    }
+
+    #[test]
+    fn update_hover_sets_reload_button_and_clears_buried_configure() {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "rust-edit-reload-hover-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&p, "one\n").unwrap();
+        let mut app = App::new(&[]);
+        app.config.auto_reload_all = false;
+        app.open_file_in_tab(&p).unwrap();
+        std::fs::write(&p, "two!\n").unwrap();
+        app.check_external_changes();
+        app.open_configure(); // should no-op while reload owns focus
+        app.configure_row_hover = Some(0);
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Reload));
+
+        let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+        let term_area = Rect::new(0, 0, tw, th);
+        let popup = popups::reload::reload_rect(term_area, &app.reload_message);
+        let labels = popups::reload::button_labels();
+        let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x + 1, &labels);
+        let (x0, _) = ranges[0];
+        let y = popups::reload::button_row_y(popup);
+        update_hover_states(x0, y, &mut app);
+        assert_eq!(app.reload_button_hover, Some(0));
+        assert_eq!(app.configure_row_hover, None);
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
