@@ -5,6 +5,7 @@
 mod app;
 mod buffer;
 mod config;
+mod format;
 mod highlight_cache;
 mod syntax;
 mod theme;
