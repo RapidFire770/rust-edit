@@ -2697,6 +2697,7 @@ mod tests {
     #[test]
     fn format_plain_buffer_applies_builtin_and_is_undoable() {
         let mut app = App::new(&[]);
+        app.config.tab_size = 4;
         {
             let buf = app.active_buffer_mut();
             buf.insert("hello  \n\tworld");
