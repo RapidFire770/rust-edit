@@ -79,7 +79,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
                 ("Ctrl+X / Ctrl+C / Ctrl+V", "Cut / copy / paste"),
                 ("Ctrl+A", "Select all"),
-                ("Ctrl+B / I / `", "Markdown bold / italic / code (in .md)"),
+                ("Esc", "Clear selection"),
             ],
         ),
         (
@@ -102,9 +102,12 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
             vec![
                 ("Arrows / Home / End", "Move cursor"),
                 ("Shift+Arrows / Home / End", "Extend selection"),
+                ("Shift+PgUp / PgDn", "Extend selection by a page"),
                 ("PgUp / PgDn", "Page up / down"),
                 ("Alt+H / Alt+L", "Scroll view left / right"),
                 ("Alt+F / T / S", "Open File / Tools / Settings menu"),
+                ("j / k, Up / Down", "Move selection in an open menu"),
+                ("Enter / Esc", "Run the menu item / close the menu"),
                 ("Alt+1..9", "Switch to tab N"),
                 ("[<] / [>]", "Scroll overflow file tabs"),
             ],
@@ -113,12 +116,9 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
             "View & Tools",
             vec![
                 ("F1", "Toggle this help"),
-                ("Shift+W", "Word count"),
+                ("Alt+W", "Word count"),
                 ("Alt+Z", "Toggle word wrap"),
-                (
-                    "Ctrl+Shift+F",
-                    "Format document (language tool or editor tab size)",
-                ),
+                ("Format Document", "Tools menu (tool or tab size)"),
                 ("1 / 2 / 3", "Help tab: Shortcuts / Languages / About"),
             ],
         ),
@@ -134,7 +134,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                     "j / k, Up / Down",
                     "Move selection in Configure / Themes list",
                 ),
-                ("Enter", "Toggle option (Configure) / Apply theme (Themes)"),
+                ("Enter", "Toggle or step up / Apply theme"),
                 ("Left / Right", "Step tab size in Configure"),
                 ("e / n / d", "List: edit / new / delete custom"),
                 ("Tab", "Edit: Name → Roles → Palette → R/G/B → Hex"),
@@ -155,6 +155,8 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("[<] / [>] / wheel over tabs", "Scroll overflow file tabs"),
                 ("Click + drag", "Place cursor / select text"),
                 ("Scroll wheel", "Scroll vertically"),
+                ("Shift+wheel", "Scroll horizontally"),
+                ("Click / drag bars", "Vertical and horizontal bars"),
                 ("Click buttons", "Click any [ button ] in popups"),
                 ("Click < / >", "Step tab size in Configure"),
                 (
@@ -487,6 +489,32 @@ mod tests {
                 "about line is {width} columns; min help body is 58"
             );
         }
+    }
+
+    fn shortcuts_text() -> String {
+        help_body_lines(HelpTab::Shortcuts, &Theme::default())
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect()
+    }
+
+    #[test]
+    fn shortcuts_page_matches_keys_that_run() {
+        let text = shortcuts_text();
+        assert!(text.contains("Alt+W"), "{text}");
+        assert!(text.contains("Word count"), "{text}");
+        assert!(text.contains("Format Document"), "{text}");
+        assert!(text.contains("Tools menu"), "{text}");
+        assert!(text.contains("Clear selection"), "{text}");
+        assert!(text.contains("Shift+PgUp / PgDn"), "{text}");
+        assert!(text.contains("Shift+wheel"), "{text}");
+        assert!(text.contains("Vertical and horizontal bars"), "{text}");
+        assert!(!text.contains("Shift+W"), "{text}");
+        assert!(!text.contains("Ctrl+B"), "{text}");
+        assert!(!text.contains("Markdown bold"), "{text}");
+        assert!(!text.contains("Ctrl+Shift+F"), "{text}");
+        // Ctrl+H remains the file-browser hidden-files toggle.
+        assert!(text.contains("Ctrl+H"), "{text}");
     }
 
     #[test]

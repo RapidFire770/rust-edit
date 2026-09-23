@@ -3,7 +3,7 @@
 **Project:** Rust-Edit — Feature-rich terminal text & code editor (TUI)  
 **Primary Framework:** Ratatui v0.30+  
 **Status:** Phase 1 complete (June 2026). MVP + high-value additions shipped.   
-**Last Updated:** September 19, 2026
+**Last Updated:** September 23, 2026
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
 
@@ -36,7 +36,8 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
    - When you have a choice (crate X vs Y, approach A vs B), briefly state the pros/cons in your reasoning or commit message. Cite terminal constraints, performance, complexity, or maintenance burden.
 5. **Respect the spec — with documented deviations**
    - The Design Spec is the historical source of intent; this AGENTS.md reflects the *current* agreed scope. Where they differ, AGENTS.md wins:
-     - **Markdown rendered preview was removed.** Markdown files keep source syntax highlighting and the `Ctrl+B/I/\`` formatting inserters, but the pulldown-cmark split-preview pane was deleted (the rendering was incomplete and editing in the source pane was awkward). Re-adding a preview requires a new design decision.
+     - **Markdown rendered preview and formatting chords were removed.** Markdown files keep source syntax highlighting. `Ctrl+I` is Tab on a terminal and inserts `config.tab_size` spaces at the caret. The editor does not apply italic styling to buffer text. Re-adding a preview or a formatting toolbar requires a new design decision.
+     - **Help lists only chords terminals deliver.** Word count is `Alt+W`. Format Document is the Tools menu item (`Ctrl+Shift+F` arrives as `Ctrl+F` on a standard terminal; a Shift-aware handler remains for terminals that report Shift, and help does not advertise it). Help opens with `F1`; `?` inserts a question mark. Find/Replace is `Ctrl+F` (Tab moves to the replace field). The Tools menu item "Find & Replace" focuses that field and has no chord of its own. `Ctrl+H` toggles hidden files in the file browser only.
      - **Single Find/Replace shortcut (**`Ctrl+F`**)** — the bar has query/replace fields reachable via Tab, so a separate `Ctrl+H` was dropped.
      - **Tab at caret inserts spaces** — Design Spec §7 said Tab/Shift+Tab indent/dedent the line. Caret Tab now inserts `config.tab_size` spaces at the cursor (always the full width, not a remainder to the next tab stop). Non-empty selections still indent; Shift+Tab still dedents. Smart-indent extra width on Enter also uses `tab_size` (no more hardcoded 4).
    - LSP is Phase 2+ only.
@@ -196,6 +197,8 @@ rust-edit/
 
 ### Markdown Preview (when implemented)
 
+Not current scope. See §1 and §8 before adding a preview or a formatting toolbar.
+
 - Source is always plain text + markdown syntax.
 - Preview renderer maps pulldown-cmark events to Ratatui `Span` / `Line` with theme colors (headings = bold + accent color, code blocks = bg color + inner syntax if possible, etc.).
 - Formatting toolbar inserts syntax into the source buffer (never mutates a "rich" representation).
@@ -301,11 +304,11 @@ Test checklist (run in at least 2 different terminals, e.g. kitty + alacritty):
 - [ ] Smart indent on Enter behaves reasonably for code.
 - [ ] Find bar opens, incremental highlight works, basic replace functions.
 - [ ] Theme switch in Settings applies immediately and looks good in both dark/light.
-- [ ] Markdown file shows syntax highlighting and `Ctrl+B/I/\`` formatting inserters.
+- [ ] Markdown file shows source syntax highlighting (no formatting chords; `Ctrl+I` is Tab).
 - [ ] Unsaved changes confirmation appears on close/quit; Y/N works via keyboard and clickable buttons.
 - [ ] Mouse works for tab switching, cursor placement, scrolling, and clicking popup buttons.
 - [ ] No obvious layout breakage on resize (small vs wide terminal).
-- [ ] Help (`?` or F1) shows accurate keybindings.
+- [ ] Help (`F1`) shows accurate keybindings. `?` types a question mark.
 - [ ] Large file (e.g. 50k+ lines) remains responsive (test scrolling & editing).
 - [ ] Horizontal scrollbar appears on a long unwrapped line; click/drag pans; disappears under wrap / when lines fit.
 
@@ -323,7 +326,7 @@ Document any terminal-specific quirks you discover.
 
 - Do not implement full LSP client, diagnostics from rust-analyzer, completions, etc.
 - Do not add session restore, split panes, a sidebar file tree, git integration, or a plugin system.
-- Do not re-add a markdown rendered preview without a fresh design decision (the previous one was removed — see §1 "Respect the spec — with documented deviations").
+- Do not re-add a markdown rendered preview or Ctrl+B / Ctrl+I / Ctrl+backtick formatting inserters without a fresh design decision (both were removed — see §1). Ctrl+I is Tab.
 - Do not add "font size" or arbitrary rich-text WYSIWYG editing.
 - Do not add built-in printing / PDF generation unless the user explicitly moves it into scope.
 - Do not introduce heavy GUI crates (egui, iced, etc.) or webview.

@@ -1750,28 +1750,6 @@ impl App {
         }
     }
 
-    pub fn wrap_selection_or_cursor(&mut self, before: &str, after: &str) {
-        let buf = self.active_buffer_mut();
-        buf.push_undo(); // make MD formatting undoable (was direct rope bypass)
-        if let Some(sel) = &buf.selection {
-            let start = sel.start.min(buf.rope.len_bytes());
-            let end = sel.end.min(buf.rope.len_bytes());
-            let selected = buf.rope.byte_slice(start..end).to_string();
-            let wrapped = format!("{}{}{}", before, selected, after);
-            buf.remove_byte_range(start, end);
-            buf.insert_at_byte(start, &wrapped);
-            buf.cursor = start + wrapped.len();
-            buf.selection = Some(start..start + wrapped.len());
-            buf.is_modified = true;
-        } else {
-            buf.insert_at_byte(buf.cursor, before);
-            buf.insert_at_byte(buf.cursor + before.len(), after);
-            buf.cursor += before.len();
-            buf.is_modified = true;
-        }
-        buf.bump_generation();
-    }
-
     /// Shared logic for Quit (menu or Ctrl+Q): show confirm if unsaved, else set flag.
     pub fn request_quit(&mut self) {
         let has_unsaved = self.buffers.iter().any(|b| b.is_modified);
@@ -1782,7 +1760,7 @@ impl App {
         }
     }
 
-    /// Undo last edit (wired to Ctrl+Z / Ctrl+Shift+Z). Also refresh find matches if active.
+    /// Undo last edit (Ctrl+Z). Also refresh find matches if active.
     pub fn undo(&mut self) {
         self.active_buffer_mut().undo();
         if self.is_find_active() {
@@ -1790,7 +1768,7 @@ impl App {
         }
     }
 
-    /// Redo last undone edit (wired to Ctrl+Y / Ctrl+Shift+Z). Also refresh find matches if active.
+    /// Redo last undone edit (Ctrl+Y). Also refresh find matches if active.
     pub fn redo(&mut self) {
         self.active_buffer_mut().redo();
         if self.is_find_active() {
@@ -2078,19 +2056,6 @@ mod tests {
             old.as_ref().is_some_and(|s| s.contains("foo")),
             "pre-replace spans must still contain the original query, got {old:?}"
         );
-    }
-
-    #[test]
-    fn markdown_wrap_bumps_generation() {
-        // Regression: wrap used insert_at_byte/remove_byte_range which do not
-        // bump generation (indent/newline bump once at the end instead).
-        let mut app = App::new(&[]);
-        app.active_buffer_mut().insert("hi");
-        let g = app.active_buffer().generation;
-        app.active_buffer_mut().selection = Some(0..2);
-        app.wrap_selection_or_cursor("**", "**");
-        assert_ne!(app.active_buffer().generation, g);
-        assert_eq!(app.active_buffer().text(), "**hi**");
     }
 
     #[test]

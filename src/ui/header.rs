@@ -203,6 +203,19 @@ pub fn menu_labels() -> &'static str {
     " File  Tools  Settings  "
 }
 
+/// Tools dropdown labels. Shortcuts named here must be chords the editor
+/// actually receives. Format has no portable chord (Ctrl+Shift+F arrives as
+/// Ctrl+F); Find & Replace is the menu path onto the replace field.
+pub fn tools_menu_items() -> &'static [&'static str] {
+    &[
+        "Find (Ctrl+F)",
+        "Find & Replace",
+        "Word Count (Alt+W)",
+        "Format Document",
+        "Toggle Word Wrap (Alt+Z)",
+    ]
+}
+
 /// Render a dropdown popup for a menu.
 /// Positioned below header. Uses simple bordered list.
 pub fn render_dropdown(
@@ -222,13 +235,7 @@ pub fn render_dropdown(
         "Close Tab (Ctrl+W)",
         "Quit (Ctrl+Q)",
     ];
-    let tools_items = vec![
-        "Find (Ctrl+F)",
-        "Find & Replace (Ctrl+H)",
-        "Word Count (Alt+W)",
-        "Format Document (Ctrl+Shift+F)",
-        "Toggle Word Wrap (Alt+Z)",
-    ];
+    let tools_items: Vec<&str> = tools_menu_items().to_vec();
     let settings_items = vec!["Configure...", "Themes...", "Help (F1)"];
 
     // x offset where each dropdown should appear, matching the header layout:
@@ -558,6 +565,24 @@ mod tests {
 
     fn untitled_names(n: usize) -> Vec<String> {
         vec!["untitled".to_string(); n]
+    }
+
+    #[test]
+    fn tools_menu_labels_match_working_shortcuts() {
+        let items = tools_menu_items();
+        assert_eq!(
+            items,
+            &[
+                "Find (Ctrl+F)",
+                "Find & Replace",
+                "Word Count (Alt+W)",
+                "Format Document",
+                "Toggle Word Wrap (Alt+Z)",
+            ]
+        );
+        let joined = items.join("\n");
+        assert!(!joined.contains("Ctrl+H"), "{joined}");
+        assert!(!joined.contains("Ctrl+Shift+F"), "{joined}");
     }
 
     #[test]

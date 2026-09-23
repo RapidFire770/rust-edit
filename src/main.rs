@@ -557,9 +557,15 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 KeyCode::Char('f')
                                     if key.modifiers.contains(KeyModifiers::SHIFT) =>
                                 {
+                                    // Most terminals send Ctrl+Shift+F as plain Ctrl+F
+                                    // (no Shift bit). Help points at the Tools menu.
+                                    // This arm runs only when Shift is actually reported.
                                     app.format_current_document();
                                 }
                                 KeyCode::Char('z') => {
+                                    // Ctrl+Y is the documented redo chord. Shift is set
+                                    // only when the terminal reports it; a Ctrl+Z byte
+                                    // arrives with Control alone.
                                     if key.modifiers.contains(KeyModifiers::SHIFT) {
                                         app.redo();
                                     } else {
@@ -722,25 +728,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                     app.update_find_matches();
                                 }
                             }
-                            // MD formatting toolbar (Sprint 2)
-                            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                if app.active_buffer().language == crate::buffer::Language::Markdown
-                                {
-                                    app.wrap_selection_or_cursor("**", "**");
-                                }
-                            }
-                            KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                if app.active_buffer().language == crate::buffer::Language::Markdown
-                                {
-                                    app.wrap_selection_or_cursor("*", "*");
-                                }
-                            }
-                            KeyCode::Char('`') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                if app.active_buffer().language == crate::buffer::Language::Markdown
-                                {
-                                    app.wrap_selection_or_cursor("`", "`");
-                                }
-                            }
                             KeyCode::Esc if app.is_find_active() => {
                                 app.clear_find();
                             }
@@ -868,7 +855,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 app.active_buffer_mut().dedent(tab);
                             }
                             KeyCode::Esc => {
-                                app.active_buffer_mut().selection = None;
+                                // Drop the range and the anchor. Clearing only the
+                                // range lets the next Shift-move revive the old span.
+                                app.active_buffer_mut().clear_selection();
                             }
                             _ => {}
                         }

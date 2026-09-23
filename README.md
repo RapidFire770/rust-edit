@@ -21,7 +21,7 @@ Inspired by the UI mockup in `docs/ui-design-sample-2.jpg`.
 - **Word count**, **format document** (uses `rustfmt` / `black` / `prettier` / `clang-format` when on PATH; otherwise expands tabs to your tab size, strips trailing whitespace, and ensures a trailing newline).
 - **Horizontal and vertical scrolling** — auto-follows the cursor on long lines; manual scroll via wheel, `Alt+H`/`Alt+L`, and `PgUp`/`PgDn`; a bottom scrollbar appears when wrap is off and a line is longer than the window.
 - **Full mouse support** — tabs, menus, cursor placement, text selection, scrolling, and clickable buttons in every popup. Mouse is on par with the keyboard, not an afterthought.
-- **Tabbed Help popup** (`?` or `F1`) with categorized shortcuts, supported languages, and about.
+- **Tabbed Help popup** (`F1`) with categorized shortcuts, supported languages, and about.
 
 > Markdown files get source syntax highlighting. (A rendered split-preview pane was evaluated and removed; see AGENTS.md for the rationale.)
 
@@ -48,13 +48,13 @@ cargo build --release
 
 ## Keyboard & Mouse
 
-See the in-app help (`?` or `F1`) for the full, categorized list. Highlights:
+See the in-app help (`F1`) for the full, categorized list. Highlights:
 
 **File** — `Ctrl+N` new · `Ctrl+O` open · `Ctrl+S` save · `Ctrl+Alt+S` save as · `Ctrl+W` close tab · `Ctrl+Q` quit
 **Edit** — `Enter` newline+indent · `Tab` insert at cursor · `Shift+Tab` dedent · `Ctrl+Z`/`Ctrl+Y` undo/redo · `Ctrl+X`/`C`/`V` cut/copy/paste
 **Find** — `Ctrl+F` open bar · `Tab` cycle query→replace→commands · (in commands) `n`/`N` next/prev · `r`/`Enter` replace · `Ctrl+A` all · `c`/`x`/`w` case/regex/word
 **Navigation** — arrows/Home/End · `Shift+arrows` select · `PgUp`/`PgDn` · `Alt+H`/`Alt+L` scroll left/right · `Alt+F`/`T`/`S` menus · `Alt+1..9` tabs
-**View/Tools** — `?`/`F1` help · `Shift+W` word count · `Ctrl+Shift+F` format
+**View/Tools** — `F1` help · `Alt+W` word count · `Alt+Z` word wrap · Format Document in the Tools menu
 **Mouse** — click tabs/menus/[+] · `[<]`/`[>]` scroll overflow tabs (wheel over the tab strip too) · click+drag to select · scroll wheel (vertical; Shift = horizontal) · click any `[ button ]` in popups
 
 ## Requirements

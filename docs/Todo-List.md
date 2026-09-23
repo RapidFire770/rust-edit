@@ -8,7 +8,7 @@
 - [ ] Add an X button to the file tabs to click on and close the tabs as well if possible to fit in with the current ui design and look.
 - [x] Make the Help button in the Settings dropdown menu selectable and clickable to open the help dialog with the mouse. It currently works with the keyboard but is not detected with the mouse.
 - [x] Add the programs version number to the Help dialog under the About Tab. Update the description of the program and remove mentions of seeing design docs or AGENTS.md and replace with referencing to view the README.md for more details.
-- [ ] In the help dialog under shortcuts -> edit, the "Ctrl+B / I / `" do not function as the help information says. This line needs to be removed or have the shortcuts work as it specifies. Ctrl+I currently indents the line, I do not believe the application can do italics as it is currently designed and this shortcut is currently not specified anywhere else in the shortcuts list correctly. Review all shortcuts and ensure they are detailed correctly and work as specified.
+- [x] In the help dialog under shortcuts -> edit, the "Ctrl+B / I / `" do not function as the help information says. This line needs to be removed or have the shortcuts work as it specifies. Ctrl+I currently indents the line, I do not believe the application can do italics as it is currently designed and this shortcut is currently not specified anywhere else in the shortcuts list correctly. Review all shortcuts and ensure they are detailed correctly and work as specified.
 
 ### Major:
 - [x] The format document option in the tools menu does not have any function. This should be implemented to format the document according to the user's preferences or use a coding language's formatter if available (e.g. rustfmt).
