@@ -316,20 +316,24 @@ fn help_body_lines(tab: HelpTab, theme: &Theme) -> Vec<Line<'static>> {
             )));
         }
         HelpTab::About => {
+            let version = format!("Version {}", env!("CARGO_PKG_VERSION"));
             lines.push(Line::from(Span::styled("rust-edit", accent)));
             lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(version, dim)));
+            lines.push(Line::from(""));
+            // Split so each line fits the narrowest help body (popup width 60 → inner 58).
             lines.push(Line::from(Span::styled(
-                "A fast, keyboard + mouse terminal text & code editor built with Ratatui.",
+                "A fast keyboard-and-mouse text and code editor",
                 dim,
             )));
+            lines.push(Line::from(Span::styled("for the Linux terminal.", dim)));
             lines.push(Line::from(""));
             lines.push(Line::from(
-                "Rope-backed buffer, syntect highlighting, configurable themes.",
+                "Tabs, syntax highlighting, themes, find and replace,",
             ));
+            lines.push(Line::from("and full mouse support."));
             lines.push(Line::from(""));
-            lines.push(Line::from(
-                "See AGENTS.md and the design spec in docs/ for details.",
-            ));
+            lines.push(Line::from("See README.md for more details."));
         }
     }
     lines
@@ -455,6 +459,34 @@ mod tests {
         assert_eq!(sb.height, body.height);
         assert_eq!(sb.width, 1);
         assert_eq!(sb.x, body.x + body.width - 1);
+    }
+
+    #[test]
+    fn about_tab_shows_version_and_readme() {
+        let lines = help_body_lines(HelpTab::About, &Theme::default());
+        let text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect();
+        assert!(text.contains(&format!("Version {}", env!("CARGO_PKG_VERSION"))));
+        assert!(text.contains("README.md"));
+        assert!(!text.contains("AGENTS.md"));
+        assert!(!text.contains("design spec"));
+        assert!(text.contains("A fast keyboard-and-mouse text and code editor"));
+        assert!(text.contains("for the Linux terminal."));
+        assert!(text.contains("Tabs, syntax highlighting, themes, find and replace,"));
+        assert!(text.contains("and full mouse support."));
+        for line in &lines {
+            let width: usize = line
+                .spans
+                .iter()
+                .map(|span| span.content.chars().count())
+                .sum();
+            assert!(
+                width <= 58,
+                "about line is {width} columns; min help body is 58"
+            );
+        }
     }
 
     #[test]
