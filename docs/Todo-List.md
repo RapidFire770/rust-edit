@@ -6,7 +6,7 @@
   - [x] The theme editor should have some kind of graphical color picker or at minimum a list of premade colors (red, green, blue, yellow, etc.) instead of just a value depending on the capabitlities of Rataui and our current tech stack.
 - [x] Highlight and clicking on custom themes is slightly off. The mouse has to be above the theme the user is trying to select for it to be highlighted and clickable. Default themes highlight and click correctly.
 - [ ] Add an X button to the file tabs to click on and close the tabs as well if possible to fit in with the current ui design and look.
-- [ ] Make the Help button in the Settings dropdown menu selectable and clickable to open the help dialog with the mouse. It currently works with the keyboard but is not detected with the mouse.
+- [x] Make the Help button in the Settings dropdown menu selectable and clickable to open the help dialog with the mouse. It currently works with the keyboard but is not detected with the mouse.
 
 ### Major:
 - [x] The format document option in the tools menu does not have any function. This should be implemented to format the document according to the user's preferences or use a coding language's formatter if available (e.g. rustfmt).

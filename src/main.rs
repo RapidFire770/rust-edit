@@ -1105,7 +1105,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
                     let item_count = match menu_name {
                         "File" => 6,
                         "Tools" => 5,
-                        "Settings" => 2,
+                        "Settings" => 3,
                         _ => 0,
                     };
 
@@ -1372,7 +1372,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                     let (menu_x, num_items) = match menu_name.as_str() {
                         "File" => (0usize, 6),
                         "Tools" => (7, 5),
-                        "Settings" => (15, 2),
+                        "Settings" => (15, 3),
                         _ => (0, 0),
                     };
                     let dy = crate::ui::layout::HEADER_ROWS as usize; // below header + rule
