@@ -70,10 +70,17 @@ bundle=$(make_bundle 0.3.0)
 "$bundle/install.sh" --yes </dev/null
 [ "$(installed_version)" = "0.3.0" ] || fail "--yes update"
 
+[ -x "$HOME/.local/bin/rust-edit-uninstall" ] || fail "uninstaller missing"
+[ -x "$XDG_DATA_HOME/doc/rust-edit/install.sh" ] || fail "installed install.sh"
+
 mkdir -p "$XDG_CONFIG_HOME/rust-edit"
 printf 'keep\n' > "$XDG_CONFIG_HOME/rust-edit/config.toml"
-printf 'y\n' | "$bundle/install.sh" --uninstall
+printf 'n\n' | "$HOME/.local/bin/rust-edit-uninstall"
+[ "$(installed_version)" = "0.3.0" ] || fail "declined uninstall"
+printf 'y\n' | "$HOME/.local/bin/rust-edit-uninstall"
 [ ! -e "$HOME/.local/bin/rust-edit" ] || fail "binary removed"
+[ ! -e "$HOME/.local/bin/rust-edit-uninstall" ] || fail "uninstaller removed"
+[ ! -e "$XDG_DATA_HOME/doc/rust-edit/install.sh" ] || fail "installed install.sh removed"
 [ ! -e "$desktop" ] || fail "desktop removed"
 [ ! -e "$XDG_DATA_HOME/icons/hicolor/scalable/apps/rust-edit.svg" ] || fail "icon removed"
 grep -q '^keep$' "$XDG_CONFIG_HOME/rust-edit/config.toml" || fail "config preserved"

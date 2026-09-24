@@ -12,8 +12,9 @@ menu entry. The desktop opens that entry in your default terminal.
   --yes        answer yes to update, reinstall, downgrade, and uninstall
   --uninstall  remove the program, menu entry, icon, and bundled docs
 
-Settings under ~/.config/rust-edit are left in place. Run this as your
-user, without sudo.
+After installation, run rust-edit-uninstall from any directory. Settings
+under ~/.config/rust-edit are left in place. Run this as your user,
+without sudo.
 EOF
 }
 
@@ -51,12 +52,14 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 : "${HOME:?HOME is not set}"
 BIN_DIR=$HOME/.local/bin
 BIN=$BIN_DIR/rust-edit
+UNINSTALLER=$BIN_DIR/rust-edit-uninstall
 DATA=${XDG_DATA_HOME:-$HOME/.local/share}
 APP_DIR=$DATA/applications
 ICON_DIR=$DATA/icons/hicolor/scalable/apps
 DOC_DIR=$DATA/doc/rust-edit
 DESKTOP=$APP_DIR/rust-edit.desktop
 ICON=$ICON_DIR/rust-edit.svg
+INSTALLED_SCRIPT=$DOC_DIR/install.sh
 CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/rust-edit
 
 version_cmp() {
@@ -134,7 +137,8 @@ uninstall() {
     echo "Uninstall cancelled."
     exit 0
   fi
-  rm -f "$BIN" "$DESKTOP" "$ICON" "$DOC_DIR/README.md" "$DOC_DIR/LICENSE"
+  rm -f "$BIN" "$UNINSTALLER" "$DESKTOP" "$ICON" \
+    "$DOC_DIR/README.md" "$DOC_DIR/LICENSE" "$INSTALLED_SCRIPT"
   rmdir "$DOC_DIR" 2>/dev/null || true
   refresh_caches
   echo "Removed rust-edit. Settings in $CONFIG_DIR were left in place."
@@ -199,9 +203,16 @@ fi
 
 install -d "$BIN_DIR" "$APP_DIR" "$ICON_DIR" "$DOC_DIR"
 install -m 0755 "$ROOT/rust-edit" "$BIN"
+install -m 0755 "$ROOT/install.sh" "$INSTALLED_SCRIPT"
 install -m 0644 "$ROOT/logo.svg" "$ICON"
 install -m 0644 "$ROOT/README.md" "$DOC_DIR/README.md"
 install -m 0644 "$ROOT/LICENSE" "$DOC_DIR/LICENSE"
+script_field=$(quote_exec_path "$INSTALLED_SCRIPT")
+cat > "$UNINSTALLER" <<EOF
+#!/bin/sh
+exec $script_field --uninstall "\$@"
+EOF
+chmod 755 "$UNINSTALLER"
 
 exec_field=$(quote_exec_path "$BIN")
 cat > "$DESKTOP" <<EOF
@@ -224,6 +235,7 @@ refresh_caches
 
 echo "Installed rust-edit $pkg"
 echo "  Program: $BIN"
+echo "  Remove:  rust-edit-uninstall"
 echo "  Menu:    Rust-Edit (opens in your default terminal)"
 echo "  Icon:    $ICON"
 case ":$PATH:" in

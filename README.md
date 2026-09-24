@@ -59,10 +59,13 @@ cd rust-edit-0.1.0-x86_64-unknown-linux-gnu
 That installs:
 
 - `~/.local/bin/rust-edit`
+- `rust-edit-uninstall`, for removing the program later
 - a **Rust-Edit** application menu entry that opens in your desktop's default terminal
 - the menu icon from `logo.svg`
 
-Run `./install.sh` again to update. If a copy is already installed, the script compares versions and asks before replacing an older build. `./install.sh --yes` accepts the update without asking. `./install.sh --uninstall` removes the program, the menu entry, and the icon. Your settings in `~/.config/rust-edit` stay in place.
+Run `./install.sh` again to update. If a copy is already installed, the script compares versions and asks before replacing an older build. `./install.sh --yes` accepts the update without asking.
+
+Remove it from any directory with `rust-edit-uninstall`. The same removal is `./install.sh --uninstall` from the unpacked archive. Either one removes the program, the menu entry, and the icon. Settings in `~/.config/rust-edit` stay in place.
 
 The bundled binary is an x86_64 Linux build that needs glibc 2.39 or newer and Linux kernel 6.1 or newer. Ubuntu 24.04, Debian 13, Fedora 40, and Arch meet that.
 
