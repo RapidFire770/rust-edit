@@ -13,6 +13,7 @@ Cargo.lock
 config/
 *.log
 docs/plans
+docs/superpowers
 
 .worktrees/
 docs/Test-Doc.md
