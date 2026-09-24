@@ -92,4 +92,18 @@ if "$empty/install.sh" </dev/null; then
   fail "missing payload should fail"
 fi
 
+trashed=$WORKDIR/fake/.local/share/Trash/files/bundle
+mkdir -p "$trashed"
+cp "$ROOT/scripts/install.sh" "$trashed/install.sh"
+chmod 755 "$trashed/install.sh"
+printf '0.1.0\n' > "$trashed/VERSION"
+printf 'logo\n' > "$trashed/logo.svg"
+printf 'readme\n' > "$trashed/README.md"
+printf 'license\n' > "$trashed/LICENSE"
+printf '#!/bin/sh\nprintf "rust-edit 0.1.0\\n"\n' > "$trashed/rust-edit"
+chmod 755 "$trashed/rust-edit"
+if "$trashed/install.sh" --yes </dev/null; then
+  fail "installer in the trash should fail"
+fi
+
 echo "install_bundle ok"

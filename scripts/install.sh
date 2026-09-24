@@ -49,6 +49,15 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+case "$ROOT" in
+  */.local/share/Trash/*|*/Trash/files/*)
+    echo "This copy of install.sh is in the trash:" >&2
+    echo "  $ROOT" >&2
+    echo "A terminal that was already in that folder keeps using it after the folder is deleted." >&2
+    echo "Unpack the release archive again and run ./install.sh from that new folder." >&2
+    exit 1
+    ;;
+esac
 : "${HOME:?HOME is not set}"
 BIN_DIR=$HOME/.local/bin
 BIN=$BIN_DIR/rust-edit
@@ -234,6 +243,7 @@ chmod 644 "$DESKTOP"
 refresh_caches
 
 echo "Installed rust-edit $pkg"
+echo "  Source:  $ROOT"
 echo "  Program: $BIN"
 echo "  Remove:  rust-edit-uninstall"
 echo "  Menu:    Rust-Edit (opens in your default terminal)"
