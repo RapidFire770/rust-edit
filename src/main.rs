@@ -38,9 +38,48 @@ use crate::buffer::Buffer;
 use crate::ui::find::FindFocus;
 use crate::ui::popups;
 
+/// What to do with CLI args before the terminal is initialized.
+#[derive(Debug, PartialEq, Eq)]
+enum Startup {
+    /// Open these paths. Empty means the untitled placeholder.
+    Run(Vec<String>),
+    /// Print `rust-edit <version>` and exit.
+    Version,
+}
+
+/// `--version` and `-V` print the version. `--` ends flag parsing so a file
+/// named `--version` can still be opened. Every other argument is a path,
+/// including names that start with `-`.
+fn startup_from_args<I>(args: I) -> Startup
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    let mut files = Vec::new();
+    let mut literal = false;
+    for arg in args {
+        let arg = arg.as_ref();
+        if literal {
+            files.push(arg.to_string());
+            continue;
+        }
+        match arg {
+            "--" => literal = true,
+            "--version" | "-V" => return Startup::Version,
+            other => files.push(other.to_string()),
+        }
+    }
+    Startup::Run(files)
+}
+
 fn main() -> Result<()> {
-    // CLI support: rust-edit [file ...]
-    let files: Vec<String> = std::env::args().skip(1).collect();
+    let files = match startup_from_args(std::env::args().skip(1)) {
+        Startup::Version => {
+            println!("rust-edit {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Startup::Run(files) => files,
+    };
 
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -3852,6 +3891,41 @@ mod editor_mouse_click_scroll_tests {
             app.active_buffer().cursor_position(),
             (0, 0),
             "first text column (x=gutter) must place the caret"
+        );
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::{startup_from_args, Startup};
+
+    #[test]
+    fn version_flags_are_not_filenames() {
+        assert_eq!(startup_from_args(["--version"]), Startup::Version);
+        assert_eq!(startup_from_args(["-V"]), Startup::Version);
+    }
+
+    #[test]
+    fn version_flag_wins_when_mixed_with_paths() {
+        assert_eq!(
+            startup_from_args(["src/main.rs", "--version"]),
+            Startup::Version
+        );
+    }
+
+    #[test]
+    fn double_dash_keeps_a_version_looking_filename() {
+        assert_eq!(
+            startup_from_args(["--", "--version"]),
+            Startup::Run(vec!["--version".to_string()])
+        );
+    }
+
+    #[test]
+    fn ordinary_arguments_stay_filenames() {
+        assert_eq!(
+            startup_from_args(["src/main.rs", "-notes.txt"]),
+            Startup::Run(vec!["src/main.rs".to_string(), "-notes.txt".to_string()])
         );
     }
 }

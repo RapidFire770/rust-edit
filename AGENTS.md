@@ -3,7 +3,7 @@
 **Project:** Rust-Edit — Feature-rich terminal text & code editor (TUI)  
 **Primary Framework:** Ratatui v0.30+  
 **Status:** Phase 1 complete (June 2026). MVP + high-value additions shipped.   
-**Last Updated:** September 23, 2026
+**Last Updated:** September 24, 2026
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
 
@@ -40,6 +40,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
      - **Help lists only chords terminals deliver.** Word count is `Alt+W`. Format Document is the Tools menu item (`Ctrl+Shift+F` arrives as `Ctrl+F` on a standard terminal; a Shift-aware handler remains for terminals that report Shift, and help does not advertise it). Help opens with `F1`; `?` inserts a question mark. Find/Replace is `Ctrl+F` (Tab moves to the replace field). The Tools menu item "Find & Replace" focuses that field and has no chord of its own. `Ctrl+H` toggles hidden files in the file browser only.
      - **Single Find/Replace shortcut (**`Ctrl+F`**)** — the bar has query/replace fields reachable via Tab, so a separate `Ctrl+H` was dropped.
      - **Tab at caret inserts spaces** — Design Spec §7 said Tab/Shift+Tab indent/dedent the line. Caret Tab now inserts `config.tab_size` spaces at the cursor (always the full width, not a remainder to the next tab stop). Non-empty selections still indent; Shift+Tab still dedents. Smart-indent extra width on Enter also uses `tab_size` (no more hardcoded 4).
+     - **v1 packaging is a home-folder tarball.** Design Spec Sprint 3 named `cargo install` and an optional `.deb`. The release path is `scripts/package.sh`, which packs the host release binary, `docs/logo.svg`, `README.md`, `LICENSE`, and `scripts/install.sh` into `dist/rust-edit-<version>-<host>.tar.gz`. `dist/` is generated and gitignored. The bundle binary is the maintainer's glibc build (glibc >= 2.39, Linux kernel >= 6.1). The binary's ELF version need includes a non-weak `GLIBC_2.39` (`pidfd_spawnp`), so Debian 12 and Fedora 38 cannot run that build. macOS and Windows stay out of scope.
    - LSP is Phase 2+ only.
    - Printing/PDF export is future-only.
    - If the spec is unclear, ask before coding.
@@ -143,6 +144,9 @@ rust-edit/
 │   │       └── word_count.rs
 │   └── utils/
 │       └── clipboard.rs       # arboard thin wrapper
+├── scripts/
+│   ├── install.sh             # ~/.local install, menu entry, version prompt
+│   └── package.sh             # release tarball into dist/
 ├── assets/                    # (future) bundled syntect syntax/theme packs if needed
 └── tests/                     # Integration or property tests (optional early)
 ```
@@ -164,6 +168,7 @@ rust-edit/
 - External file changes: `src/file_watch.rs` classifies `mtime`+`len`. `run_app` caps poll at 500ms when any buffer has a path and also checks on `FocusGained`. No `notify` crate. Dirty buffers never auto-overwrite. `Config.auto_reload_all` is the global Configure toggle; per-file Always is session-only on `Buffer`. Own saves refresh `disk_stamp`. Deleted files keep the buffer and set a one-shot status notice.
 - Info popup / format notice: `show_word_count` + `word_count_text` + `info_popup_title`. Word Count sets the title to `"Word Count"`; `App::show_info_popup(title, body)` reuses the same popup (`PopupFocus::WordCount`) for format errors. It is a no-op if another popup is already focused. `format_status: Option<String>` is a transient status-bar notice that replaces the `Ctrl+Q quit | F1 help` hint; `run_app` clears it on Key Press and Mouse Down before dispatching.
 - Themes popup: List vs Edit. Edit has Name, 16 color roles (name is NOT a role), premade swatches, RGB sliders, hex. `handle_edit_key` owns Edit keystrokes; list shortcuts `e/n/d` must not run in Edit. Geometry helpers in `themes.rs` are the single paint/hit-test source (like Configure).
+- Installer: `rust-edit --version` and `rust-edit -V` print `rust-edit <CARGO_PKG_VERSION>` and exit before raw mode. `--` ends flag parsing so the remaining arguments stay filenames; every other argument is still a path. `scripts/install.sh` probes that line with `timeout` + `setsid` (no controlling terminal) so an older binary cannot put the caller's terminal into raw mode. Install paths are `$HOME/.local/bin/rust-edit`, `$XDG_DATA_HOME/applications/rust-edit.desktop` (`Terminal=true`, absolute `Exec`, `%F` unquoted), and `$XDG_DATA_HOME/icons/hicolor/scalable/apps/rust-edit.svg` copied from `logo.svg`. Do not write a user `index.theme`. Uninstall does not delete `~/.config/rust-edit`.
 
 ---
 
@@ -311,6 +316,7 @@ Test checklist (run in at least 2 different terminals, e.g. kitty + alacritty):
 - [ ] Help (`F1`) shows accurate keybindings. `?` types a question mark.
 - [ ] Large file (e.g. 50k+ lines) remains responsive (test scrolling & editing).
 - [ ] Horizontal scrollbar appears on a long unwrapped line; click/drag pans; disappears under wrap / when lines fit.
+- [ ] Application menu entry Rust-Edit shows the logo and opens the editor in the desktop's default terminal.
 
 Document any terminal-specific quirks you discover.
 

@@ -46,6 +46,34 @@ cargo build --release
 ./target/release/rust-edit src/main.rs        # open one or more files
 ```
 
+## Install
+
+Download `rust-edit-<version>-<target>.tar.gz`, unpack it, and run the installer. It copies the program into your home folder. Root is not required, and a Rust toolchain is not required.
+
+```bash
+tar -xzf rust-edit-0.1.0-x86_64-unknown-linux-gnu.tar.gz
+cd rust-edit-0.1.0-x86_64-unknown-linux-gnu
+./install.sh
+```
+
+That installs:
+
+- `~/.local/bin/rust-edit`
+- a **Rust-Edit** application menu entry that opens in your desktop's default terminal
+- the menu icon from `logo.svg`
+
+Run `./install.sh` again to update. If a copy is already installed, the script compares versions and asks before replacing an older build. `./install.sh --yes` accepts the update without asking. `./install.sh --uninstall` removes the program, the menu entry, and the icon. Your settings in `~/.config/rust-edit` stay in place.
+
+The bundled binary is an x86_64 Linux build that needs glibc 2.39 or newer and Linux kernel 6.1 or newer. Ubuntu 24.04, Debian 13, Fedora 40, and Arch meet that.
+
+Build a bundle from a git checkout (same `CARGO=` override as above if the system cargo proxy is broken):
+
+```bash
+sh scripts/package.sh
+```
+
+The archive is written to `dist/`.
+
 ## Keyboard & Mouse
 
 See the in-app help (`F1`) for the full, categorized list. Highlights:

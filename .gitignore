@@ -14,6 +14,7 @@ config/
 *.log
 docs/plans
 docs/superpowers
+dist/
 
 .worktrees/
 docs/Test-Doc.md
