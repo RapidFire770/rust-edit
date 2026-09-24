@@ -1,105 +1,239 @@
-# rust-edit
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/logo.svg">
+    <img alt="rust-edit" src="docs/logo.svg" width="120">
+  </picture>
 
-A fast, keyboard-and-mouse text and code editor for the Linux terminal, built with [Ratatui](https://ratatui.rs/).
+  <h1>rust-edit</h1>
+  <p>Edit text and code in a Linux terminal, with tabs, menus, and a mouse.</p>
+</div>
 
-**Status:** Phase 1 complete (June 2026).
+<div align="center">
 
-Inspired by the UI mockup in `docs/ui-design-sample-2.jpg`.
+[![License: MIT][license-shield]][license-url]
+[![Version][version-shield]][version-url]
+[![Platform][platform-shield]][platform-url]
+
+</div>
+
+<div align="center">
+  <a href="#quick-start">Quick Start</a> &middot;
+  <a href="#install">Install</a> &middot;
+  <a href="#everyday-keys">Everyday keys</a> &middot;
+  <a href="https://github.com/RapidFire770/rust-edit/issues/new">Report a bug</a>
+</div>
+
+---
+
+## Why rust-edit?
+
+If you edit files in a Linux terminal and want menus, tabs, and a mouse alongside the keyboard, rust-edit is for you.
+
+It keeps the habits of a desktop editor inside the terminal: several files open as tabs, a click to place the cursor, a drag to select text, and Ctrl+S to save.
 
 ## Features
 
-- **Tabbed multi-file editing** — open many files as tabs, switch with the mouse, `Alt+1..9`, or the tab bar.
-- **Rope-backed buffer** — efficient editing of large files (powered by [ropey](https://github.com/cessen/ropey)).
-- **Syntax highlighting** for Rust, Python, Markdown, JSON, TOML, YAML, Bash/Shell, C, C++, JavaScript, and TypeScript (via [syntect](https://github.com/trishume/syntect)), with parse-state checkpoints and an overscanned span window so large files scroll smoothly without re-parsing the viewport on every scroll.
-- **Smart indentation** on Enter (copies leading whitespace, adds a level after `{`, `[`, `(`, `:`).
-- **Bidirectional selection** — extend a selection in either direction with `Shift+arrows`/`Home`/`End`, or click-and-drag with the mouse.
-- **Find & Replace** with case-sensitive, regex, and whole-word toggles; a three-state focus model (query → replace → commands) so you can type any letter (including `n`) and still navigate matches.
-- **Copy / cut / paste** via the system clipboard.
-- **Undo / redo** with full state snapshots.
-- **Theming** — Dark Red (default), Light, and High Contrast, switchable live from the Settings popup; colors come from the theme, never hard-coded.
-- **Configurable** — TOML config under your XDG config dir (tab size, theme, line numbers).
-- **Word count**, **format document** (uses `rustfmt` / `black` / `prettier` / `clang-format` when on PATH; otherwise expands tabs to your tab size, strips trailing whitespace, and ensures a trailing newline).
-- **Horizontal and vertical scrolling** — auto-follows the cursor on long lines; manual scroll via wheel, `Alt+H`/`Alt+L`, and `PgUp`/`PgDn`; a bottom scrollbar appears when wrap is off and a line is longer than the window.
-- **Full mouse support** — tabs, menus, cursor placement, text selection, scrolling, and clickable buttons in every popup. Mouse is on par with the keyboard, not an afterthought.
-- **Tabbed Help popup** (`F1`) with categorized shortcuts, supported languages, and about.
+- **The mouse and the keyboard both finish the job.** Click tabs, menus, scroll bars, and popup buttons, or use the matching keys.
+- **Desktop editing habits.** Tabs, a menu bar, undo and redo, and the system clipboard.
+- **A home-folder install and an application menu entry.** The menu item is named Rust-Edit and opens in your desktop's default terminal. An update asks before it replaces the copy you already have.
+- **Themes you can switch or design.** Dark Red, Light, High Contrast, Solarized, Monochrome, and Terminal Green apply as soon as you choose them. You can also build, edit, and delete your own themes.
+- **Find and replace you can type into.** Match case, a regular expression, or a whole word. You type the search, then Tab to the keys that jump between matches.
+- **A prompt when a file changes on disk.** You can reload it, keep your copy, or reload that file quietly for the rest of the session. With **Auto-reload all** turned on, unmodified files reload on their own. rust-edit asks before it replaces a file that has unsaved edits.
+- **Format the current file from the Tools menu.** rust-edit runs `rustfmt`, `black`, `prettier`, or `clang-format` when that program is already installed. Otherwise it expands tabs to your tab size, strips trailing whitespace, and ends the file with a newline.
+- **Color for common languages.** Rust, Python, Markdown, JSON, TOML, YAML, shell, C, C++, JavaScript, and TypeScript. Other files stay plain text.
 
-> Markdown files get source syntax highlighting. (A rendered split-preview pane was evaluated and removed; see AGENTS.md for the rationale.)
+## When to use it
 
-## Build & Run
+Open rust-edit when a file is a path in your shell, or choose Rust-Edit in the application menu. Press F1 any time for the full list of shortcuts, including the file browser and the theme editor.
 
-> **Note on the** `cargo` **wrapper:** in some environments the system `cargo` proxy is
-> broken. If `cargo --version` fails with `unknown proxy name`, use the real
-> toolchain binary directly:
->
-> ```bash
-> export CARGO=/home/$USER/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo
-> # discover it with:  ls ~/.rustup/toolchains/*/bin/cargo
-> "$CARGO" --version
-> ```
->
-> Below, replace `cargo` with `"$CARGO"` if you hit this. (See
-> `docs/cargo toolchain location.md`.)
+This release edits local files in one window on Linux. Code completion, split panes, git tools, plugins, and restoring an earlier session are left for a later release. macOS and Windows are left for a later release.
 
-```bash
-cargo build --release
-./target/release/rust-edit                    # empty buffer
-./target/release/rust-edit src/main.rs        # open one or more files
-```
+## Quick Start
 
-## Install
-
-Download `rust-edit-<version>-<target>.tar.gz`, unpack it, and run the installer. It copies the program into your home folder. Root is not required, and a Rust toolchain is not required.
+Download `rust-edit-0.1.0-x86_64-unknown-linux-gnu.tar.gz` from [Releases][releases-url], then:
 
 ```bash
 tar -xzf rust-edit-0.1.0-x86_64-unknown-linux-gnu.tar.gz
 cd rust-edit-0.1.0-x86_64-unknown-linux-gnu
 ./install.sh
+rust-edit
 ```
 
-That installs:
+## Install
 
-- `~/.local/bin/rust-edit`
-- `rust-edit-uninstall`, for removing the program later
-- a **Rust-Edit** application menu entry that opens in your desktop's default terminal
-- the menu icon from `logo.svg`
+`./install.sh` installs rust-edit for your user. The release archive already contains the program. Run it from that unpacked folder. A copy that has been moved to the trash refuses to install.
 
-Run `./install.sh` again to update. If a copy is already installed, the script compares versions and asks before replacing an older build. `./install.sh --yes` accepts the update without asking.
+| Piece | Where it goes |
+| --- | --- |
+| Program | `~/.local/bin/rust-edit` |
+| Uninstaller | `~/.local/bin/rust-edit-uninstall` |
+| Application menu entry | Rust-Edit, opened in your default terminal |
+| Menu icon | `~/.local/share/icons/hicolor/scalable/apps/rust-edit.svg` |
 
-Remove it from any directory with `rust-edit-uninstall`. The same removal is `./install.sh --uninstall` from the unpacked archive. Either one removes the program, the menu entry, and the icon. Settings in `~/.config/rust-edit` stay in place.
+Run `./install.sh` again to update. When a copy is already installed, the script compares versions and asks before replacing it. `./install.sh --yes` answers yes to that prompt, including a reinstall or a downgrade.
 
-The bundled binary is an x86_64 Linux build that needs glibc 2.39 or newer and Linux kernel 6.1 or newer. Ubuntu 24.04, Debian 13, Fedora 40, and Arch meet that.
+The menu entry and icon normally live under `~/.local/share`. When `XDG_DATA_HOME` is set, they go there instead.
 
-Build a bundle from a git checkout (same `CARGO=` override as above if the system cargo proxy is broken):
+When the shell cannot find `rust-edit`, add `~/.local/bin` to your PATH. Put this line in `~/.profile`, then open a new terminal:
 
 ```bash
-sh scripts/package.sh
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The archive is written to `dist/`.
+When the menu entry is missing after install, log out and back in.
 
-## Keyboard & Mouse
+Remove the program from any directory with `rust-edit-uninstall`. From an unpacked archive, `./install.sh --uninstall` removes the same files: the program, the menu entry, and the icon. Settings in `~/.config/rust-edit` stay in place.
 
-See the in-app help (`F1`) for the full, categorized list. Highlights:
+## Usage
 
-**File** — `Ctrl+N` new · `Ctrl+O` open · `Ctrl+S` save · `Ctrl+Alt+S` save as · `Ctrl+W` close tab · `Ctrl+Q` quit
-**Edit** — `Enter` newline+indent · `Tab` insert at cursor · `Shift+Tab` dedent · `Ctrl+Z`/`Ctrl+Y` undo/redo · `Ctrl+X`/`C`/`V` cut/copy/paste
-**Find** — `Ctrl+F` open bar · `Tab` cycle query→replace→commands · (in commands) `n`/`N` next/prev · `r`/`Enter` replace · `Ctrl+A` all · `c`/`x`/`w` case/regex/word
-**Navigation** — arrows/Home/End · `Shift+arrows` select · `PgUp`/`PgDn` · `Alt+H`/`Alt+L` scroll left/right · `Alt+F`/`T`/`S` menus · `Alt+1..9` tabs
-**View/Tools** — `F1` help · `Alt+W` word count · `Alt+Z` word wrap · Format Document in the Tools menu
-**Mouse** — click tabs/menus/[+] · `[<]`/`[>]` scroll overflow tabs (wheel over the tab strip too) · click+drag to select · scroll wheel (vertical; Shift = horizontal) · click any `[ button ]` in popups
-
-## Requirements
-
-A modern terminal with UTF-8 and mouse support (kitty, wezterm, alacritty, foot, gnome-terminal, …). Truecolor is recommended for accurate theme colors.
-
-## Development
-
-See [AGENTS.md](AGENTS.md) and the full [Design Specification](docs/Rust-Edit-Design-Specification-2026-06-24.md).
-
-Run on every change:
+Start on an empty tab, or name the files to open:
 
 ```bash
-cargo fmt
-cargo clippy -- -D warnings
-cargo test
+rust-edit
+rust-edit notes.md src/main.rs
+rust-edit --version
 ```
+
+`--version` and `-V` print the version and exit. `--` ends option parsing, so a file that is itself named `--version` still opens:
+
+```bash
+rust-edit -- --version
+```
+
+Every other argument is a path to open.
+
+### Menus
+
+The menu bar is **File**, **Tools**, and **Settings**. Alt+F, Alt+T, and Alt+S open them. A click opens them too.
+
+- **File** creates a tab, opens and saves, closes a tab, and quits. Closing or quitting with unsaved edits asks you to confirm.
+- **Open** and **Save As** start as a path dialog. **Browse…** opens the folder listing. On Open, that listing can switch to recent files. On Save As, type a file name and choose **Use folder** to save into the folder you are viewing.
+- **Tools → Find** opens the find bar. Tab moves from the query, to the replacement, to the command keys. On the command keys, `n` and `N` move between matches, and `c`, `x`, and `w` toggle case, regular expression, and whole word. Whole word applies to a plain search. A regular expression is the pattern you type.
+- Enter and `r` replace the current match and insert the replacement as written. While the bar is open, Ctrl+A replaces every match. An empty replacement leaves the text alone. Replace All on a regular expression expands `$` groups such as `$1`, and it matches case exactly even when the case toggle is off.
+- **Tools → Find & Replace** opens that same bar on the replacement field. It has no shortcut of its own.
+- **Tools → Format Document** formats the current file. The status bar names the formatter that ran (`rustfmt`, `black`, `prettier`, `clang-format`, or editor preferences). TOML, shell, and plain text always use the editor-preferences cleanup. When an external formatter runs and fails, the file is left as it was and a message explains why.
+- **Tools → Word Count** (Alt+W) reports words, characters, and lines for the file. A selection adds the same word and character counts for that span.
+- **Settings → Configure** sets tab size, word wrap, line numbers, and whether unmodified files reload on their own.
+- **Settings → Themes** applies a built-in theme or edits a custom one. The editor redraws with the new colors immediately.
+- **Settings → Help** is the same window as F1: Shortcuts, Languages, and About.
+
+Enter keeps the indentation of the current line, and adds one more level when that line ends in `{`, `[`, `(`, or `:`. Tab inserts spaces at the cursor. The number of spaces is your tab size. A selection indents with Tab and dedents with Shift+Tab.
+
+### Files changed on disk
+
+When another program writes a file you have open, rust-edit offers **Reload**, **Always**, and **Keep**. **Always** reloads that file quietly until you quit. **Auto-reload all** in Configure does that for every unmodified file. A file with unsaved edits still asks. If the file is deleted on disk, your text stays open and the status bar reports the deletion once.
+
+## Everyday keys
+
+F1 lists every shortcut. These are the ones you need on the first day.
+
+| Action | Key |
+| --- | --- |
+| New tab | Ctrl+N |
+| Open | Ctrl+O |
+| Save | Ctrl+S |
+| Save As | Ctrl+Alt+S |
+| Close tab | Ctrl+W |
+| Quit | Ctrl+Q |
+| Undo / redo | Ctrl+Z / Ctrl+Y |
+| Cut / copy / paste | Ctrl+X / Ctrl+C / Ctrl+V |
+| Select all | Ctrl+A (while Find is closed) |
+| Clear the selection | Esc |
+| Find | Ctrl+F, then Tab to move between fields |
+| Help | F1 |
+| Word count | Alt+W |
+| Word wrap | Alt+Z |
+| Switch to tab 1–9 | Alt+1 … Alt+9 |
+| Open File / Tools / Settings | Alt+F / Alt+T / Alt+S |
+
+Shift with the arrow keys, Home, End, Page Up, or Page Down extends the selection. Page Up and Page Down move by a page. Alt+H and Alt+L scroll sideways.
+
+## Mouse
+
+Click a tab to switch to it. Middle-click a tab to close it. Click `[+]` for a new tab. When the tab strip overflows, click `[<]` and `[>]`, or roll the wheel over the tabs.
+
+Click in the text to place the cursor, and drag to select. The wheel scrolls vertically. Shift and the wheel scroll horizontally. Drag the scroll bars to move through a long file or a long line. The horizontal bar shows up when word wrap is off and a line is wider than the window.
+
+Popup buttons accept a click, including save confirmations, the file browser, Configure, and theme colors.
+
+## Settings
+
+rust-edit starts from these defaults. Changing a setting, or opening a file, writes `~/.config/rust-edit/config.toml`. When `XDG_CONFIG_HOME` is set, that file is `$XDG_CONFIG_HOME/rust-edit/config.toml`.
+
+| Setting | Default | In the file |
+| --- | --- | --- |
+| Tab size | 4 spaces, from 1 to 8 | `tab_size` |
+| Word wrap | Off | `word_wrap` |
+| Line numbers | On | `show_line_numbers` |
+| Auto-reload all | Off | `auto_reload_all` |
+| Theme | Dark Red | `theme` = `"dark-red"` |
+
+Theme names in that file are `dark-red`, `light`, `high-contrast`, `solarized`, `monochrome`, and `terminal-green`, plus the name of any theme you create. The editor also keeps up to 10 recent file paths in the same file. Uninstall leaves this directory alone.
+
+## Languages
+
+Highlighting follows the file extension.
+
+| Language | Extensions |
+| --- | --- |
+| Rust | `.rs` |
+| Python | `.py`, `.pyw` |
+| Markdown | `.md`, `.markdown` |
+| JSON | `.json` |
+| TOML | `.toml` |
+| YAML | `.yaml`, `.yml` |
+| Bash / shell | `.sh`, `.bash`, `.zsh` |
+| C | `.c`, `.h` |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp` |
+| JavaScript | `.js`, `.mjs` |
+| TypeScript | `.ts` |
+
+Markdown is highlighted as Markdown source.
+
+**Format Document** calls a formatter only when it is installed:
+
+| Files | Program |
+| --- | --- |
+| Rust | `rustfmt` |
+| Python | `black` |
+| JavaScript, TypeScript, JSON, YAML, Markdown | `prettier` |
+| C, C++ | `clang-format` |
+| TOML, shell, plain text | editor-preferences cleanup: tabs, trailing whitespace, final newline |
+
+## Prerequisites
+
+| Requirement | What you need |
+| --- | --- |
+| System | 64-bit Linux (`x86_64`) |
+| C library | glibc 2.39 or newer |
+| Kernel | Linux 6.1 or newer |
+| Terminal | UTF-8, plus mouse support if you want to click |
+| Color | True color, so theme colors match their palettes |
+
+Ubuntu 24.04, Debian 13, Fedora 40 and newer, and Arch meet the library and kernel requirement. Debian 12 and Fedora 38 are older than this build.
+
+rust-edit is aimed at common Linux terminals, including kitty, WezTerm, Alacritty, foot, and GNOME Terminal.
+
+## Contributing
+
+Bug reports and changes are welcome on [GitHub][repo-url]. For a display problem, name your terminal and include the output of `rust-edit --version`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+---
+
+Crafted with [Readme Craft](https://github.com/motiful/readme-craft)
+
+<!-- Reference-style links -->
+
+[license-shield]: https://img.shields.io/badge/License-MIT-green.svg
+[license-url]: LICENSE
+[version-shield]: https://img.shields.io/badge/version-0.1.0-blue
+[version-url]: https://github.com/RapidFire770/rust-edit/releases
+[platform-shield]: https://img.shields.io/badge/platform-Linux-blue?logo=linux&logoColor=white
+[platform-url]: #prerequisites
+[releases-url]: https://github.com/RapidFire770/rust-edit/releases
+[repo-url]: https://github.com/RapidFire770/rust-edit

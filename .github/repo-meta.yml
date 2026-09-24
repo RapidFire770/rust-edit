@@ -1,0 +1,20 @@
+description: >
+  A terminal text and code editor for Linux. Tabs, menus, a mouse,
+  and ordinary shortcuts, installed into your home folder.
+topics:
+  # Tier 1: discovery
+  - text-editor
+  - terminal
+  - cli
+  - command-line
+  - developer-tools
+  # Tier 2: what the program is
+  - tui
+  - code-editor
+  - syntax-highlighting
+  - editor
+  - linux
+  # Tier 3: ecosystem
+  - rust
+  - ratatui
+homepage: ""
