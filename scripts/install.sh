@@ -15,6 +15,10 @@ menu entry. The desktop opens that entry in your default terminal.
 After installation, run rust-edit-uninstall from any directory. Settings
 under ~/.config/rust-edit are left in place. Run this as your user,
 without sudo.
+
+The installer can also link ~/.local/bin/rust-edit into /usr/local/bin
+so that `sudo rust-edit` works. That step asks for your password.
+The home-folder install still finishes if you skip it.
 EOF
 }
 
@@ -61,6 +65,8 @@ esac
 : "${HOME:?HOME is not set}"
 BIN_DIR=$HOME/.local/bin
 BIN=$BIN_DIR/rust-edit
+SYSTEM_BIN=${RUST_EDIT_SYSTEM_BIN:-/usr/local/bin}
+SYSTEM_LINK=$SYSTEM_BIN/rust-edit
 UNINSTALLER=$BIN_DIR/rust-edit-uninstall
 DATA=${XDG_DATA_HOME:-$HOME/.local/share}
 APP_DIR=$DATA/applications
@@ -141,6 +147,51 @@ refresh_caches() {
   fi
 }
 
+link_system_bin() {
+  if [ ! -d "$SYSTEM_BIN" ]; then
+    echo "No $SYSTEM_BIN directory. Skipped the sudo command link."
+    echo "Run: sudo $BIN <file>"
+    return 0
+  fi
+  if [ -L "$SYSTEM_LINK" ] && [ "$(readlink "$SYSTEM_LINK")" = "$BIN" ]; then
+    echo "sudo rust-edit already runs $BIN"
+    return 0
+  fi
+  if [ -e "$SYSTEM_LINK" ] || [ -L "$SYSTEM_LINK" ]; then
+    echo "$SYSTEM_LINK already exists. Left it in place."
+    echo "Run: sudo $BIN <file>"
+    return 0
+  fi
+  if ! confirm "Link rust-edit into $SYSTEM_BIN so 'sudo rust-edit' works? This asks for your password. [Y/n]" 1; then
+    echo "Skipped the system link. Run sudo with the full path:"
+    echo "  sudo $BIN <file>"
+    return 0
+  fi
+  if sudo ln -sfn "$BIN" "$SYSTEM_LINK"; then
+    echo "sudo rust-edit now runs $BIN"
+  else
+    echo "Could not create $SYSTEM_LINK."
+    echo "Run: sudo $BIN <file>"
+  fi
+}
+
+unlink_system_bin() {
+  if [ ! -L "$SYSTEM_LINK" ]; then
+    return 0
+  fi
+  if [ "$(readlink "$SYSTEM_LINK")" != "$BIN" ]; then
+    return 0
+  fi
+  if ! confirm "Remove the sudo link at $SYSTEM_LINK? [Y/n]" 1; then
+    echo "Left $SYSTEM_LINK in place."
+    return 0
+  fi
+  if ! sudo rm -f "$SYSTEM_LINK"; then
+    echo "Could not remove $SYSTEM_LINK."
+    echo "Remove it with: sudo rm -f $SYSTEM_LINK"
+  fi
+}
+
 uninstall() {
   if ! confirm "Remove rust-edit from your home folder? [y/N]" 0; then
     echo "Uninstall cancelled."
@@ -149,6 +200,7 @@ uninstall() {
   rm -f "$BIN" "$UNINSTALLER" "$DESKTOP" "$ICON" \
     "$DOC_DIR/README.md" "$DOC_DIR/LICENSE" "$INSTALLED_SCRIPT"
   rmdir "$DOC_DIR" 2>/dev/null || true
+  unlink_system_bin
   refresh_caches
   echo "Removed rust-edit. Settings in $CONFIG_DIR were left in place."
   exit 0
@@ -241,6 +293,7 @@ StartupNotify=false
 EOF
 chmod 644 "$DESKTOP"
 refresh_caches
+link_system_bin
 
 echo "Installed rust-edit $pkg"
 echo "  Source:  $ROOT"

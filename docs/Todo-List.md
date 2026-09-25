@@ -4,7 +4,7 @@
 - [ ] Add an X button to the file tabs to click on and close the tabs as well if possible to fit in with the current ui design and look.
 
 ### Major:
-- [ ] Need a check/warning for files that the user doesn't have permission to save to without opening using sudo. Right now it appears to just fail to save silently without any popup message or other kind of warning, just the edit dot remains on the file tab. The program also does not appear to work when trying to open with the sudo command, I just get the error "sudo: rust-edit: command not found"
+- [x] Need a check/warning for files that the user doesn't have permission to save to without opening using sudo. Right now it appears to just fail to save silently without any popup message or other kind of warning, just the edit dot remains on the file tab. The program also does not appear to work when trying to open with the sudo command, I just get the error "sudo: rust-edit: command not found"
 
 ---
 

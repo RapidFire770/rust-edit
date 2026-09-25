@@ -7,6 +7,19 @@ export HOME=$WORKDIR/home
 export XDG_DATA_HOME=$HOME/.local/share
 export XDG_CONFIG_HOME=$HOME/.config
 mkdir -p "$HOME"
+SYSTEM_BIN=$WORKDIR/system-bin
+mkdir -p "$SYSTEM_BIN"
+export RUST_EDIT_SYSTEM_BIN=$SYSTEM_BIN
+FAKE_BIN=$WORKDIR/fake-bin
+mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/sudo" <<'EOF'
+#!/bin/sh
+# Test double. The real sudo would ask for a password and search a
+# secure_path that does not include ~/.local/bin.
+exec "$@"
+EOF
+chmod 755 "$FAKE_BIN/sudo"
+export PATH="$FAKE_BIN:$PATH"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -42,6 +55,7 @@ installed_version() {
 bundle=$(make_bundle 0.1.0)
 "$bundle/install.sh" </dev/null
 [ "$(installed_version)" = "0.1.0" ] || fail "fresh install version"
+[ ! -e "$SYSTEM_BIN/rust-edit" ] || fail "EOF install must not link into system bin"
 desktop=$XDG_DATA_HOME/applications/rust-edit.desktop
 grep -q '^Terminal=true$' "$desktop" || fail "Terminal=true"
 grep -q '^Icon=rust-edit$' "$desktop" || fail "Icon"
@@ -69,6 +83,8 @@ printf '\n' | "$bundle/install.sh"
 bundle=$(make_bundle 0.3.0)
 "$bundle/install.sh" --yes </dev/null
 [ "$(installed_version)" = "0.3.0" ] || fail "--yes update"
+[ -L "$SYSTEM_BIN/rust-edit" ] || fail "yes install should symlink system bin"
+[ "$(readlink "$SYSTEM_BIN/rust-edit")" = "$HOME/.local/bin/rust-edit" ] || fail "symlink target"
 
 [ -x "$HOME/.local/bin/rust-edit-uninstall" ] || fail "uninstaller missing"
 [ -x "$XDG_DATA_HOME/doc/rust-edit/install.sh" ] || fail "installed install.sh"
@@ -77,13 +93,14 @@ mkdir -p "$XDG_CONFIG_HOME/rust-edit"
 printf 'keep\n' > "$XDG_CONFIG_HOME/rust-edit/config.toml"
 printf 'n\n' | "$HOME/.local/bin/rust-edit-uninstall"
 [ "$(installed_version)" = "0.3.0" ] || fail "declined uninstall"
-printf 'y\n' | "$HOME/.local/bin/rust-edit-uninstall"
+printf 'y\ny\n' | "$HOME/.local/bin/rust-edit-uninstall"
 [ ! -e "$HOME/.local/bin/rust-edit" ] || fail "binary removed"
 [ ! -e "$HOME/.local/bin/rust-edit-uninstall" ] || fail "uninstaller removed"
 [ ! -e "$XDG_DATA_HOME/doc/rust-edit/install.sh" ] || fail "installed install.sh removed"
 [ ! -e "$desktop" ] || fail "desktop removed"
 [ ! -e "$XDG_DATA_HOME/icons/hicolor/scalable/apps/rust-edit.svg" ] || fail "icon removed"
 grep -q '^keep$' "$XDG_CONFIG_HOME/rust-edit/config.toml" || fail "config preserved"
+[ ! -e "$SYSTEM_BIN/rust-edit" ] || fail "system link removed"
 
 empty=$WORKDIR/empty
 mkdir -p "$empty"
@@ -105,5 +122,14 @@ chmod 755 "$trashed/rust-edit"
 if "$trashed/install.sh" --yes </dev/null; then
   fail "installer in the trash should fail"
 fi
+
+bundle=$(make_bundle 0.4.0)
+printf 'other\n' > "$SYSTEM_BIN/rust-edit"
+"$bundle/install.sh" --yes </dev/null
+[ "$(installed_version)" = "0.4.0" ] || fail "home install continues when system path is occupied"
+[ ! -L "$SYSTEM_BIN/rust-edit" ] || fail "must not replace a real file"
+grep -q '^other$' "$SYSTEM_BIN/rust-edit" || fail "foreign file changed"
+rm -f "$SYSTEM_BIN/rust-edit"
+printf 'y\n' | "$HOME/.local/bin/rust-edit-uninstall"
 
 echo "install_bundle ok"
