@@ -116,6 +116,9 @@ pub struct Buffer {
     /// True after we have shown a "deleted on disk" notice for the current
     /// missing streak, so we do not spam the status bar.
     pub disk_gone_notified: bool,
+    /// This process cannot write `path`. Edits are allowed. Save must warn
+    /// instead of failing quietly. Untitled buffers are false.
+    pub read_only: bool,
 
     /// Undo stack (full state snapshots for robust undo of text + caret + view).
     #[allow(clippy::type_complexity)]
@@ -157,6 +160,7 @@ impl Buffer {
             disk_stamp: None,
             auto_reload: false,
             disk_gone_notified: false,
+            read_only: false,
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
             max_undo: 100,
@@ -200,6 +204,7 @@ impl Buffer {
             disk_stamp,
             auto_reload: false,
             disk_gone_notified: false,
+            read_only: false,
             undo_stack: Vec::with_capacity(32),
             redo_stack: Vec::new(),
             max_undo: 100,

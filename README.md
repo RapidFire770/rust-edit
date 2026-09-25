@@ -79,6 +79,12 @@ When the shell cannot find `rust-edit`, add `~/.local/bin` to your PATH. Put thi
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+sudo does not look in `~/.local/bin`. The installer asks whether to link `~/.local/bin/rust-edit` into `/usr/local/bin`, which is on sudo's command path. Saying yes asks for your password once. Saying no still leaves the home-folder install in place. The link points at the copy in your home folder, and sudo runs that file as root. `rust-edit-uninstall` removes that link when it points at this copy.
+
+```bash
+sudo rust-edit /etc/hosts
+```
+
 When the menu entry is missing after install, log out and back in.
 
 Remove the program from any directory with `rust-edit-uninstall`. From an unpacked archive, `./install.sh --uninstall` removes the same files: the program, the menu entry, and the icon. Settings in `~/.config/rust-edit` stay in place.
@@ -100,6 +106,18 @@ rust-edit -- --version
 ```
 
 Every other argument is a path to open.
+
+### System files
+
+A file you can read but not write opens with a read-only notice. The status bar says Read-only. Ctrl+S explains why the save failed and leaves the modified mark on the tab. Your edits stay in the tab. Save As (Ctrl+Alt+S) can store a copy in a folder you can write.
+
+`sudo rust-edit` only works after install links the program into `/usr/local/bin`. sudo does not search `~/.local/bin`. If that link is missing, pass the real program path:
+
+```bash
+sudo ~/.local/bin/rust-edit /etc/hosts
+```
+
+The notice prints that command with the path of the binary you are running.
 
 ### Menus
 

@@ -44,6 +44,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Ctrl+O", "Open file"),
                 ("Ctrl+S", "Save"),
                 ("Ctrl+Alt+S", "Save As"),
+                ("Read-only", "Save warns when you cannot write the file"),
                 ("Ctrl+W", "Close tab"),
                 ("Ctrl+Q", "Quit"),
                 (

@@ -176,6 +176,15 @@ pub enum PopupFocus {
     WordCount,
 }
 
+/// Result of a successful open. `loaded` is false when an existing tab was
+/// focused. Callers warn only when `loaded && read_only`, so focusing the
+/// same file again does not repeat the popup.
+#[derive(Debug)]
+pub struct OpenedFile {
+    pub read_only: bool,
+    pub loaded: bool,
+}
+
 impl App {
     pub fn new(initial_files: &[String]) -> Self {
         let config = Config::load();
@@ -186,20 +195,45 @@ impl App {
         let highlighter = SyntaxHighlighter::new();
 
         let mut buffers = Vec::new();
+        let mut notices: Vec<String> = Vec::new();
+        let mut notice_title = "Word Count";
         if initial_files.is_empty() {
             buffers.push(Buffer::placeholder());
         } else {
             for f in initial_files {
                 let path = PathBuf::from(f);
-                if let Ok(contents) = std::fs::read_to_string(&path) {
-                    buffers.push(Buffer::from_str(&contents, Some(path)));
-                } else {
-                    let mut b = Buffer::new();
-                    b.set_path(path);
-                    buffers.push(b);
+                match std::fs::read_to_string(&path) {
+                    Ok(contents) => {
+                        let mut buf = Buffer::from_str(&contents, Some(path.clone()));
+                        if !crate::fs_access::can_write_regular_file(&path) {
+                            buf.read_only = true;
+                            notices.push(crate::fs_access::read_only_message(&path));
+                            if notice_title == "Word Count" {
+                                notice_title = "Read-only";
+                            }
+                        }
+                        buffers.push(buf);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // A missing path is a new file. An existing path that
+                        // cannot be read must not become an empty tab: Ctrl+S
+                        // would overwrite the real bytes.
+                        let mut b = Buffer::new();
+                        b.set_path(path);
+                        buffers.push(b);
+                    }
+                    Err(e) => {
+                        notices.push(crate::fs_access::open_denied_message(&path, &e));
+                        notice_title = "Cannot Open";
+                    }
                 }
             }
+            if buffers.is_empty() {
+                buffers.push(Buffer::placeholder());
+            }
         }
+        let show_open_notice = !notices.is_empty();
+        let open_notice_body = notices.join("\n\n");
 
         Self {
             buffers,
@@ -210,9 +244,13 @@ impl App {
             show_help: false,
             clipboard: ClipboardWrapper::new(),
             find_state: None,
-            show_word_count: false,
-            word_count_text: String::new(),
-            info_popup_title: "Word Count".into(),
+            show_word_count: show_open_notice,
+            word_count_text: open_notice_body,
+            info_popup_title: if show_open_notice {
+                notice_title.to_string()
+            } else {
+                "Word Count".to_string()
+            },
             format_status: None,
             help_tab: crate::ui::popups::help::HelpTab::default(),
             help_content_scroll: (0, 0),
@@ -520,22 +558,30 @@ impl App {
         self.clamp_tab_strip(width);
     }
 
-    /// Basic save (overwrite). Returns success.
-    pub fn save_current(&mut self) -> bool {
-        let buf = self.active_buffer_mut();
-        if let Some(ref path) = buf.path.clone() {
-            if std::fs::write(path, buf.text()).is_ok() {
-                buf.is_modified = false;
-                buf.disk_stamp = crate::file_watch::FileStamp::of(path);
-                buf.disk_gone_notified = false;
-                // Remember the directory for future Save As operations
-                if let Some(parent) = path.parent() {
-                    self.last_save_directory = Some(parent.to_path_buf());
-                }
-                return true;
+    /// Write the active buffer. No path opens Save As and returns `Ok`.
+    /// A write error leaves `is_modified` set and opens the info popup.
+    pub fn save_current(&mut self) -> Result<(), String> {
+        let Some(path) = self.active_buffer().path.clone() else {
+            self.show_file_dialog(true);
+            return Ok(());
+        };
+        if let Err(e) = std::fs::write(&path, self.active_buffer().text()) {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                self.active_buffer_mut().read_only = true;
             }
+            let message = crate::fs_access::save_error_message(&path, &e);
+            self.show_info_popup("Cannot Save", message.clone());
+            return Err(message);
         }
-        false
+        let buf = self.active_buffer_mut();
+        buf.is_modified = false;
+        buf.read_only = false;
+        buf.disk_stamp = crate::file_watch::FileStamp::of(&path);
+        buf.disk_gone_notified = false;
+        if let Some(parent) = path.parent() {
+            self.last_save_directory = Some(parent.to_path_buf());
+        }
+        Ok(())
     }
 
     pub fn copy_selection_or_line(&mut self) -> bool {
@@ -1294,22 +1340,36 @@ impl App {
 
     /// Open `path` into a tab.
     ///
-    /// Order: read the file (error → `Err`, nothing changes); if a buffer
-    /// already holds this file, focus it; else replace the first placeholder
-    /// (`is_initial && path.is_none() && !is_modified`) in place; else append.
-    /// On success, records the path in recents.
-    pub fn open_file_in_tab(&mut self, path: &Path) -> Result<(), String> {
-        let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    /// Order: read the file (error → `Err`, nothing changes). `PermissionDenied`
+    /// does not leave an empty tab under that path. If a buffer already holds
+    /// this file, focus it (`loaded` is false). Else replace the first
+    /// placeholder (`is_initial && path.is_none() && !is_modified`) in place;
+    /// else append. On success, records the path in recents and reports
+    /// whether this process can write the file.
+    pub fn open_file_in_tab(&mut self, path: &Path) -> Result<OpenedFile, String> {
+        let contents = match std::fs::read_to_string(path) {
+            Ok(contents) => contents,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(crate::fs_access::open_denied_message(path, &e));
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        let read_only = !crate::fs_access::can_write_regular_file(path);
 
         if let Some(idx) = self.index_of_open_path(path) {
+            self.buffers[idx].read_only = read_only;
             self.active = idx;
             self.config.record_recent_file(path);
             self.highlight_cache.invalidate();
             self.ensure_active_tab_visible();
-            return Ok(());
+            return Ok(OpenedFile {
+                read_only,
+                loaded: false,
+            });
         }
 
-        let new_buf = Buffer::from_str(&contents, Some(path.to_path_buf()));
+        let mut new_buf = Buffer::from_str(&contents, Some(path.to_path_buf()));
+        new_buf.read_only = read_only;
         if let Some(idx) = self.placeholder_index() {
             self.buffers[idx] = new_buf;
             self.active = idx;
@@ -1320,7 +1380,20 @@ impl App {
         self.config.record_recent_file(path);
         self.highlight_cache.invalidate();
         self.ensure_active_tab_visible();
-        Ok(())
+        Ok(OpenedFile {
+            read_only,
+            loaded: true,
+        })
+    }
+
+    fn warn_active_read_only(&mut self) {
+        let Some(path) = self.active_buffer().path.clone() else {
+            return;
+        };
+        if !self.active_buffer().read_only {
+            return;
+        }
+        self.show_info_popup("Read-only", crate::fs_access::read_only_message(&path));
     }
 
     pub(crate) fn placeholder_index(&self) -> Option<usize> {
@@ -1370,14 +1443,21 @@ impl App {
             return;
         }
         let path = PathBuf::from(&path_str);
+        let mut loaded_read_only = false;
         if self.file_dialog_is_save {
             if let Err(e) = std::fs::write(&path, self.active_buffer().text()) {
-                self.file_dialog_message = format!("Save error: {}", e);
+                self.file_dialog_message = if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    format!("Save error: {e}. You cannot write this path.")
+                } else {
+                    format!("Save error: {e}")
+                };
                 return;
             }
             let buf = self.active_buffer_mut();
             buf.set_path(path.clone());
             buf.is_modified = false;
+            buf.read_only = false;
+            buf.disk_stamp = crate::file_watch::FileStamp::of(&path);
             self.config.record_recent_file(&path);
             // Remember the directory for future Save As operations
             if let Some(parent) = path.parent() {
@@ -1385,9 +1465,9 @@ impl App {
             }
         } else {
             match self.open_file_in_tab(&path) {
-                Ok(()) => {}
+                Ok(opened) => loaded_read_only = opened.loaded && opened.read_only,
                 Err(e) => {
-                    self.file_dialog_message = format!("Open error: {e}");
+                    self.file_dialog_message = format!("Open error: {}", e.replace('\n', " "));
                     return;
                 }
             }
@@ -1395,6 +1475,9 @@ impl App {
         self.show_file_dialog = false;
         self.file_path_input.clear();
         self.file_dialog_message.clear();
+        if loaded_read_only {
+            self.warn_active_read_only();
+        }
     }
 
     pub fn file_dialog_input_char(&mut self, ch: char) {
@@ -3110,9 +3193,173 @@ mod tests {
         let mut app = watch_app();
         app.open_file_in_tab(&path).unwrap();
         app.active_buffer_mut().insert("x");
-        assert!(app.save_current());
+        assert!(app.save_current().is_ok());
         app.check_external_changes();
         assert!(!app.show_reload);
+        let _ = fs::remove_file(&path);
+    }
+
+    fn set_mode(path: &std::path::Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(mode);
+        fs::set_permissions(path, perms).unwrap();
+    }
+
+    fn euid_is_root() -> bool {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|text| {
+                text.lines()
+                    .find(|line| line.starts_with("Uid:"))
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .and_then(|n| n.parse::<u32>().ok())
+            })
+            == Some(0)
+    }
+
+    #[test]
+    fn save_current_permission_denied_keeps_edits_and_opens_notice() {
+        if euid_is_root() {
+            return;
+        }
+        let path = watch_tmp("locked-save", "secret\n");
+        set_mode(&path, 0o444);
+        let mut app = watch_app();
+        let opened = app.open_file_in_tab(&path).unwrap();
+        assert!(opened.read_only);
+        assert!(opened.loaded);
+        assert!(app.active_buffer().read_only);
+        app.active_buffer_mut().insert("x");
+        assert!(app.active_buffer().is_modified);
+        let err = app.save_current().unwrap_err();
+        assert!(err.to_lowercase().contains("permission") || err.contains("Permission denied"));
+        assert!(app.show_word_count);
+        assert_eq!(app.info_popup_title, "Cannot Save");
+        assert!(app.word_count_text.contains("sudo "));
+        assert!(app.active_buffer().is_modified);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "secret\n");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_without_a_path_opens_save_as() {
+        let mut app = watch_app();
+        assert!(app.save_current().is_ok());
+        assert!(app.show_file_dialog);
+        assert!(app.file_dialog_is_save);
+        assert!(!app.show_word_count);
+    }
+
+    #[test]
+    fn open_unreadable_file_does_not_create_an_empty_tab() {
+        if euid_is_root() {
+            return;
+        }
+        let path = watch_tmp("locked-read", "secret\n");
+        set_mode(&path, 0o000);
+        let mut app = watch_app();
+        let before = app.buffers.len();
+        let err = app.open_file_in_tab(&path).unwrap_err();
+        assert!(err.contains("Permission denied") || err.to_lowercase().contains("permission"));
+        assert_eq!(app.buffers.len(), before);
+        assert!(app.buffers[0].is_initial);
+        set_mode(&path, 0o644);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn startup_permission_denied_shows_notice_without_empty_tab() {
+        if euid_is_root() {
+            return;
+        }
+        let path = watch_tmp("locked-cli", "secret\n");
+        set_mode(&path, 0o000);
+        let app = App::new(&[path.to_string_lossy().to_string()]);
+        assert_eq!(app.buffers.len(), 1);
+        assert!(app.buffers[0].is_initial);
+        assert!(app.buffers[0].path.is_none());
+        assert!(app.show_word_count);
+        assert_eq!(app.info_popup_title, "Cannot Open");
+        assert!(app.word_count_text.contains("sudo "));
+        set_mode(&path, 0o644);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn startup_missing_file_opens_an_empty_tab_for_that_path() {
+        let path = std::env::temp_dir().join(format!(
+            "rust-edit-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_file(&path);
+        let app = App::new(&[path.to_string_lossy().to_string()]);
+        assert_eq!(app.buffers.len(), 1);
+        assert_eq!(app.buffers[0].path.as_deref(), Some(path.as_path()));
+        assert_eq!(app.buffers[0].text(), "");
+        assert!(!app.show_word_count);
+    }
+
+    #[test]
+    fn startup_existing_non_utf8_does_not_open_an_empty_overwrite_tab() {
+        let path = watch_tmp("binary", "");
+        fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+        let app = App::new(&[path.to_string_lossy().to_string()]);
+        assert_eq!(app.buffers.len(), 1);
+        assert!(app.buffers[0].is_initial);
+        assert!(app.buffers[0].path.is_none());
+        assert!(app.show_word_count);
+        assert_eq!(app.info_popup_title, "Cannot Open");
+        assert_eq!(fs::read(&path).unwrap(), vec![0xff, 0xfe, 0xfd]);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn startup_read_only_file_loads_text_and_warns() {
+        if euid_is_root() {
+            return;
+        }
+        let path = watch_tmp("ro-cli", "hello\n");
+        set_mode(&path, 0o444);
+        let app = App::new(&[path.to_string_lossy().to_string()]);
+        assert_eq!(app.buffers.len(), 1);
+        assert_eq!(app.active_buffer().text(), "hello\n");
+        assert!(app.active_buffer().read_only);
+        assert!(app.show_word_count);
+        assert_eq!(app.info_popup_title, "Read-only");
+        assert!(app.word_count_text.contains(path.to_str().unwrap()));
+        set_mode(&path, 0o644);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_as_permission_denied_stays_in_the_dialog() {
+        if euid_is_root() {
+            return;
+        }
+        let path = watch_tmp("save-as-locked", "secret\n");
+        set_mode(&path, 0o444);
+        let mut app = watch_app();
+        app.active_buffer_mut().insert("x");
+        app.show_file_dialog(true);
+        app.file_path_input = path.to_string_lossy().to_string();
+        app.close_file_dialog(0);
+        assert!(app.show_file_dialog, "dialog stays open on save failure");
+        assert!(
+            app.file_dialog_message.contains("Permission denied")
+                || app
+                    .file_dialog_message
+                    .to_lowercase()
+                    .contains("permission"),
+            "{:?}",
+            app.file_dialog_message
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "secret\n");
+        set_mode(&path, 0o644);
         let _ = fs::remove_file(&path);
     }
 

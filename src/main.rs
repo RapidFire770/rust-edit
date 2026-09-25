@@ -7,6 +7,7 @@ mod buffer;
 mod config;
 mod file_watch;
 mod format;
+mod fs_access;
 mod highlight_cache;
 mod syntax;
 mod theme;
@@ -553,7 +554,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                     app.show_file_dialog(true);
                                 }
                                 KeyCode::Char('s') => {
-                                    app.save_current();
+                                    let _ = app.save_current();
                                 }
                                 KeyCode::Char('o') => {
                                     app.show_file_dialog(false);

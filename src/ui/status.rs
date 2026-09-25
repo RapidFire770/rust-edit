@@ -22,13 +22,15 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // Truncate the path from the left when it would push these off-screen.
     // A long format notice may still overflow a tiny terminal; trim the rest
     // from the right so the bar always fits.
-    let mut fixed_rest = status_fixed_rest(
-        &lang,
-        row + 1,
-        col + 1,
-        buf.line_count(),
-        app.format_status.as_deref(),
-    );
+    let hint_override = if app.format_status.is_some() {
+        app.format_status.as_deref()
+    } else if buf.read_only {
+        Some("Read-only")
+    } else {
+        None
+    };
+    let mut fixed_rest =
+        status_fixed_rest(&lang, row + 1, col + 1, buf.line_count(), hint_override);
     let modified_len = modified.chars().count();
     let area_w = area.width as usize;
     if 1 + modified_len + fixed_rest.chars().count() > area_w {
@@ -116,6 +118,13 @@ mod tests {
         let out = truncate_left("abcé中x", 5);
         assert_eq!(out, "...中x");
         assert_eq!(out.chars().count(), 5);
+    }
+
+    #[test]
+    fn status_read_only_hint_when_no_format_notice() {
+        let rest = status_fixed_rest("Plain", 1, 1, 1, Some("Read-only"));
+        assert!(rest.contains("Read-only"));
+        assert!(!rest.contains("Ctrl+Q quit"));
     }
 
     #[test]

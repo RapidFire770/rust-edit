@@ -5,7 +5,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::theme::Theme;
@@ -20,11 +20,24 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, title: &str, text: &str)
 
     let para = Paragraph::new(lines)
         .block(block)
+        .wrap(Wrap { trim: false })
         .style(Style::default().fg(Color::from(&theme.editor_fg)));
 
     let longest = text.lines().map(|l| l.chars().count()).max().unwrap_or(0);
     let w = (longest.saturating_add(4).clamp(40, 72) as u16).min(area.width);
-    let h = (text.lines().count() as u16 + 4).min(20);
+    let inner_w = (w.saturating_sub(2) as usize).max(1);
+    let visual_rows: usize = text
+        .lines()
+        .map(|line| {
+            let n = line.chars().count();
+            if n == 0 {
+                1
+            } else {
+                n.div_ceil(inner_w)
+            }
+        })
+        .sum();
+    let h = (visual_rows as u16 + 4).min(20);
     let x = (area.width.saturating_sub(w)) / 2;
     let y = (area.height.saturating_sub(h)) / 2;
     let popup = Rect::new(x, y, w.min(area.width), h.min(area.height));
