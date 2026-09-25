@@ -1,27 +1,25 @@
 <div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/logo.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/logo.svg">
-    <img alt="rust-edit" src="docs/logo.svg" width="120">
-  </picture>
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="docs/logo.svg">
+<source media="(prefers-color-scheme: light)" srcset="docs/logo.svg">
+<img alt="rust-edit" src="docs/logo.svg" width="120">
+</picture>
 
-  <h1>rust-edit</h1>
-  <p>Edit text and code in a Linux terminal, with tabs, menus, and a mouse.</p>
+<h1>rust-edit</h1>
+<p>Edit text and code in a Linux terminal, with tabs, menus, and a mouse.</p>
 </div>
 
 <div align="center">
 
-[![License: MIT][license-shield]][license-url]
-[![Version][version-shield]][version-url]
-[![Platform][platform-shield]][platform-url]
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)![Version](https://img.shields.io/badge/version-0.1.0-blue)![Platform](https://img.shields.io/badge/platform-Linux-blue?logo=linux&logoColor=white)
 
 </div>
 
 <div align="center">
-  <a href="#quick-start">Quick Start</a> &middot;
-  <a href="#install">Install</a> &middot;
-  <a href="#everyday-keys">Everyday keys</a> &middot;
-  <a href="https://github.com/RapidFire770/rust-edit/issues/new">Report a bug</a>
+<a href="#quick-start">Quick Start</a> ·
+<a href="#install">Install</a> ·
+<a href="#everyday-keys">Everyday keys</a> ·
+<a href="https://github.com/RapidFire770/rust-edit/issues/new">Report a bug</a>
 </div>
 
 ---
@@ -64,12 +62,12 @@ rust-edit
 
 `./install.sh` installs rust-edit for your user. The release archive already contains the program. Run it from that unpacked folder. A copy that has been moved to the trash refuses to install.
 
-| Piece | Where it goes |
-| --- | --- |
-| Program | `~/.local/bin/rust-edit` |
-| Uninstaller | `~/.local/bin/rust-edit-uninstall` |
-| Application menu entry | Rust-Edit, opened in your default terminal |
-| Menu icon | `~/.local/share/icons/hicolor/scalable/apps/rust-edit.svg` |
+| Piece                  | Where it goes                                              |
+|------------------------|------------------------------------------------------------|
+| Program                | `~/.local/bin/rust-edit`                                   |
+| Uninstaller            | `~/.local/bin/rust-edit-uninstall`                         |
+| Application menu entry | Rust-Edit, opened in your default terminal                 |
+| Menu icon              | `~/.local/share/icons/hicolor/scalable/apps/rust-edit.svg` |
 
 Run `./install.sh` again to update. When a copy is already installed, the script compares versions and asks before replacing it. `./install.sh --yes` answers yes to that prompt, including a reinstall or a downgrade.
 
@@ -128,24 +126,24 @@ When another program writes a file you have open, rust-edit offers **Reload**, *
 
 F1 lists every shortcut. These are the ones you need on the first day.
 
-| Action | Key |
-| --- | --- |
-| New tab | Ctrl+N |
-| Open | Ctrl+O |
-| Save | Ctrl+S |
-| Save As | Ctrl+Alt+S |
-| Close tab | Ctrl+W |
-| Quit | Ctrl+Q |
-| Undo / redo | Ctrl+Z / Ctrl+Y |
-| Cut / copy / paste | Ctrl+X / Ctrl+C / Ctrl+V |
-| Select all | Ctrl+A (while Find is closed) |
-| Clear the selection | Esc |
-| Find | Ctrl+F, then Tab to move between fields |
-| Help | F1 |
-| Word count | Alt+W |
-| Word wrap | Alt+Z |
-| Switch to tab 1–9 | Alt+1 … Alt+9 |
-| Open File / Tools / Settings | Alt+F / Alt+T / Alt+S |
+| Action                       | Key                                     |
+|------------------------------|-----------------------------------------|
+| New tab                      | Ctrl+N                                  |
+| Open                         | Ctrl+O                                  |
+| Save                         | Ctrl+S                                  |
+| Save As                      | Ctrl+Alt+S                              |
+| Close tab                    | Ctrl+W                                  |
+| Quit                         | Ctrl+Q                                  |
+| Undo / redo                  | Ctrl+Z / Ctrl+Y                         |
+| Cut / copy / paste           | Ctrl+X / Ctrl+C / Ctrl+V                |
+| Select all                   | Ctrl+A (while Find is closed)           |
+| Clear the selection          | Esc                                     |
+| Find                         | Ctrl+F, then Tab to move between fields |
+| Help                         | F1                                      |
+| Word count                   | Alt+W                                   |
+| Word wrap                    | Alt+Z                                   |
+| Switch to tab 1–9            | Alt+1 … Alt+9                           |
+| Open File / Tools / Settings | Alt+F / Alt+T / Alt+S                   |
 
 Shift with the arrow keys, Home, End, Page Up, or Page Down extends the selection. Page Up and Page Down move by a page. Alt+H and Alt+L scroll sideways.
 
@@ -161,13 +159,13 @@ Popup buttons accept a click, including save confirmations, the file browser, Co
 
 rust-edit starts from these defaults. Changing a setting, or opening a file, writes `~/.config/rust-edit/config.toml`. When `XDG_CONFIG_HOME` is set, that file is `$XDG_CONFIG_HOME/rust-edit/config.toml`.
 
-| Setting | Default | In the file |
-| --- | --- | --- |
-| Tab size | 4 spaces, from 1 to 8 | `tab_size` |
-| Word wrap | Off | `word_wrap` |
-| Line numbers | On | `show_line_numbers` |
-| Auto-reload all | Off | `auto_reload_all` |
-| Theme | Dark Red | `theme` = `"dark-red"` |
+| Setting         | Default               | In the file            |
+|-----------------|-----------------------|------------------------|
+| Tab size        | 4 spaces, from 1 to 8 | `tab_size`             |
+| Word wrap       | Off                   | `word_wrap`            |
+| Line numbers    | On                    | `show_line_numbers`    |
+| Auto-reload all | Off                   | `auto_reload_all`      |
+| Theme           | Dark Red              | `theme` = `"dark-red"` |
 
 Theme names in that file are `dark-red`, `light`, `high-contrast`, `solarized`, `monochrome`, and `terminal-green`, plus the name of any theme you create. The editor also keeps up to 10 recent file paths in the same file. Uninstall leaves this directory alone.
 
@@ -175,41 +173,41 @@ Theme names in that file are `dark-red`, `light`, `high-contrast`, `solarized`, 
 
 Highlighting follows the file extension.
 
-| Language | Extensions |
-| --- | --- |
-| Rust | `.rs` |
-| Python | `.py`, `.pyw` |
-| Markdown | `.md`, `.markdown` |
-| JSON | `.json` |
-| TOML | `.toml` |
-| YAML | `.yaml`, `.yml` |
-| Bash / shell | `.sh`, `.bash`, `.zsh` |
-| C | `.c`, `.h` |
-| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp` |
-| JavaScript | `.js`, `.mjs` |
-| TypeScript | `.ts` |
+| Language     | Extensions                    |
+|--------------|-------------------------------|
+| Rust         | `.rs`                         |
+| Python       | `.py`, `.pyw`                 |
+| Markdown     | `.md`, `.markdown`            |
+| JSON         | `.json`                       |
+| TOML         | `.toml`                       |
+| YAML         | `.yaml`, `.yml`               |
+| Bash / shell | `.sh`, `.bash`, `.zsh`        |
+| C            | `.c`, `.h`                    |
+| C++          | `.cpp`, `.cc`, `.cxx`, `.hpp` |
+| JavaScript   | `.js`, `.mjs`                 |
+| TypeScript   | `.ts`                         |
 
 Markdown is highlighted as Markdown source.
 
 **Format Document** calls a formatter only when it is installed:
 
-| Files | Program |
-| --- | --- |
-| Rust | `rustfmt` |
-| Python | `black` |
-| JavaScript, TypeScript, JSON, YAML, Markdown | `prettier` |
-| C, C++ | `clang-format` |
-| TOML, shell, plain text | editor-preferences cleanup: tabs, trailing whitespace, final newline |
+| Files                                        | Program                                                              |
+|----------------------------------------------|----------------------------------------------------------------------|
+| Rust                                         | `rustfmt`                                                            |
+| Python                                       | `black`                                                              |
+| JavaScript, TypeScript, JSON, YAML, Markdown | `prettier`                                                           |
+| C, C++                                       | `clang-format`                                                       |
+| TOML, shell, plain text                      | editor-preferences cleanup: tabs, trailing whitespace, final newline |
 
 ## Prerequisites
 
-| Requirement | What you need |
-| --- | --- |
-| System | 64-bit Linux (`x86_64`) |
-| C library | glibc 2.39 or newer |
-| Kernel | Linux 6.1 or newer |
-| Terminal | UTF-8, plus mouse support if you want to click |
-| Color | True color, so theme colors match their palettes |
+| Requirement | What you need                                    |
+|-------------|--------------------------------------------------|
+| System      | 64-bit Linux (`x86_64`)                          |
+| C library   | glibc 2.39 or newer                              |
+| Kernel      | Linux 6.1 or newer                               |
+| Terminal    | UTF-8, plus mouse support if you want to click   |
+| Color       | True color, so theme colors match their palettes |
 
 Ubuntu 24.04, Debian 13, Fedora 40 and newer, and Arch meet the library and kernel requirement. Debian 12 and Fedora 38 are older than this build.
 
@@ -229,11 +227,5 @@ Crafted with [Readme Craft](https://github.com/motiful/readme-craft)
 
 <!-- Reference-style links -->
 
-[license-shield]: https://img.shields.io/badge/License-MIT-green.svg
-[license-url]: LICENSE
-[version-shield]: https://img.shields.io/badge/version-0.1.0-blue
-[version-url]: https://github.com/RapidFire770/rust-edit/releases
-[platform-shield]: https://img.shields.io/badge/platform-Linux-blue?logo=linux&logoColor=white
-[platform-url]: #prerequisites
 [releases-url]: https://github.com/RapidFire770/rust-edit/releases
 [repo-url]: https://github.com/RapidFire770/rust-edit
