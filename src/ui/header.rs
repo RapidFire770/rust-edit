@@ -843,13 +843,13 @@ mod tests {
         let header_width = owner.len();
         let start = start.min(header_width);
         let end = end.min(header_width);
-        for x in start..end {
+        for (x, slot) in owner.iter_mut().enumerate().take(end).skip(start) {
             assert!(
-                owner[x].is_none(),
+                slot.is_none(),
                 "column {x} already {:?} would also be {label}",
-                owner[x]
+                slot
             );
-            owner[x] = Some(label);
+            *slot = Some(label);
         }
     }
 
