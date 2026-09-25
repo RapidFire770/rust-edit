@@ -1349,7 +1349,7 @@ mod tests {
             palette_area(popup).y,
             roles_area(popup).y,
         ] {
-            assert!(y >= popup.y + 1 && y <= inner_last, "y={y} popup={popup:?}");
+            assert!(y > popup.y && y <= inner_last, "y={y} popup={popup:?}");
         }
         assert_eq!(roles_area(popup).height, ROLE_VISIBLE);
         assert_eq!(footer_row_y(popup), popup.y + 1 + 19);
