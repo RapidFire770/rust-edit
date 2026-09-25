@@ -51,11 +51,11 @@ This release edits local files in one window on Linux. Code completion, split pa
 
 ## Quick Start
 
-Download `rust-edit-0.1.0-x86_64-unknown-linux-gnu.tar.gz` from [Releases][releases-url], then:
+Download the latest `rust-edit-x.x.x-x86_64-unknown-linux-gnu.tar.gz` from [Releases][releases-url], then:
 
 ```bash
-tar -xzf rust-edit-0.1.0-x86_64-unknown-linux-gnu.tar.gz
-cd rust-edit-0.1.0-x86_64-unknown-linux-gnu
+tar -xzf rust-edit-x.x.x-x86_64-unknown-linux-gnu.tar.gz
+cd rust-edit-x.x.x-x86_64-unknown-linux-gnu
 ./install.sh
 rust-edit
 ```
