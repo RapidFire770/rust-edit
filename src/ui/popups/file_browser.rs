@@ -154,6 +154,54 @@ pub fn compose_save_path(dir: &Path, current_input: &str, fallback_filename: &st
     dir.join(name)
 }
 
+/// Parent directory shown after `@` in a Recent row. Empty when `path`
+/// has no parent component (a bare relative name).
+pub fn recent_parent_display(path: &Path) -> String {
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.display().to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Recent-files row text that fits in `budget` columns (Unicode scalar
+/// values). Truncates the parent from the left; drops the suffix if the
+/// name already fills the row.
+pub fn format_recent_label(file_name: &str, parent: &str, budget: usize) -> String {
+    if budget == 0 {
+        return String::new();
+    }
+    let name_len = file_name.chars().count();
+    if name_len >= budget {
+        return file_name.chars().take(budget).collect();
+    }
+    if parent.is_empty() {
+        return file_name.to_string();
+    }
+    const SEP: &str = " @ ";
+    let sep_len = 3;
+    if name_len + sep_len + 1 > budget {
+        return file_name.to_string();
+    }
+    let path_budget = budget - name_len - sep_len;
+    format!(
+        "{file_name}{SEP}{}",
+        truncate_path_left(parent, path_budget)
+    )
+}
+
+fn truncate_path_left(path: &str, budget: usize) -> String {
+    let n = path.chars().count();
+    if n <= budget {
+        return path.to_string();
+    }
+    if budget <= 1 {
+        return path.chars().skip(n.saturating_sub(budget)).collect();
+    }
+    let keep = budget - 1; // room for …
+    let suffix: String = path.chars().skip(n - keep).collect();
+    format!("…{suffix}")
+}
+
 /// True when `name` is a single path component we can join onto a save dir.
 /// Rejects empty, `.` / `..`, and anything with a path separator.
 pub fn is_valid_save_filename(name: &str) -> bool {
@@ -347,10 +395,19 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
         for i in show_from..show_to {
             let entry = &app.browser_entries[i];
             let marker = if entry.is_dir { "/" } else { " " };
-            let mut name = format!("{}{}", entry.name, if entry.is_dir { "/" } else { "" });
-            if name.chars().count() > name_budget {
-                name = name.chars().take(name_budget).collect();
-            }
+            let name = if app.browser_mode == BrowserMode::Recent {
+                format_recent_label(
+                    &entry.name,
+                    &recent_parent_display(&entry.path),
+                    name_budget,
+                )
+            } else {
+                let mut name = format!("{}{}", entry.name, if entry.is_dir { "/" } else { "" });
+                if name.chars().count() > name_budget {
+                    name = name.chars().take(name_budget).collect();
+                }
+                name
+            };
             let base = if entry.is_dir { dir_style } else { file_style };
             // Hover steals the highlight: when the mouse is over a row, that
             // row is the only one highlighted. With no hover, the keyboard
@@ -749,5 +806,63 @@ mod tests {
         assert!(list_overflow_bar(body_h + 5, 0, popup, false).overflowing());
         assert!(!list_overflow_bar(body_h, 0, popup, false).overflowing());
         assert!(!list_overflow_bar(0, 0, popup, false).overflowing());
+    }
+
+    #[test]
+    fn format_recent_label_fits_name_and_parent() {
+        let out = format_recent_label("FilenameHere.md", "/home/user/Documents", 80);
+        assert_eq!(out, "FilenameHere.md @ /home/user/Documents");
+    }
+
+    #[test]
+    fn format_recent_label_left_truncates_parent_with_ellipsis() {
+        let parent = "/home/user/Documents/Programming/Rust-Development/docs";
+        let out = format_recent_label("notes.md", parent, 28);
+        assert_eq!(out.chars().count(), 28);
+        assert!(out.starts_with("notes.md @ …"));
+        assert!(out.ends_with("docs"), "got {out:?}");
+        assert!(!out.contains("/home/user/Documents/Programming"));
+    }
+
+    #[test]
+    fn format_recent_label_same_name_keeps_distinct_parents() {
+        let a = format_recent_label("notes.md", "/home/user/Documents", 40);
+        let b = format_recent_label("notes.md", "/home/user/Downloads", 40);
+        assert_ne!(a, b);
+        assert!(a.contains("Documents"));
+        assert!(b.contains("Downloads"));
+    }
+
+    #[test]
+    fn format_recent_label_drops_path_when_name_fills_budget() {
+        assert_eq!(
+            format_recent_label("notes.md", "/home/user/Documents", 8),
+            "notes.md"
+        );
+        assert_eq!(
+            format_recent_label("notes.md", "/home/user/Documents", 5),
+            "notes"
+        );
+    }
+
+    #[test]
+    fn format_recent_label_zero_budget_is_empty() {
+        assert_eq!(format_recent_label("notes.md", "/tmp", 0), "");
+    }
+
+    #[test]
+    fn format_recent_label_counts_unicode_chars() {
+        let out = format_recent_label("café.md", "/tmp/文字", 40);
+        assert_eq!(out, "café.md @ /tmp/文字");
+    }
+
+    #[test]
+    fn recent_parent_display_uses_parent_dir() {
+        assert_eq!(
+            recent_parent_display(Path::new("/home/user/Documents/a.md")),
+            "/home/user/Documents"
+        );
+        assert_eq!(recent_parent_display(Path::new("/a.md")), "/");
+        assert_eq!(recent_parent_display(Path::new("a.md")), "");
     }
 }
