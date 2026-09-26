@@ -160,8 +160,11 @@ F1 lists every shortcut. These are the ones you need on the first day.
 | Help                         | F1                                      |
 | Word count                   | Alt+W                                   |
 | Word wrap                    | Alt+Z                                   |
+| Toggle line comment          | Ctrl+/                                  |
 | Switch to tab 1–9            | Alt+1 … Alt+9                           |
 | Open File / Tools / Settings | Alt+F / Alt+T / Alt+S                   |
+
+Ctrl+/ comments or uncomments the current line, or each line in the selection, in Rust, C, C++, JavaScript, TypeScript, Python, TOML, YAML, and shell. Markdown, JSON, and plain text have no line comment; the status bar says so.
 
 Shift with the arrow keys, Home, End, Page Up, or Page Down extends the selection. Page Up and Page Down move by a page. Alt+H and Alt+L scroll sideways.
 

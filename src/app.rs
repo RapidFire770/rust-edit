@@ -1851,6 +1851,22 @@ impl App {
         }
     }
 
+    /// Toggle line comments for the active buffer's language.
+    /// Files with no line-comment token leave the text alone and say so
+    /// on the status bar.
+    pub fn toggle_line_comment(&mut self) {
+        let Some(prefix) = self.active_buffer().language.line_comment_prefix() else {
+            self.format_status = Some("No line comment for this file".to_string());
+            return;
+        };
+        // Split from the `is_find_active` borrow. One `if` condition would hold
+        // `&mut self` from `active_buffer_mut` across the second call.
+        let changed = self.active_buffer_mut().toggle_line_comment(prefix);
+        if changed && self.is_find_active() {
+            self.update_find_matches();
+        }
+    }
+
     /// Redo last undone edit (Ctrl+Y). Also refresh find matches if active.
     pub fn redo(&mut self) {
         self.active_buffer_mut().redo();

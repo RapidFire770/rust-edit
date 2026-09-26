@@ -213,6 +213,7 @@ pub fn tools_menu_items() -> &'static [&'static str] {
         "Word Count (Alt+W)",
         "Format Document",
         "Toggle Word Wrap (Alt+Z)",
+        "Toggle Comment (Ctrl+/)",
     ]
 }
 
@@ -296,7 +297,7 @@ pub fn dropdown_rect(area: Rect, menu_name: &str) -> Rect {
     let header_height = crate::ui::layout::HEADER_ROWS;
     let h = match menu_name {
         "File" => 8,
-        "Tools" => 7,
+        "Tools" => 8,
         "Settings" => 5,
         _ => 4,
     };
@@ -578,6 +579,7 @@ mod tests {
                 "Word Count (Alt+W)",
                 "Format Document",
                 "Toggle Word Wrap (Alt+Z)",
+                "Toggle Comment (Ctrl+/)",
             ]
         );
         let joined = items.join("\n");
@@ -602,7 +604,7 @@ mod tests {
         assert_eq!(rect.x, 7);
         assert_eq!(rect.y, crate::ui::layout::HEADER_ROWS);
         assert_eq!(rect.width, 26);
-        assert_eq!(rect.height, 7);
+        assert_eq!(rect.height, 8);
     }
 
     #[test]

@@ -76,6 +76,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Enter", "Newline + smart indent"),
                 ("Tab", "Insert tab-size spaces at cursor"),
                 ("Shift+Tab", "Dedent line / selection"),
+                ("Ctrl+/", "Toggle line comment"),
                 ("Backspace / Delete", "Delete char"),
                 ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
                 ("Ctrl+X / Ctrl+C / Ctrl+V", "Cut / copy / paste"),
@@ -502,6 +503,8 @@ mod tests {
     #[test]
     fn shortcuts_page_matches_keys_that_run() {
         let text = shortcuts_text();
+        assert!(text.contains("Ctrl+/"), "{text}");
+        assert!(text.contains("Toggle line comment"), "{text}");
         assert!(text.contains("Alt+W"), "{text}");
         assert!(text.contains("Word count"), "{text}");
         assert!(text.contains("Format Document"), "{text}");

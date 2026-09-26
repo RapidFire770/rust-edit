@@ -18,6 +18,15 @@ fn indent_unit(tab_size: u8) -> String {
     " ".repeat(tab_size.max(1) as usize)
 }
 
+/// Byte length of the leading ASCII spaces and tabs. Other whitespace stays
+/// with the line body so the comment token is not inserted mid-glyph.
+fn leading_ascii_ws_len(body: &str) -> usize {
+    body.chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .map(|c| c.len_utf8())
+        .sum()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
     #[default]
@@ -56,6 +65,20 @@ impl Language {
             "js" | "mjs" => Language::Javascript,
             "ts" => Language::Typescript,
             _ => Language::Plain,
+        }
+    }
+
+    /// Token that starts a line comment, without the space inserted on comment.
+    /// Plain text, Markdown, and JSON have no line comment.
+    pub fn line_comment_prefix(self) -> Option<&'static str> {
+        match self {
+            Language::Rust
+            | Language::C
+            | Language::Cpp
+            | Language::Javascript
+            | Language::Typescript => Some("//"),
+            Language::Python | Language::Toml | Language::Yaml | Language::Bash => Some("#"),
+            Language::Plain | Language::Markdown | Language::Json => None,
         }
     }
 }
@@ -121,11 +144,25 @@ pub struct Buffer {
     pub read_only: bool,
 
     /// Undo stack (full state snapshots for robust undo of text + caret + view).
+    /// The last field is `selection_anchor`, which line-comment edits shift.
+    /// Restoring it keeps the next Shift-extend on the undone selection.
     #[allow(clippy::type_complexity)]
-    undo_stack: Vec<(Rope, usize, Option<std::ops::Range<usize>>, (usize, usize))>,
+    undo_stack: Vec<(
+        Rope,
+        usize,
+        Option<std::ops::Range<usize>>,
+        (usize, usize),
+        Option<usize>,
+    )>,
     /// Redo stack.
     #[allow(clippy::type_complexity)]
-    redo_stack: Vec<(Rope, usize, Option<std::ops::Range<usize>>, (usize, usize))>,
+    redo_stack: Vec<(
+        Rope,
+        usize,
+        Option<std::ops::Range<usize>>,
+        (usize, usize),
+        Option<usize>,
+    )>,
     /// Max undo depth (keeps memory reasonable).
     max_undo: usize,
 }
@@ -387,6 +424,7 @@ impl Buffer {
             self.cursor,
             self.selection.clone(),
             self.scroll_offset,
+            self.selection_anchor,
         );
         self.undo_stack.push(state);
         self.redo_stack.clear();
@@ -401,36 +439,44 @@ impl Buffer {
     }
 
     pub fn undo(&mut self) {
-        if let Some((prev_rope, prev_cur, prev_sel, prev_scroll)) = self.undo_stack.pop() {
+        if let Some((prev_rope, prev_cur, prev_sel, prev_scroll, prev_anchor)) =
+            self.undo_stack.pop()
+        {
             let current = (
                 self.rope.clone(),
                 self.cursor,
                 self.selection.clone(),
                 self.scroll_offset,
+                self.selection_anchor,
             );
             self.redo_stack.push(current);
             self.rope = prev_rope;
             self.cursor = prev_cur.min(self.rope.len_bytes());
             self.selection = prev_sel;
             self.scroll_offset = prev_scroll;
+            self.selection_anchor = prev_anchor;
             self.is_modified = !self.undo_stack.is_empty(); // rough
             self.bump_generation();
         }
     }
 
     pub fn redo(&mut self) {
-        if let Some((next_rope, next_cur, next_sel, next_scroll)) = self.redo_stack.pop() {
+        if let Some((next_rope, next_cur, next_sel, next_scroll, next_anchor)) =
+            self.redo_stack.pop()
+        {
             let current = (
                 self.rope.clone(),
                 self.cursor,
                 self.selection.clone(),
                 self.scroll_offset,
+                self.selection_anchor,
             );
             self.undo_stack.push(current);
             self.rope = next_rope;
             self.cursor = next_cur.min(self.rope.len_bytes());
             self.selection = next_sel;
             self.scroll_offset = next_scroll;
+            self.selection_anchor = next_anchor;
             self.bump_generation();
         }
     }
@@ -924,6 +970,109 @@ impl Buffer {
         self.adjust_scroll();
     }
 
+    /// Toggle line comments on the cursor line, or on every line the selection
+    /// touches. `prefix` is `"//"` or `"#"` with no trailing space. Returns
+    /// whether the text changed.
+    pub fn toggle_line_comment(&mut self, prefix: &str) -> bool {
+        if prefix.is_empty() {
+            return false;
+        }
+        let (start_line, end_line) = self.comment_line_span();
+        let uncomment = self.span_is_fully_commented(start_line, end_line, prefix);
+        self.push_undo();
+        let marker = format!("{prefix} ");
+        for line_idx in (start_line..=end_line).rev() {
+            let line_start = self.rope.line_to_byte(line_idx);
+            let raw = self.line(line_idx);
+            let body = raw.trim_end_matches(['\n', '\r']);
+            let ws_len = leading_ascii_ws_len(body);
+            if uncomment {
+                if body[ws_len..].trim().is_empty() {
+                    continue;
+                }
+                let after = &body[ws_len..];
+                let Some(rest) = after.strip_prefix(prefix) else {
+                    continue;
+                };
+                let extra = usize::from(rest.starts_with(' '));
+                let remove_at = line_start + ws_len;
+                let n = prefix.len() + extra;
+                self.remove_byte_range(remove_at, remove_at + n);
+                self.shift_positions_after_edit(remove_at, n, false);
+            } else {
+                let at = line_start + ws_len;
+                self.insert_at_byte(at, &marker);
+                self.shift_positions_after_edit(at, marker.len(), true);
+            }
+        }
+        self.is_modified = true;
+        self.bump_generation();
+        self.adjust_scroll();
+        true
+    }
+
+    /// Cursor line, or the lines a non-empty selection touches. A selection
+    /// that ends on a newline does not include the following line.
+    fn comment_line_span(&self) -> (usize, usize) {
+        if let Some(sel) = &self.selection {
+            if sel.start != sel.end {
+                let len = self.rope.len_bytes();
+                let start = self.rope.byte_to_line(sel.start.min(len));
+                let end = self.rope.byte_to_line(sel.end.saturating_sub(1).min(len));
+                return (start, end.max(start));
+            }
+        }
+        let line = self
+            .rope
+            .byte_to_line(self.cursor.min(self.rope.len_bytes()));
+        (line, line)
+    }
+
+    /// True when every non-blank line in the span already starts with `prefix`
+    /// at its first non-whitespace character. An all-blank span is not commented.
+    fn span_is_fully_commented(&self, start: usize, end: usize, prefix: &str) -> bool {
+        let mut saw_code = false;
+        for line_idx in start..=end {
+            let raw = self.line(line_idx);
+            let body = raw.trim_end_matches(['\n', '\r']);
+            let ws_len = leading_ascii_ws_len(body);
+            if body[ws_len..].trim().is_empty() {
+                continue;
+            }
+            saw_code = true;
+            if !body[ws_len..].starts_with(prefix) {
+                return false;
+            }
+        }
+        saw_code
+    }
+
+    /// Shift caret, selection, and anchor after inserting or removing `n` bytes at `at`.
+    fn shift_positions_after_edit(&mut self, at: usize, n: usize, insert: bool) {
+        let shift = |pos: &mut usize| {
+            if insert {
+                if *pos >= at {
+                    *pos += n;
+                }
+            } else if *pos >= at.saturating_add(n) {
+                *pos -= n;
+            } else if *pos > at {
+                *pos = at;
+            }
+        };
+        shift(&mut self.cursor);
+        if let Some(sel) = &mut self.selection {
+            shift(&mut sel.start);
+            shift(&mut sel.end);
+            if sel.start > sel.end {
+                std::mem::swap(&mut sel.start, &mut sel.end);
+            }
+        }
+        if let Some(anchor) = &mut self.selection_anchor {
+            shift(anchor);
+        }
+    }
+
     /// Return full content as String (for save).
     pub fn text(&self) -> String {
         self.rope.to_string()
@@ -1363,6 +1512,140 @@ mod tests {
         b.cursor = 6;
         b.dedent(4);
         assert_eq!(b.text(), "  hello");
+    }
+
+    #[test]
+    fn line_comment_prefix_matches_supported_languages() {
+        assert_eq!(Language::Rust.line_comment_prefix(), Some("//"));
+        assert_eq!(Language::C.line_comment_prefix(), Some("//"));
+        assert_eq!(Language::Cpp.line_comment_prefix(), Some("//"));
+        assert_eq!(Language::Javascript.line_comment_prefix(), Some("//"));
+        assert_eq!(Language::Typescript.line_comment_prefix(), Some("//"));
+        assert_eq!(Language::Python.line_comment_prefix(), Some("#"));
+        assert_eq!(Language::Toml.line_comment_prefix(), Some("#"));
+        assert_eq!(Language::Yaml.line_comment_prefix(), Some("#"));
+        assert_eq!(Language::Bash.line_comment_prefix(), Some("#"));
+        assert_eq!(Language::Plain.line_comment_prefix(), None);
+        assert_eq!(Language::Markdown.line_comment_prefix(), None);
+        assert_eq!(Language::Json.line_comment_prefix(), None);
+    }
+
+    fn commented(src: &str, prefix: &str) -> String {
+        let mut b = Buffer::from_str(src, None);
+        b.cursor = 0;
+        assert!(b.toggle_line_comment(prefix));
+        b.text()
+    }
+
+    #[test]
+    fn toggle_line_comment_rust_round_trip_keeps_indent() {
+        let mut b = Buffer::from_str("    let x = 1;\n", None);
+        b.cursor = 4;
+        assert!(b.toggle_line_comment("//"));
+        assert_eq!(b.text(), "    // let x = 1;\n");
+        assert_eq!(b.cursor, 7); // three bytes ("// ") inserted at the cursor
+        assert!(b.toggle_line_comment("//"));
+        assert_eq!(b.text(), "    let x = 1;\n");
+        assert_eq!(b.cursor, 4);
+    }
+
+    #[test]
+    fn toggle_line_comment_on_cursor_line_only() {
+        let mut b = Buffer::from_str("one\ntwo\nthree\n", None);
+        b.cursor = b.rope.line_to_byte(1);
+        b.toggle_line_comment("#");
+        assert_eq!(b.text(), "one\n# two\nthree\n");
+    }
+
+    #[test]
+    fn toggle_line_comment_selection_covers_touched_lines_only() {
+        let mut b = Buffer::from_str("one\ntwo\nthree\n", None);
+        b.selection = Some(0..7); // "one\ntw"
+        b.cursor = 7;
+        b.selection_anchor = Some(0);
+        b.toggle_line_comment("//");
+        assert_eq!(b.text(), "// one\n// two\nthree\n");
+        assert!(b.selection.is_some());
+        assert_eq!(b.selection_anchor, Some(3));
+    }
+
+    #[test]
+    fn toggle_line_comment_selection_ending_on_newline_skips_next_line() {
+        let mut b = Buffer::from_str("one\ntwo", None);
+        b.selection = Some(0..4); // "one\n"
+        b.cursor = 4;
+        b.toggle_line_comment("//");
+        assert_eq!(b.text(), "// one\ntwo");
+    }
+
+    #[test]
+    fn toggle_line_comment_mixed_selection_comments_every_line() {
+        let mut b = Buffer::from_str("// a\nb\n", None);
+        b.selection = Some(0..b.rope.len_bytes());
+        b.toggle_line_comment("//");
+        assert_eq!(b.text(), "// // a\n// b\n");
+    }
+
+    #[test]
+    fn toggle_line_comment_all_commented_selection_uncomments() {
+        let mut b = Buffer::from_str("// a\n// b\n", None);
+        b.selection = Some(0..b.rope.len_bytes());
+        b.toggle_line_comment("//");
+        assert_eq!(b.text(), "a\nb\n");
+    }
+
+    #[test]
+    fn toggle_line_comment_blank_line_in_commented_block_stays_blank() {
+        let mut b = Buffer::from_str("// a\n\n// b\n", None);
+        b.selection = Some(0..b.rope.len_bytes());
+        b.toggle_line_comment("//");
+        assert_eq!(b.text(), "a\n\nb\n");
+    }
+
+    #[test]
+    fn toggle_line_comment_empty_line_gains_a_token() {
+        let mut b = Buffer::from_str("\n", None);
+        b.toggle_line_comment("#");
+        assert_eq!(b.text(), "# \n");
+    }
+
+    #[test]
+    fn toggle_line_comment_removes_token_without_space_and_rustdoc_once() {
+        let mut hash = Buffer::from_str("#foo\n", None);
+        hash.toggle_line_comment("#");
+        assert_eq!(hash.text(), "foo\n");
+
+        let mut docs = Buffer::from_str("/// doc\n", None);
+        docs.toggle_line_comment("//");
+        assert_eq!(docs.text(), "/ doc\n");
+    }
+
+    #[test]
+    fn toggle_line_comment_cursor_in_indent_does_not_move() {
+        let mut b = Buffer::from_str("    code\n", None);
+        b.cursor = 2;
+        b.toggle_line_comment("//");
+        assert_eq!(b.text(), "    // code\n");
+        assert_eq!(b.cursor, 2);
+    }
+
+    #[test]
+    fn toggle_line_comment_is_one_undo_step() {
+        let mut b = Buffer::from_str("a\nb\n", None);
+        b.selection = Some(0..b.rope.len_bytes());
+        b.selection_anchor = Some(0);
+        b.toggle_line_comment("//");
+        assert_eq!(b.text(), "// a\n// b\n");
+        assert_eq!(b.selection_anchor, Some(3));
+        b.undo();
+        assert_eq!(b.text(), "a\nb\n");
+        assert_eq!(b.selection, Some(0..4));
+        assert_eq!(b.selection_anchor, Some(0));
+    }
+
+    #[test]
+    fn toggle_line_comment_hash_languages_use_hash() {
+        assert_eq!(commented("x = 1\n", "#"), "# x = 1\n");
     }
 
     #[test]

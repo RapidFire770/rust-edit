@@ -615,6 +615,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 KeyCode::Char('y') => {
                                     app.redo();
                                 }
+                                // 0x1F. Crossterm reports it as Ctrl+7. That is the
+                                // unshifted Ctrl+/ press (also Ctrl+_). Ctrl+? is
+                                // 0x7F and stays Backspace.
+                                KeyCode::Char('7') | KeyCode::Char('/') => {
+                                    app.toggle_line_comment();
+                                }
                                 _ => {}
                             }
                             continue;
@@ -778,7 +784,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             KeyCode::Char('j') | KeyCode::Down if app.active_menu.is_some() => {
                                 let len = match app.active_menu.as_deref() {
                                     Some("File") => 6,
-                                    Some("Tools") => 5,
+                                    Some("Tools") => 6,
                                     Some("Settings") => 3,
                                     _ => 1,
                                 };
@@ -787,7 +793,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             KeyCode::Char('k') | KeyCode::Up if app.active_menu.is_some() => {
                                 let len = match app.active_menu.as_deref() {
                                     Some("File") => 6,
-                                    Some("Tools") => 5,
+                                    Some("Tools") => 6,
                                     Some("Settings") => 3,
                                     _ => 1,
                                 };
@@ -1133,7 +1139,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
 
                     let item_count = match menu_name {
                         "File" => 6,
-                        "Tools" => 5,
+                        "Tools" => 6,
                         "Settings" => 3,
                         _ => 0,
                     };
@@ -1400,7 +1406,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 if let Some(ref menu_name) = app.active_menu {
                     let (menu_x, num_items) = match menu_name.as_str() {
                         "File" => (0usize, 6),
-                        "Tools" => (7, 5),
+                        "Tools" => (7, 6),
                         "Settings" => (15, 3),
                         _ => (0, 0),
                     };
@@ -2544,6 +2550,7 @@ fn handle_menu_action(app: &mut App) {
             app.format_current_document();
         }
         ("Tools", 4) => app.toggle_word_wrap(),
+        ("Tools", 5) => app.toggle_line_comment(),
         ("Settings", 0) => app.open_configure(),
         ("Settings", 1) => app.open_themes(),
         ("Settings", 2) => app.open_help(), // Help (F1)
