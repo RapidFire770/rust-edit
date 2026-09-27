@@ -1259,14 +1259,21 @@ fn handle_file_browser_click(x: usize, y: usize, app: &mut App) {
             } else {
                 // List row click: select + activate (dir enters, file confirms).
                 // Shares the row->index math with the hover preview so the clicked
-                // row is always the highlighted one.
+                // row is always the highlighted one. Recent `[x]` is tested first
+                // so a clear click never opens the file.
                 let body_h = (list_area.1 - list_area.0).max(1);
                 if let Some(idx) =
                     popups::file_browser::list_index_at(y, list_area, app.browser_selected)
                         .filter(|&i| i < app.browser_entries.len())
                 {
-                    app.browser_select_index(idx);
-                    app.browser_enter_selected();
+                    if app.browser_mode == popups::file_browser::BrowserMode::Recent
+                        && popups::file_browser::recent_row_click_is_clear(x, popup, overflowing)
+                    {
+                        app.remove_recent_at(idx);
+                    } else {
+                        app.browser_select_index(idx);
+                        app.browser_enter_selected();
+                    }
                 }
                 app.editor_visible_lines.set(body_h);
             }
@@ -2282,9 +2289,25 @@ fn handle_file_browser_key(code: KeyCode, app: &mut App) {
             FOCUS_FILENAME => {}
             _ => app.browser_enter_selected(),
         },
-        // `h`/Left/Backspace/- go up one directory. (Plain `h` only —
+        KeyCode::Delete => {
+            if app.browser_mode == popups::file_browser::BrowserMode::Recent
+                && app.browser_button_selected == FOCUS_LIST
+            {
+                app.remove_recent_at(app.browser_selected);
+            }
+        }
+        KeyCode::Backspace => {
+            if app.browser_mode == popups::file_browser::BrowserMode::Recent
+                && app.browser_button_selected == FOCUS_LIST
+            {
+                app.remove_recent_at(app.browser_selected);
+            } else {
+                app.browser_go_up();
+            }
+        }
+        // `h`/Left/- go up one directory. (Plain `h` only —
         // Ctrl+H is handled up in the CONTROL block.)
-        KeyCode::Backspace | KeyCode::Char('-') | KeyCode::Left | KeyCode::Char('h') => {
+        KeyCode::Char('-') | KeyCode::Left | KeyCode::Char('h') => {
             app.browser_go_up();
         }
         KeyCode::Esc | KeyCode::Char('q') => {
@@ -3188,6 +3211,116 @@ mod popup_focus_key_tests {
         handle_file_browser_key(KeyCode::Char('t'), &mut app);
         handle_file_browser_key(KeyCode::Char('e'), &mut app);
         assert_eq!(app.browser_filename, "note");
+    }
+
+    fn recent_temp_file(tag: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "rust-edit-recent-key-{}-{}-{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&p, tag).unwrap();
+        p
+    }
+
+    #[test]
+    fn handle_file_browser_delete_removes_selected_recent() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog(false);
+        app.open_file_browser();
+        app.browser_mode = popups::file_browser::BrowserMode::Recent;
+        app.browser_button_selected = popups::file_browser::FOCUS_LIST;
+        let a = recent_temp_file("del-a");
+        let b = recent_temp_file("del-b");
+        app.config.recent_files = vec![
+            a.to_string_lossy().into_owned(),
+            b.to_string_lossy().into_owned(),
+        ];
+        app.refresh_recent();
+        app.browser_selected = 0;
+        handle_file_browser_key(KeyCode::Delete, &mut app);
+        assert_eq!(
+            app.config.recent_files,
+            vec![b.to_string_lossy().into_owned()]
+        );
+        assert!(app.show_file_browser);
+    }
+
+    #[test]
+    fn handle_file_browser_backspace_removes_recent_when_list_focused() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog(false);
+        app.open_file_browser();
+        app.browser_mode = popups::file_browser::BrowserMode::Recent;
+        app.browser_button_selected = popups::file_browser::FOCUS_LIST;
+        let a = recent_temp_file("bs-a");
+        app.config.recent_files = vec![a.to_string_lossy().into_owned()];
+        app.refresh_recent();
+        handle_file_browser_key(KeyCode::Backspace, &mut app);
+        assert!(app.config.recent_files.is_empty());
+    }
+
+    #[test]
+    fn handle_file_browser_backspace_still_goes_up_in_dir_mode() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog(false);
+        app.open_file_browser();
+        app.browser_mode = popups::file_browser::BrowserMode::Dir;
+        app.browser_cwd = std::path::PathBuf::from("/tmp/outdir");
+        handle_file_browser_key(KeyCode::Backspace, &mut app);
+        assert_eq!(app.browser_cwd, std::path::PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn handle_file_browser_delete_ignored_when_footer_focused() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog(false);
+        app.open_file_browser();
+        app.browser_mode = popups::file_browser::BrowserMode::Recent;
+        app.browser_button_selected = 1; // mode toggle
+        let a = recent_temp_file("footer-del");
+        app.config.recent_files = vec![a.to_string_lossy().into_owned()];
+        app.refresh_recent();
+        handle_file_browser_key(KeyCode::Delete, &mut app);
+        assert_eq!(app.config.recent_files.len(), 1);
+    }
+
+    #[test]
+    fn handle_file_browser_click_on_recent_x_removes_without_opening() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog(false);
+        app.open_file_browser();
+        app.browser_mode = popups::file_browser::BrowserMode::Recent;
+        let a = recent_temp_file("click-a");
+        let b = recent_temp_file("click-b");
+        app.config.recent_files = vec![
+            a.to_string_lossy().into_owned(),
+            b.to_string_lossy().into_owned(),
+        ];
+        app.refresh_recent();
+
+        let popup = popups::file_browser::file_browser_rect(term_area());
+        let overflowing = popups::file_browser::list_overflow_bar(
+            app.browser_entries.len(),
+            app.browser_selected,
+            popup,
+            false,
+        )
+        .overflowing();
+        let (x0, _) = popups::file_browser::recent_clear_x_range(popup, overflowing);
+        let (list_y, _) = popups::file_browser::list_area(popup, false);
+        handle_file_browser_click(x0 as usize, list_y, &mut app);
+        assert_eq!(
+            app.config.recent_files,
+            vec![b.to_string_lossy().into_owned()]
+        );
+        assert!(app.show_file_browser, "clear must not confirm/open");
+        assert!(app.show_file_dialog);
     }
 
     #[test]
