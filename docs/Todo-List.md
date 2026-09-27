@@ -3,7 +3,7 @@
 ### Minor:
 - [ ] Add an X button to the file tabs to click on and close the tabs as well if possible to fit in with the current ui design and look.
 - [x] In the recent files section of the open popups file browser the files list should give a indication of the file path that file comes from so that files with the same name but from different paths cannot be confused with each other. Example: "FilenameHere.md @ /home/user/Documents" truncate the beginning of the file path if it is too long to fit in the available window space for the file browser popup.
-- [ ] Need the ability to clear the recently opened files list. Both individual files and the whole list. 
+- [x] Need the ability to clear the recently opened files list. Both individual files and the whole list. 
 
 ### Major:
 - [x] Need a check/warning for files that the user doesn't have permission to save to without opening using sudo. Right now it appears to just fail to save silently without any popup message or other kind of warning, just the edit dot remains on the file tab. The program also does not appear to work when trying to open with the sudo command, I just get the error "sudo: rust-edit: command not found"
