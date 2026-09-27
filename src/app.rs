@@ -1894,17 +1894,21 @@ impl App {
         }
     }
 
-    /// Toggle line comments for the active buffer's language.
-    /// Files with no line-comment token leave the text alone and say so
-    /// on the status bar.
+    /// Toggle comments for the active buffer's language.
+    /// Line-prefix languages (`//`, `#`) keep that path. Markdown wraps a
+    /// single line as `<!-- text -->`, or a multi-line selection as one
+    /// `<!--` / `-->` block. Files with neither leave the text alone and
+    /// say so on the status bar.
     pub fn toggle_line_comment(&mut self) {
-        let Some(prefix) = self.active_buffer().language.line_comment_prefix() else {
-            self.format_status = Some("No line comment for this file".to_string());
+        let lang = self.active_buffer().language;
+        let changed = if let Some(prefix) = lang.line_comment_prefix() {
+            self.active_buffer_mut().toggle_line_comment(prefix)
+        } else if let Some((open, close)) = lang.block_comment_pair() {
+            self.active_buffer_mut().toggle_block_comment(open, close)
+        } else {
+            self.format_status = Some("No comment for this file".to_string());
             return;
         };
-        // Split from the `is_find_active` borrow. One `if` condition would hold
-        // `&mut self` from `active_buffer_mut` across the second call.
-        let changed = self.active_buffer_mut().toggle_line_comment(prefix);
         if changed && self.is_find_active() {
             self.update_find_matches();
         }
@@ -3137,6 +3141,24 @@ mod tests {
         let mut app = App::new(&[]);
         app.config.show_line_numbers = false;
         assert_eq!(app.gutter_width(), 0);
+    }
+
+    #[test]
+    fn toggle_comment_markdown_wraps_html_and_json_notices() {
+        let mut md = App::new(&[]);
+        md.buffers[0] = Buffer::from_str("hello\n", Some(PathBuf::from("note.md")));
+        md.toggle_line_comment();
+        assert_eq!(md.active_buffer().text(), "<!-- hello -->\n");
+        assert!(md.format_status.is_none());
+
+        let mut json = App::new(&[]);
+        json.buffers[0] = Buffer::from_str("{}", Some(PathBuf::from("a.json")));
+        json.toggle_line_comment();
+        assert_eq!(json.active_buffer().text(), "{}");
+        assert_eq!(
+            json.format_status.as_deref(),
+            Some("No comment for this file")
+        );
     }
 
     #[test]

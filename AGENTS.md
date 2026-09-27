@@ -40,7 +40,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
      - **Help lists only chords terminals deliver.** Word count is `Alt+W`. Format Document is the Tools menu item (`Ctrl+Shift+F` arrives as `Ctrl+F` on a standard terminal; a Shift-aware handler remains for terminals that report Shift, and help does not advertise it). Help opens with `F1`; `?` inserts a question mark. Find/Replace is `Ctrl+F` (Tab moves to the replace field). The Tools menu item "Find & Replace" focuses that field and has no chord of its own. `Ctrl+H` toggles hidden files in the file browser only.
      - **Single Find/Replace shortcut (**`Ctrl+F`**)** — the bar has query/replace fields reachable via Tab, so a separate `Ctrl+H` was dropped.
      - **Tab at caret inserts spaces** — Design Spec §7 said Tab/Shift+Tab indent/dedent the line. Caret Tab now inserts `config.tab_size` spaces at the cursor (always the full width, not a remainder to the next tab stop). Non-empty selections still indent; Shift+Tab still dedents. Smart-indent extra width on Enter also uses `tab_size` (no more hardcoded 4).
-     - **Ctrl+/ toggles a line comment.** The unshifted `/` `?` key sends `0x1F`. Crossterm reports that as `KeyCode::Char('7')` with Control. The key arm also accepts `Char('/')` with Control. Ctrl+? is `0x7F` and is Backspace; do not bind it. Help says `Ctrl+/`. Languages and tokens live on `Language::line_comment_prefix`. Plain, Markdown, and JSON set the status notice `No line comment for this file`. The Tools menu item is "Toggle Comment (Ctrl+/)".
+     - **Ctrl+/ toggles a comment.** The unshifted `/` `?` key sends `0x1F`. Crossterm reports that as `KeyCode::Char('7')` with Control. The key arm also accepts `Char('/')` with Control. Ctrl+? is `0x7F` and is Backspace; do not bind it. Help says `Ctrl+/`. Line tokens live on `Language::line_comment_prefix` (`//` or `#`). Markdown uses `Language::block_comment_pair` (`<!--`, `-->`): a one-line span wraps as `<!-- text -->`; a multi-line span inserts a `<!--` line before the first line and a `-->` line after the last, indented to the span’s leading whitespace. Plain text and JSON set the status notice `No comment for this file`. The Tools menu item is "Toggle Comment (Ctrl+/)".
      - **v1 packaging is a home-folder tarball.** Design Spec Sprint 3 named `cargo install` and an optional `.deb`. The release path is `scripts/package.sh`, which packs the host release binary, `docs/logo.svg`, `README.md`, `LICENSE`, and `scripts/install.sh` into `dist/rust-edit-<version>-<host>.tar.gz`. `dist/` is generated and gitignored. The bundle binary is the maintainer's glibc build (glibc >= 2.39, Linux kernel >= 6.1). The binary's ELF version need includes a non-weak `GLIBC_2.39` (`pidfd_spawnp`), so Debian 12 and Fedora 38 cannot run that build. macOS and Windows stay out of scope.
      - **README.md is the end-user page.** It covers install, daily use, shortcuts, settings, and requirements. It does not link this file, the design specification, or contributor workflows. Keep contributor instructions here.
    - LSP is Phase 2+ only.
@@ -116,7 +116,7 @@ rust-edit/
 ├── src/
 │   ├── main.rs
 │   ├── app.rs                 # Top-level App state, event loop, high-level commands, highlight cache
-│   ├── buffer.rs              # Buffer struct + Ropey wrapper + editing ops + cursor/selection/scroll + line comment toggle
+│   ├── buffer.rs              # Buffer struct + Ropey wrapper + editing ops + cursor/selection/scroll + line/block comment toggle
 │   ├── config.rs              # Config loading/saving (toml + XDG)
 │   ├── theme.rs               # Theme struct + color roles + built-in themes + serde
 │   ├── highlight_cache.rs     # Parse-state checkpoints + overscan span window
@@ -323,6 +323,7 @@ Test checklist (run in at least 2 different terminals, e.g. kitty + alacritty):
 - [ ] Horizontal scrollbar appears on a long unwrapped line; click/drag pans; disappears under wrap / when lines fit.
 - [ ] Application menu entry Rust-Edit shows the logo and opens the editor in the desktop's default terminal.
 - [ ] Open browse Recent: `[x]` and Delete remove one row; `[ Clear ]` empties the list; missing files disappear from the list and from config.toml.
+- [ ] Markdown Ctrl+/ wraps one line as `<!-- text -->`; a multi-line selection becomes a single `<!--` / `-->` block; a second press unwraps; JSON still shows `No comment for this file`.
 
 Document any terminal-specific quirks you discover.
 

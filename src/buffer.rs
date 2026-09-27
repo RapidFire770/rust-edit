@@ -27,6 +27,29 @@ fn leading_ascii_ws_len(body: &str) -> usize {
         .sum()
 }
 
+/// Prefix and suffix byte lengths of a same-line block wrap after indent.
+/// Open/close optional single spaces are included in the lengths.
+/// `None` if the body is not wrapped.
+fn block_wrap_lens(after_ws: &str, open: &str, close: &str) -> Option<(usize, usize)> {
+    if open.is_empty() || close.is_empty() {
+        return None;
+    }
+    let rest = after_ws.strip_prefix(open)?;
+    let open_extra = usize::from(rest.starts_with(' '));
+    let rest = rest.get(open_extra..)?;
+    let rest = rest.strip_suffix(close)?;
+    let close_extra = usize::from(rest.ends_with(' '));
+    Some((open.len() + open_extra, close.len() + close_extra))
+}
+
+fn line_body(raw: &str) -> &str {
+    raw.trim_end_matches(['\n', '\r'])
+}
+
+fn line_is_wrapper(raw: &str, token: &str) -> bool {
+    line_body(raw).trim() == token
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
     #[default]
@@ -69,7 +92,8 @@ impl Language {
     }
 
     /// Token that starts a line comment, without the space inserted on comment.
-    /// Plain text, Markdown, and JSON have no line comment.
+    /// Markdown has no line prefix (see `block_comment_pair`). Plain text and
+    /// JSON have neither.
     pub fn line_comment_prefix(self) -> Option<&'static str> {
         match self {
             Language::Rust
@@ -79,6 +103,16 @@ impl Language {
             | Language::Typescript => Some("//"),
             Language::Python | Language::Toml | Language::Yaml | Language::Bash => Some("#"),
             Language::Plain | Language::Markdown | Language::Json => None,
+        }
+    }
+
+    /// HTML-style wrap used as a Markdown comment. Open/close have no
+    /// surrounding spaces; the toggle inserts those on a single line, or
+    /// puts each token on its own line around a multi-line span.
+    pub fn block_comment_pair(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Language::Markdown => Some(("<!--", "-->")),
+            _ => None,
         }
     }
 }
@@ -1011,6 +1045,110 @@ impl Buffer {
         true
     }
 
+    /// Toggle Markdown/HTML block comments. A one-line span wraps that line as
+    /// `{open} text {close}`. A multi-line span puts `open` on its own line
+    /// before the first line and `close` on its own line after the last.
+    /// Returns whether the text changed.
+    pub fn toggle_block_comment(&mut self, open: &str, close: &str) -> bool {
+        if open.is_empty() || close.is_empty() {
+            return false;
+        }
+        let (start_line, end_line) = self.comment_line_span();
+        let uncomment = self.span_is_block_wrapped(start_line, end_line, open, close);
+        self.push_undo();
+        if start_line == end_line {
+            self.toggle_single_line_block(start_line, open, close, uncomment);
+        } else if uncomment {
+            self.unwrap_block_lines(start_line, end_line);
+        } else {
+            self.wrap_block_lines(start_line, end_line, open, close);
+        }
+        self.is_modified = true;
+        self.bump_generation();
+        self.adjust_scroll();
+        true
+    }
+
+    fn toggle_single_line_block(
+        &mut self,
+        line_idx: usize,
+        open: &str,
+        close: &str,
+        uncomment: bool,
+    ) {
+        let line_start = self.rope.line_to_byte(line_idx);
+        let raw = self.line(line_idx);
+        let body = line_body(&raw);
+        let ws_len = leading_ascii_ws_len(body);
+        if uncomment {
+            let Some((pre_n, suf_n)) = block_wrap_lens(&body[ws_len..], open, close) else {
+                return;
+            };
+            let suf_at = line_start + body.len() - suf_n;
+            self.remove_byte_range(suf_at, suf_at + suf_n);
+            self.shift_positions_after_edit(suf_at, suf_n, false);
+            let pre_at = line_start + ws_len;
+            self.remove_byte_range(pre_at, pre_at + pre_n);
+            self.shift_positions_after_edit(pre_at, pre_n, false);
+        } else {
+            let prefix = format!("{open} ");
+            let suffix = format!(" {close}");
+            let suf_at = line_start + body.len();
+            self.insert_at_byte(suf_at, &suffix);
+            self.shift_positions_after_edit(suf_at, suffix.len(), true);
+            let pre_at = line_start + ws_len;
+            self.insert_at_byte(pre_at, &prefix);
+            self.shift_positions_after_edit(pre_at, prefix.len(), true);
+        }
+    }
+
+    fn wrap_block_lines(&mut self, start_line: usize, end_line: usize, open: &str, close: &str) {
+        let indent = self.span_block_indent(start_line, end_line);
+        let last_start = self.rope.line_to_byte(end_line);
+        let last_raw = self.line(end_line);
+        let last_body = line_body(&last_raw);
+        let close_at = last_start + last_body.len();
+        let close_text = format!("\n{indent}{close}");
+        self.insert_at_byte(close_at, &close_text);
+        self.shift_positions_after_edit(close_at, close_text.len(), true);
+        let open_at = self.rope.line_to_byte(start_line);
+        let open_text = format!("{indent}{open}\n");
+        self.insert_at_byte(open_at, &open_text);
+        self.shift_positions_after_edit(open_at, open_text.len(), true);
+        // Inserting the open line at the selection start would otherwise leave
+        // the range on the inner lines only, so a second toggle would wrap again.
+        let sel_start = open_at;
+        let close_line = end_line + 2;
+        let close_line_start = self.rope.line_to_byte(close_line);
+        let close_line_len = self.line(close_line).len();
+        let sel_end = close_line_start + close_line_len;
+        self.selection = Some(sel_start..sel_end);
+        if self.selection_anchor.is_some() {
+            self.selection_anchor = Some(sel_start);
+        }
+    }
+
+    fn unwrap_block_lines(&mut self, start_line: usize, end_line: usize) {
+        let close_start = self.rope.line_to_byte(end_line);
+        let close_raw = self.line(end_line);
+        if end_line > 0 && !close_raw.ends_with('\n') && !close_raw.ends_with('\r') {
+            let prev_raw = self.line(end_line - 1);
+            let extra = prev_raw.len() - line_body(&prev_raw).len();
+            let at = close_start - extra;
+            let n = close_raw.len() + extra;
+            self.remove_byte_range(at, at + n);
+            self.shift_positions_after_edit(at, n, false);
+        } else {
+            let n = close_raw.len();
+            self.remove_byte_range(close_start, close_start + n);
+            self.shift_positions_after_edit(close_start, n, false);
+        }
+        let open_start = self.rope.line_to_byte(start_line);
+        let open_n = self.line(start_line).len();
+        self.remove_byte_range(open_start, open_start + open_n);
+        self.shift_positions_after_edit(open_start, open_n, false);
+    }
+
     /// Cursor line, or the lines a non-empty selection touches. A selection
     /// that ends on a newline does not include the following line.
     fn comment_line_span(&self) -> (usize, usize) {
@@ -1045,6 +1183,40 @@ impl Buffer {
             }
         }
         saw_code
+    }
+
+    /// Leading ASCII spaces/tabs of the least-indented non-blank line in the span.
+    /// Copied verbatim so a tab-indented block keeps tab wrappers.
+    fn span_block_indent(&self, start: usize, end: usize) -> String {
+        let mut best: Option<String> = None;
+        for line_idx in start..=end {
+            let raw = self.line(line_idx);
+            let body = line_body(&raw);
+            if body.trim().is_empty() {
+                continue;
+            }
+            let ws_len = leading_ascii_ws_len(body);
+            let prefix = body[..ws_len].to_string();
+            match &best {
+                None => best = Some(prefix),
+                Some(cur) if ws_len < cur.len() => best = Some(prefix),
+                _ => {}
+            }
+        }
+        best.unwrap_or_default()
+    }
+
+    fn span_is_block_wrapped(&self, start: usize, end: usize, open: &str, close: &str) -> bool {
+        if start == end {
+            let raw = self.line(start);
+            let body = line_body(&raw);
+            let ws_len = leading_ascii_ws_len(body);
+            if body[ws_len..].trim().is_empty() {
+                return false;
+            }
+            return block_wrap_lens(&body[ws_len..], open, close).is_some();
+        }
+        line_is_wrapper(&self.line(start), open) && line_is_wrapper(&self.line(end), close)
     }
 
     /// Shift caret, selection, and anchor after inserting or removing `n` bytes at `at`.
@@ -1530,6 +1702,30 @@ mod tests {
         assert_eq!(Language::Json.line_comment_prefix(), None);
     }
 
+    #[test]
+    fn block_comment_pair_is_markdown_only() {
+        assert_eq!(
+            Language::Markdown.block_comment_pair(),
+            Some(("<!--", "-->"))
+        );
+        for lang in [
+            Language::Plain,
+            Language::Json,
+            Language::Rust,
+            Language::Python,
+            Language::Toml,
+            Language::Yaml,
+            Language::Bash,
+            Language::C,
+            Language::Cpp,
+            Language::Javascript,
+            Language::Typescript,
+        ] {
+            assert_eq!(lang.block_comment_pair(), None, "{lang:?}");
+        }
+        assert_eq!(Language::Markdown.line_comment_prefix(), None);
+    }
+
     fn commented(src: &str, prefix: &str) -> String {
         let mut b = Buffer::from_str(src, None);
         b.cursor = 0;
@@ -1646,6 +1842,144 @@ mod tests {
     #[test]
     fn toggle_line_comment_hash_languages_use_hash() {
         assert_eq!(commented("x = 1\n", "#"), "# x = 1\n");
+    }
+
+    #[test]
+    fn toggle_block_comment_single_line_round_trip_keeps_indent() {
+        let mut b = Buffer::from_str("    hello world\n", None);
+        b.cursor = 4;
+        assert!(b.toggle_block_comment("<!--", "-->"));
+        assert_eq!(b.text(), "    <!-- hello world -->\n");
+        assert_eq!(b.cursor, 9); // "<!-- " is 5 bytes, inserted at the cursor
+        assert!(b.toggle_block_comment("<!--", "-->"));
+        assert_eq!(b.text(), "    hello world\n");
+        assert_eq!(b.cursor, 4);
+    }
+
+    #[test]
+    fn toggle_block_comment_on_cursor_line_only() {
+        let mut b = Buffer::from_str("one\ntwo\nthree\n", None);
+        b.cursor = b.rope.line_to_byte(1);
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "one\n<!-- two -->\nthree\n");
+    }
+
+    #[test]
+    fn toggle_block_comment_single_line_selection_wraps_that_line() {
+        let mut b = Buffer::from_str("one\ntwo\nthree\n", None);
+        b.selection = Some(0..3); // "one"
+        b.cursor = 3;
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "<!-- one -->\ntwo\nthree\n");
+    }
+
+    #[test]
+    fn toggle_block_comment_selection_ending_on_newline_is_still_one_line() {
+        let mut b = Buffer::from_str("one\ntwo", None);
+        b.selection = Some(0..4); // "one\n" — comment_line_span skips the next line
+        b.cursor = 4;
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "<!-- one -->\ntwo");
+    }
+
+    #[test]
+    fn toggle_block_comment_multiline_wraps_once() {
+        let mut b = Buffer::from_str("one\ntwo\nthree\n", None);
+        b.selection = Some(0..7); // "one\ntw" — lines 0..=1
+        b.cursor = 7;
+        b.selection_anchor = Some(0);
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "<!--\none\ntwo\n-->\nthree\n");
+    }
+
+    #[test]
+    fn toggle_block_comment_multiline_round_trip() {
+        let mut b = Buffer::from_str("one\ntwo\nthree\n", None);
+        b.selection = Some(0..b.rope.len_bytes());
+        assert!(b.toggle_block_comment("<!--", "-->"));
+        assert_eq!(b.text(), "<!--\none\ntwo\nthree\n-->\n");
+        assert!(b.toggle_block_comment("<!--", "-->"));
+        assert_eq!(b.text(), "one\ntwo\nthree\n");
+    }
+
+    #[test]
+    fn toggle_block_comment_multiline_uses_minimum_indent() {
+        let mut b = Buffer::from_str("    hello\n      world\n", None);
+        b.selection = Some(0..b.rope.len_bytes());
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "    <!--\n    hello\n      world\n    -->\n");
+    }
+
+    #[test]
+    fn toggle_block_comment_multiline_inner_blank_stays() {
+        let mut b = Buffer::from_str("a\n\nb\n", None);
+        b.selection = Some(0..b.rope.len_bytes());
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "<!--\na\n\nb\n-->\n");
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "a\n\nb\n");
+    }
+
+    #[test]
+    fn toggle_block_comment_multiline_not_wrapped_wraps_again() {
+        let mut b = Buffer::from_str("<!-- a -->\nb\n", None);
+        b.selection = Some(0..b.rope.len_bytes());
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "<!--\n<!-- a -->\nb\n-->\n");
+    }
+
+    #[test]
+    fn toggle_block_comment_empty_line_gains_tokens() {
+        let mut b = Buffer::from_str("\n", None);
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "<!--  -->\n");
+    }
+
+    #[test]
+    fn toggle_block_comment_removes_tokens_without_spaces() {
+        let mut b = Buffer::from_str("<!--foo-->\n", None);
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "foo\n");
+    }
+
+    #[test]
+    fn toggle_block_comment_cursor_in_indent_does_not_move() {
+        let mut b = Buffer::from_str("    code\n", None);
+        b.cursor = 2;
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "    <!-- code -->\n");
+        assert_eq!(b.cursor, 2);
+    }
+
+    #[test]
+    fn toggle_block_comment_is_one_undo_step() {
+        let mut b = Buffer::from_str("a\nb\n", None);
+        b.selection = Some(0..b.rope.len_bytes());
+        b.selection_anchor = Some(0);
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "<!--\na\nb\n-->\n");
+        b.undo();
+        assert_eq!(b.text(), "a\nb\n");
+        assert_eq!(b.selection, Some(0..4));
+        assert_eq!(b.selection_anchor, Some(0));
+    }
+
+    #[test]
+    fn toggle_block_comment_rejects_empty_tokens() {
+        let mut b = Buffer::from_str("hello\n", None);
+        assert!(!b.toggle_block_comment("", "-->"));
+        assert!(!b.toggle_block_comment("<!--", ""));
+        assert_eq!(b.text(), "hello\n");
+    }
+
+    #[test]
+    fn toggle_block_comment_last_line_without_newline() {
+        let mut b = Buffer::from_str("one\ntwo", None);
+        b.selection = Some(0..b.rope.len_bytes());
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "<!--\none\ntwo\n-->");
+        b.toggle_block_comment("<!--", "-->");
+        assert_eq!(b.text(), "one\ntwo");
     }
 
     #[test]
