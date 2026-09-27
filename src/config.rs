@@ -149,6 +149,77 @@ impl Config {
         }
         true
     }
+
+    /// Remove `path` from `recent_files` if present. Persists when the list
+    /// changed. Returns whether anything was removed.
+    pub fn remove_recent_file(&mut self, path: &Path) -> bool {
+        if self.remove_recent_file_inmemory(path) {
+            #[cfg(not(test))]
+            self.save();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn remove_recent_file_inmemory(&mut self, path: &Path) -> bool {
+        let key = path.to_string_lossy().to_string();
+        let canonical = fs::canonicalize(path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| key.clone());
+        let before = self.recent_files.len();
+        self.recent_files.retain(|s| s != &key && s != &canonical);
+        before != self.recent_files.len()
+    }
+
+    /// Empty `recent_files`. Persists when the list was non-empty.
+    pub fn clear_recent_files(&mut self) -> bool {
+        if self.clear_recent_files_inmemory() {
+            #[cfg(not(test))]
+            self.save();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn clear_recent_files_inmemory(&mut self) -> bool {
+        if self.recent_files.is_empty() {
+            return false;
+        }
+        self.recent_files.clear();
+        true
+    }
+
+    /// Drop recents that are gone or are no longer regular files. Persists
+    /// when the list changed. Other IO errors (e.g. permission denied) keep
+    /// the entry so a temporarily unreadable path is not forgotten.
+    pub fn prune_missing_recent_files(&mut self) -> bool {
+        if self.prune_missing_recent_files_inmemory() {
+            #[cfg(not(test))]
+            self.save();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn prune_missing_recent_files_inmemory(&mut self) -> bool {
+        let before = self.recent_files.len();
+        self.recent_files
+            .retain(|s| recent_path_is_regular_file(Path::new(s)));
+        before != self.recent_files.len()
+    }
+}
+
+/// True when `path` is a regular file, or when metadata fails for a reason
+/// other than NotFound (keep unreadable-but-possibly-still-there paths).
+fn recent_path_is_regular_file(path: &Path) -> bool {
+    match fs::metadata(path) {
+        Ok(m) => m.is_file(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
 }
 
 #[cfg(test)]
@@ -228,5 +299,55 @@ mod tests {
         assert!(!cfg.record_recent_file_inmemory(Path::new("/this/does/not/exist/anywhere/x")));
         assert!(!cfg.record_recent_file_inmemory(&std::env::temp_dir())); // a directory
         assert!(cfg.recent_files.is_empty());
+    }
+
+    #[test]
+    fn remove_recent_file_drops_matching_path_and_keeps_others() {
+        let mut cfg = Config::default();
+        let a = tmpfile("rm-a");
+        let b = tmpfile("rm-b");
+        assert!(cfg.record_recent_file_inmemory(&a));
+        assert!(cfg.record_recent_file_inmemory(&b));
+        assert!(cfg.remove_recent_file_inmemory(&b));
+        assert_eq!(cfg.recent_files.len(), 1);
+        assert!(cfg.recent_files[0].contains("rust-edit-cfg-rm-a"));
+        assert!(!cfg.remove_recent_file_inmemory(&b));
+    }
+
+    #[test]
+    fn remove_recent_file_matches_stored_string_even_if_file_is_gone() {
+        let mut cfg = Config::default();
+        let gone = "/tmp/rust-edit-recent-gone-does-not-exist.rs".to_string();
+        cfg.recent_files.push(gone.clone());
+        assert!(cfg.remove_recent_file_inmemory(Path::new(&gone)));
+        assert!(cfg.recent_files.is_empty());
+    }
+
+    #[test]
+    fn clear_recent_files_empties_list() {
+        let mut cfg = Config::default();
+        let a = tmpfile("clr-a");
+        assert!(cfg.record_recent_file_inmemory(&a));
+        assert!(cfg.clear_recent_files_inmemory());
+        assert!(cfg.recent_files.is_empty());
+        assert!(!cfg.clear_recent_files_inmemory());
+    }
+
+    #[test]
+    fn prune_missing_recent_files_drops_gone_paths_and_dirs() {
+        let mut cfg = Config::default();
+        let keep = tmpfile("prune-keep");
+        let gone_later = tmpfile("prune-gone");
+        assert!(cfg.record_recent_file_inmemory(&keep));
+        assert!(cfg.record_recent_file_inmemory(&gone_later));
+        fs::remove_file(&gone_later).unwrap();
+        cfg.recent_files
+            .push(std::env::temp_dir().to_string_lossy().into_owned());
+        cfg.recent_files
+            .push("/tmp/rust-edit-recent-never-existed.rs".into());
+        assert!(cfg.prune_missing_recent_files_inmemory());
+        assert_eq!(cfg.recent_files.len(), 1);
+        assert!(cfg.recent_files[0].contains("rust-edit-cfg-prune-keep"));
+        assert!(!cfg.prune_missing_recent_files_inmemory());
     }
 }
