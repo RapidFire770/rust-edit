@@ -293,6 +293,28 @@ pub fn list_click_is_scrollbar(
         && y < (sb.y + sb.height) as usize
 }
 
+/// Trailing click target painted on each Recent row (`[x]`).
+pub const RECENT_CLEAR_LABEL: &str = "[x]";
+pub const RECENT_CLEAR_COLS: usize = 3;
+
+/// Exclusive screen-x range of the `[x]` glyph on a Recent row.
+/// When the list overflows, the range ends at the scrollbar column so the
+/// two hit-tests never overlap.
+pub fn recent_clear_x_range(popup: Rect, overflowing: bool) -> (u16, u16) {
+    let inner_end_exclusive = if overflowing {
+        popup.x + popup.width.saturating_sub(2) // scrollbar col
+    } else {
+        popup.x + popup.width.saturating_sub(1) // right border
+    };
+    let start = inner_end_exclusive.saturating_sub(RECENT_CLEAR_COLS as u16);
+    (start, inner_end_exclusive)
+}
+
+pub fn recent_row_click_is_clear(x: usize, popup: Rect, overflowing: bool) -> bool {
+    let (start, end) = recent_clear_x_range(popup, overflowing);
+    x >= start as usize && x < end as usize
+}
+
 pub fn list_overflow_bar(
     entry_count: usize,
     sel: usize,
@@ -348,10 +370,7 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
             "Enter dir: Enter/→/l   Up: Backspace/←/h/-   \
                              Toggle hidden: Ctrl+H   Tab: footer buttons"
         }
-        BrowserMode::Recent => {
-            "Open: Enter/l   Switch to browser: Tab to [Browse]   \
-                                Esc: back to dialog"
-        }
+        BrowserMode::Recent => "Enter: open   Del/[x]: remove   [Clear]: all   Esc: back",
     };
     lines.push(Line::from(Span::styled(hint, dim)));
     lines.push(Line::from(""));
@@ -386,10 +405,15 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
         let overflowing =
             list_overflow_bar(app.browser_entries.len(), sel, popup, reserve_name).overflowing();
         let inner_w = popup.width.saturating_sub(2) as usize;
-        let name_budget = if overflowing {
-            inner_w.saturating_sub(3) // marker + space + scrollbar column
+        let clear_reserve = if app.browser_mode == BrowserMode::Recent {
+            RECENT_CLEAR_COLS + 1
         } else {
-            inner_w.saturating_sub(2)
+            0
+        };
+        let name_budget = if overflowing {
+            inner_w.saturating_sub(3 + clear_reserve) // marker + space + scrollbar
+        } else {
+            inner_w.saturating_sub(2 + clear_reserve)
         };
 
         for i in show_from..show_to {
@@ -421,11 +445,18 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
             } else {
                 base
             };
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(marker, dim),
                 Span::raw(" "),
-                Span::styled(name, style),
-            ]));
+                Span::styled(name.clone(), style),
+            ];
+            if app.browser_mode == BrowserMode::Recent {
+                let pad = name_budget.saturating_sub(name.chars().count());
+                let clear_style = if is_hover || is_sel { accent } else { dim };
+                spans.push(Span::raw(" ".repeat(pad + 1)));
+                spans.push(Span::styled(RECENT_CLEAR_LABEL, clear_style));
+            }
+            lines.push(Line::from(spans));
         }
     }
 
@@ -461,7 +492,6 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
     if let Some(h) = app.browser_button_hover {
         row.set_hover(Some(h));
     }
-    let _ = accent; // suppress unused warning if dim path took everything
     let footer_line = row.render(theme);
     lines.push(footer_line);
 
@@ -864,5 +894,37 @@ mod tests {
         );
         assert_eq!(recent_parent_display(Path::new("/a.md")), "/");
         assert_eq!(recent_parent_display(Path::new("a.md")), "");
+    }
+
+    #[test]
+    fn recent_clear_x_range_sits_left_of_right_border_when_list_fits() {
+        let popup = Rect::new(10, 5, 60, 20);
+        let (start, end) = recent_clear_x_range(popup, false);
+        // inner last col = 10 + 60 - 2 = 68; [x] is 3 cols ending there inclusive
+        assert_eq!(end - start, RECENT_CLEAR_COLS as u16);
+        assert_eq!(end, popup.x + popup.width - 1); // exclusive end = right border
+    }
+
+    #[test]
+    fn recent_clear_x_range_sits_left_of_scrollbar_when_overflowing() {
+        let popup = Rect::new(10, 5, 60, 20);
+        let (start, end) = recent_clear_x_range(popup, true);
+        let sb = list_scrollbar_rect(popup, false);
+        assert_eq!(end, sb.x);
+        assert_eq!(end - start, RECENT_CLEAR_COLS as u16);
+    }
+
+    #[test]
+    fn recent_row_click_is_clear_only_on_the_x_glyph() {
+        let popup = Rect::new(10, 5, 60, 20);
+        let (start, end) = recent_clear_x_range(popup, false);
+        assert!(recent_row_click_is_clear(start as usize, popup, false));
+        assert!(recent_row_click_is_clear((end - 1) as usize, popup, false));
+        assert!(!recent_row_click_is_clear(
+            (start - 1) as usize,
+            popup,
+            false
+        ));
+        assert!(!recent_row_click_is_clear(end as usize, popup, false));
     }
 }
