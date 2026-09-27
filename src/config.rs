@@ -153,13 +153,7 @@ impl Config {
     /// Remove `path` from `recent_files` if present. Persists when the list
     /// changed. Returns whether anything was removed.
     pub fn remove_recent_file(&mut self, path: &Path) -> bool {
-        if self.remove_recent_file_inmemory(path) {
-            #[cfg(not(test))]
-            self.save();
-            true
-        } else {
-            false
-        }
+        self.remove_recent_file_inmemory(path)
     }
 
     fn remove_recent_file_inmemory(&mut self, path: &Path) -> bool {
@@ -174,13 +168,7 @@ impl Config {
 
     /// Empty `recent_files`. Persists when the list was non-empty.
     pub fn clear_recent_files(&mut self) -> bool {
-        if self.clear_recent_files_inmemory() {
-            #[cfg(not(test))]
-            self.save();
-            true
-        } else {
-            false
-        }
+        self.clear_recent_files_inmemory()
     }
 
     fn clear_recent_files_inmemory(&mut self) -> bool {
@@ -195,13 +183,7 @@ impl Config {
     /// when the list changed. Other IO errors (e.g. permission denied) keep
     /// the entry so a temporarily unreadable path is not forgotten.
     pub fn prune_missing_recent_files(&mut self) -> bool {
-        if self.prune_missing_recent_files_inmemory() {
-            #[cfg(not(test))]
-            self.save();
-            true
-        } else {
-            false
-        }
+        self.prune_missing_recent_files_inmemory()
     }
 
     fn prune_missing_recent_files_inmemory(&mut self) -> bool {
