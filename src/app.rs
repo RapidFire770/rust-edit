@@ -1623,7 +1623,12 @@ impl App {
             }
         } else {
             match idx {
-                0 => self.browser_go_up(),
+                0 => match self.browser_mode {
+                    crate::ui::popups::file_browser::BrowserMode::Recent => {
+                        self.clear_recent_files()
+                    }
+                    crate::ui::popups::file_browser::BrowserMode::Dir => self.browser_go_up(),
+                },
                 1 => self.browser_toggle_mode(),
                 2 => self.browser_toggle_hidden(),
                 3 => self.close_file_browser(false),
@@ -1661,8 +1666,10 @@ impl App {
 
     /// Populate `browser_entries` from the persisted recent-files list,
     /// dropping any that no longer exist on disk so the UI never offers a
-    /// dead path. Pure aside from the stat calls.
+    /// dead path. Prunes those missing paths out of `config.recent_files`
+    /// as well (persisted outside tests).
     pub fn refresh_recent(&mut self) {
+        self.config.prune_missing_recent_files();
         self.browser_entries = self
             .config
             .recent_files
@@ -1670,10 +1677,9 @@ impl App {
             .filter_map(|s| {
                 let p = PathBuf::from(s);
                 let name = p.file_name()?.to_string_lossy().to_string();
-                let is_dir = std::fs::metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
                 Some(crate::ui::popups::file_browser::BrowserEntry {
                     name,
-                    is_dir,
+                    is_dir: false,
                     path: p,
                 })
             })
@@ -1682,6 +1688,37 @@ impl App {
         if self.browser_selected >= self.browser_entries.len() {
             self.browser_selected = self.browser_entries.len().saturating_sub(1);
         }
+    }
+
+    /// Remove the recent entry at `idx` from config and the visible list.
+    /// No-op when not in Recent mode or `idx` is out of range. Leaves the
+    /// browser open. Selection stays on the same index (now the next file)
+    /// and is clamped by `refresh_recent`.
+    pub fn remove_recent_at(&mut self, idx: usize) {
+        if self.browser_mode != crate::ui::popups::file_browser::BrowserMode::Recent {
+            return;
+        }
+        let Some(entry) = self.browser_entries.get(idx) else {
+            return;
+        };
+        let path = entry.path.clone();
+        self.config.remove_recent_file(&path);
+        if idx < self.browser_selected {
+            self.browser_selected -= 1;
+        }
+        self.browser_list_hover = None;
+        self.refresh_recent();
+    }
+
+    /// Empty the persisted recents list. No-op outside Recent mode.
+    pub fn clear_recent_files(&mut self) {
+        if self.browser_mode != crate::ui::popups::file_browser::BrowserMode::Recent {
+            return;
+        }
+        self.config.clear_recent_files();
+        self.browser_selected = 0;
+        self.browser_list_hover = None;
+        self.refresh_recent();
     }
 
     /// Activate (Enter / click) the selected row. In Dir mode: directories are
@@ -1829,7 +1866,11 @@ impl App {
                 crate::ui::popups::file_browser::BrowserMode::Dir => "[ **Browse** / Recent ]",
                 crate::ui::popups::file_browser::BrowserMode::Recent => "[ Browse / **Recent** ]",
             };
-            ["[ Up ]", mode_btn, hidden_btn, "[ Cancel ]"]
+            let first = match self.browser_mode {
+                crate::ui::popups::file_browser::BrowserMode::Dir => "[ Up ]",
+                crate::ui::popups::file_browser::BrowserMode::Recent => "[ Clear ]",
+            };
+            [first, mode_btn, hidden_btn, "[ Cancel ]"]
         }
     }
 
@@ -2843,6 +2884,114 @@ mod tests {
                 "[ Cancel ]"
             ]
         );
+    }
+
+    #[test]
+    fn open_browser_recent_footer_is_clear_mode_hidden_cancel() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = false;
+        app.browser_mode = crate::ui::popups::file_browser::BrowserMode::Recent;
+        assert_eq!(
+            app.browser_footer_labels(),
+            [
+                "[ Clear ]",
+                "[ Browse / **Recent** ]",
+                "[ Hidden: off ]",
+                "[ Cancel ]"
+            ]
+        );
+    }
+
+    fn seed_recent_files(app: &mut App, paths: &[PathBuf]) {
+        app.config.recent_files = paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+    }
+
+    #[test]
+    fn remove_recent_at_drops_that_entry_and_keeps_the_browser_open() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = false;
+        app.browser_mode = crate::ui::popups::file_browser::BrowserMode::Recent;
+        app.show_file_browser = true;
+        let a = unique_temp_file("a");
+        let b = unique_temp_file("b");
+        let c = unique_temp_file("c");
+        seed_recent_files(&mut app, &[a.clone(), b.clone(), c.clone()]);
+        app.refresh_recent();
+        app.browser_selected = 1;
+        app.remove_recent_at(1);
+        assert_eq!(
+            app.config.recent_files,
+            vec![
+                a.to_string_lossy().into_owned(),
+                c.to_string_lossy().into_owned(),
+            ]
+        );
+        assert_eq!(app.browser_entries.len(), 2);
+        assert_eq!(app.browser_selected, 1, "selection stays on the next row");
+        assert!(app.show_file_browser);
+    }
+
+    #[test]
+    fn remove_recent_at_last_row_clamps_selection() {
+        let mut app = App::new(&[]);
+        app.browser_mode = crate::ui::popups::file_browser::BrowserMode::Recent;
+        let a = unique_temp_file("last-a");
+        let b = unique_temp_file("last-b");
+        seed_recent_files(&mut app, &[a, b]);
+        app.refresh_recent();
+        app.browser_selected = 1;
+        app.remove_recent_at(1);
+        assert_eq!(app.config.recent_files.len(), 1);
+        assert_eq!(app.browser_selected, 0);
+    }
+
+    #[test]
+    fn clear_recent_files_empties_browser_and_stays_open() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = false;
+        app.browser_mode = crate::ui::popups::file_browser::BrowserMode::Recent;
+        app.show_file_browser = true;
+        let a = unique_temp_file("clr");
+        seed_recent_files(&mut app, &[a]);
+        app.refresh_recent();
+        app.clear_recent_files();
+        assert!(app.config.recent_files.is_empty());
+        assert!(app.browser_entries.is_empty());
+        assert!(app.show_file_browser);
+    }
+
+    #[test]
+    fn open_browser_recent_footer_zero_clears_recents() {
+        let mut app = App::new(&[]);
+        app.browser_origin_is_save = false;
+        app.browser_mode = crate::ui::popups::file_browser::BrowserMode::Recent;
+        app.show_file_browser = true;
+        let a = unique_temp_file("footer-clr");
+        seed_recent_files(&mut app, &[a]);
+        app.refresh_recent();
+        app.browser_activate_footer(0);
+        assert!(app.config.recent_files.is_empty());
+        assert!(app.show_file_browser);
+    }
+
+    #[test]
+    fn refresh_recent_prunes_missing_files_from_config_and_list() {
+        let mut app = App::new(&[]);
+        app.browser_mode = crate::ui::popups::file_browser::BrowserMode::Recent;
+        let keep = unique_temp_file("prune-keep");
+        let gone = unique_temp_file("prune-gone");
+        seed_recent_files(&mut app, &[keep.clone(), gone.clone()]);
+        fs::remove_file(&gone).unwrap();
+        app.refresh_recent();
+        assert_eq!(
+            app.config.recent_files,
+            vec![keep.to_string_lossy().into_owned()]
+        );
+        assert_eq!(app.browser_entries.len(), 1);
+        assert_eq!(app.browser_entries[0].path, keep);
     }
 
     #[test]
