@@ -370,7 +370,7 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
             "Enter dir: Enter/→/l   Up: Backspace/←/h/-   \
                              Toggle hidden: Ctrl+H   Tab: footer buttons"
         }
-        BrowserMode::Recent => "Enter: open   Del/[x]: remove   [Clear]: all   Esc: back",
+        BrowserMode::Recent => "Enter: open   Del/Bksp/[x]: remove   [Clear]: all   Esc: back",
     };
     lines.push(Line::from(Span::styled(hint, dim)));
     lines.push(Line::from(""));
@@ -445,16 +445,15 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
             } else {
                 base
             };
-            let mut spans = vec![
-                Span::styled(marker, dim),
-                Span::raw(" "),
-                Span::styled(name.clone(), style),
-            ];
+            let mut spans = vec![Span::styled(marker, dim), Span::raw(" ")];
             if app.browser_mode == BrowserMode::Recent {
                 let pad = name_budget.saturating_sub(name.chars().count());
                 let clear_style = if is_hover || is_sel { accent } else { dim };
+                spans.push(Span::styled(name, style));
                 spans.push(Span::raw(" ".repeat(pad + 1)));
                 spans.push(Span::styled(RECENT_CLEAR_LABEL, clear_style));
+            } else {
+                spans.push(Span::styled(name, style));
             }
             lines.push(Line::from(spans));
         }

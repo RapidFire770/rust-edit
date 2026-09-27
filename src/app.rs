@@ -1864,7 +1864,9 @@ impl App {
         } else {
             let mode_btn = match self.browser_mode {
                 crate::ui::popups::file_browser::BrowserMode::Dir => "[ **Browse** / Recent ]",
-                crate::ui::popups::file_browser::BrowserMode::Recent => "[ Browse / **Recent** ]",
+                // Title already says Recent Files; keep this short so [ Cancel ]
+                // still fits the 80-col popup (inner 62).
+                crate::ui::popups::file_browser::BrowserMode::Recent => "[ Browse ]",
             };
             let first = match self.browser_mode {
                 crate::ui::popups::file_browser::BrowserMode::Dir => "[ Up ]",
@@ -2893,12 +2895,7 @@ mod tests {
         app.browser_mode = crate::ui::popups::file_browser::BrowserMode::Recent;
         assert_eq!(
             app.browser_footer_labels(),
-            [
-                "[ Clear ]",
-                "[ Browse / **Recent** ]",
-                "[ Hidden: off ]",
-                "[ Cancel ]"
-            ]
+            ["[ Clear ]", "[ Browse ]", "[ Hidden: off ]", "[ Cancel ]"]
         );
     }
 

@@ -62,13 +62,16 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ),
                 ("Name:", "Save As browse: type the new filename here"),
                 ("↑/↓ Enter", "Browse: navigate / enter dir, or pick a file"),
-                ("Backspace/←/h", "Browse: go up one directory"),
+                ("Backspace/←/h", "Directory browse: go up one directory"),
                 ("Ctrl+H", "Browse: toggle hidden files"),
                 (
                     "Tab",
                     "Browse: cycle focus (Save As: list → Name → buttons)",
                 ),
-                ("[x] / Del", "Recent files: remove the highlighted path"),
+                (
+                    "[x] / Del / Backspace",
+                    "Recent files: remove the highlighted path",
+                ),
                 ("[ Clear ]", "Recent files: empty the whole list"),
             ],
         ),
@@ -521,7 +524,7 @@ mod tests {
         assert!(!text.contains("Ctrl+Shift+F"), "{text}");
         // Ctrl+H remains the file-browser hidden-files toggle.
         assert!(text.contains("Ctrl+H"), "{text}");
-        assert!(text.contains("[x] / Del"), "{text}");
+        assert!(text.contains("[x] / Del / Backspace"), "{text}");
         assert!(text.contains("[ Clear ]"), "{text}");
     }
 
