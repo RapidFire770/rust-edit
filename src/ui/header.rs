@@ -203,18 +203,57 @@ pub fn menu_labels() -> &'static str {
     " File  Tools  Settings  "
 }
 
+pub const MENU_ORDER: [&str; 3] = ["File", "Tools", "Settings"];
+
+pub fn file_menu_items() -> &'static [&'static str] {
+    &[
+        "New (Ctrl+N)",
+        "Open (Ctrl+O)",
+        "Save (Ctrl+S)",
+        "Save As (Ctrl+Alt+S)",
+        "Close Tab (Ctrl+W)",
+        "Quit (Ctrl+Q)",
+    ]
+}
+
 /// Tools dropdown labels. Shortcuts named here must be chords the editor
 /// actually receives. Format has no portable chord (Ctrl+Shift+F arrives as
-/// Ctrl+F); Find & Replace is the menu path onto the replace field.
+/// Ctrl+F). Find & Replace opens the same bar as Ctrl+F (query focused; Tab
+/// reaches the replace field).
 pub fn tools_menu_items() -> &'static [&'static str] {
     &[
-        "Find (Ctrl+F)",
-        "Find & Replace",
+        "Find & Replace (Ctrl+F)",
         "Word Count (Alt+W)",
         "Format Document",
         "Toggle Word Wrap (Alt+Z)",
         "Toggle Comment (Ctrl+/)",
     ]
+}
+
+pub fn settings_menu_items() -> &'static [&'static str] {
+    &["Configure...", "Themes...", "Help (F1)"]
+}
+
+pub fn menu_items(name: &str) -> &'static [&'static str] {
+    match name {
+        "File" => file_menu_items(),
+        "Tools" => tools_menu_items(),
+        "Settings" => settings_menu_items(),
+        _ => &[],
+    }
+}
+
+pub fn menu_len(name: &str) -> usize {
+    menu_items(name).len()
+}
+
+pub fn menu_x(name: &str) -> u16 {
+    match name {
+        "File" => 0,
+        "Tools" => 7,
+        "Settings" => 15,
+        _ => 0,
+    }
 }
 
 /// Render a dropdown popup for a menu.
@@ -228,25 +267,8 @@ pub fn render_dropdown(
 ) {
     use ratatui::widgets::{Block, Borders, List, ListItem};
 
-    let file_items = vec![
-        "New (Ctrl+N)",
-        "Open (Ctrl+O)",
-        "Save (Ctrl+S)",
-        "Save As (Ctrl+Alt+S)",
-        "Close Tab (Ctrl+W)",
-        "Quit (Ctrl+Q)",
-    ];
-    let tools_items: Vec<&str> = tools_menu_items().to_vec();
-    let settings_items = vec!["Configure...", "Themes...", "Help (F1)"];
-
-    // x offset where each dropdown should appear, matching the header layout:
-    // " File "│" Tools "│" Settings "  → File starts col 0, Tools col 7, Settings col 15.
-    let (item_strs, menu_x) = match menu {
-        "File" => (file_items, 0u16),
-        "Tools" => (tools_items, 7u16),
-        "Settings" => (settings_items, 15u16),
-        _ => (vec!["..."], 0u16),
-    };
+    let item_strs = menu_items(menu);
+    let menu_x = menu_x(menu);
 
     // Compute width to fit longest item + padding + borders
     let max_item_len = item_strs.iter().map(|s| s.len()).max().unwrap_or(20);
@@ -295,22 +317,10 @@ pub fn render_dropdown(
 /// Get the dropdown popup rect for hit-testing
 pub fn dropdown_rect(area: Rect, menu_name: &str) -> Rect {
     let header_height = crate::ui::layout::HEADER_ROWS;
-    let h = match menu_name {
-        "File" => 8,
-        "Tools" => 8,
-        "Settings" => 5,
-        _ => 4,
-    };
+    let h = (menu_len(menu_name) as u16).saturating_add(2);
     let w = 26;
     let y = header_height;
-
-    let x = match menu_name {
-        "File" => 0,
-        "Tools" => 7,
-        "Settings" => 15,
-        _ => 0,
-    };
-
+    let x = menu_x(menu_name);
     Rect::new(x, y, w, h.min(area.height.saturating_sub(y)))
 }
 
@@ -574,8 +584,7 @@ mod tests {
         assert_eq!(
             items,
             &[
-                "Find (Ctrl+F)",
-                "Find & Replace",
+                "Find & Replace (Ctrl+F)",
                 "Word Count (Alt+W)",
                 "Format Document",
                 "Toggle Word Wrap (Alt+Z)",
@@ -585,6 +594,16 @@ mod tests {
         let joined = items.join("\n");
         assert!(!joined.contains("Ctrl+H"), "{joined}");
         assert!(!joined.contains("Ctrl+Shift+F"), "{joined}");
+        assert_eq!(items.iter().filter(|s| s.contains("Find")).count(), 1);
+    }
+
+    #[test]
+    fn menu_len_matches_item_slices() {
+        assert_eq!(menu_len("File"), file_menu_items().len());
+        assert_eq!(menu_len("Tools"), tools_menu_items().len());
+        assert_eq!(menu_len("Settings"), settings_menu_items().len());
+        assert_eq!(menu_len("Tools"), 5);
+        assert_eq!(MENU_ORDER, ["File", "Tools", "Settings"]);
     }
 
     #[test]
@@ -604,7 +623,7 @@ mod tests {
         assert_eq!(rect.x, 7);
         assert_eq!(rect.y, crate::ui::layout::HEADER_ROWS);
         assert_eq!(rect.width, 26);
-        assert_eq!(rect.height, 8);
+        assert_eq!(rect.height, 7);
     }
 
     #[test]

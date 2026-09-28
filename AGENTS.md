@@ -3,7 +3,7 @@
 **Project:** Rust-Edit — Feature-rich terminal text & code editor (TUI)  
 **Primary Framework:** Ratatui v0.30+  
 **Status:** Phase 1 complete (June 2026). MVP + high-value additions shipped.   
-**Last Updated:** September 27, 2026
+**Last Updated:** September 28, 2026
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
 
@@ -37,7 +37,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
 5. **Respect the spec — with documented deviations**
    - The Design Spec is the historical source of intent; this AGENTS.md reflects the *current* agreed scope. Where they differ, AGENTS.md wins:
      - **Markdown rendered preview and formatting chords were removed.** Markdown files keep source syntax highlighting. `Ctrl+I` is Tab on a terminal and inserts `config.tab_size` spaces at the caret. The editor does not apply italic styling to buffer text. Re-adding a preview or a formatting toolbar requires a new design decision.
-     - **Help lists only chords terminals deliver.** Word count is `Alt+W`. Format Document is the Tools menu item (`Ctrl+Shift+F` arrives as `Ctrl+F` on a standard terminal; a Shift-aware handler remains for terminals that report Shift, and help does not advertise it). Help opens with `F1`; `?` inserts a question mark. Find/Replace is `Ctrl+F` (Tab moves to the replace field). The Tools menu item "Find & Replace" focuses that field and has no chord of its own. `Ctrl+H` toggles hidden files in the file browser only.
+     - **Help lists only chords terminals deliver.** Word count is `Alt+W`. Format Document is the Tools menu item (`Ctrl+Shift+F` arrives as `Ctrl+F` on a standard terminal; a Shift-aware handler remains for terminals that report Shift, and help does not advertise it). Help opens with `F1`; `?` inserts a question mark. Find/Replace is `Ctrl+F` (Tab moves to the replace field). The Tools menu item is "Find & Replace (Ctrl+F)" and opens that bar on the query field. `Ctrl+H` toggles hidden files in the file browser only.
      - **Single Find/Replace shortcut (**`Ctrl+F`**)** — the bar has query/replace fields reachable via Tab, so a separate `Ctrl+H` was dropped.
      - **Tab at caret inserts spaces** — Design Spec §7 said Tab/Shift+Tab indent/dedent the line. Caret Tab now inserts `config.tab_size` spaces at the cursor (always the full width, not a remainder to the next tab stop). Non-empty selections still indent; Shift+Tab still dedents. Smart-indent extra width on Enter also uses `tab_size` (no more hardcoded 4).
      - **Ctrl+/ toggles a comment.** The unshifted `/` `?` key sends `0x1F`. Crossterm reports that as `KeyCode::Char('7')` with Control. The key arm also accepts `Char('/')` with Control. Ctrl+? is `0x7F` and is Backspace; do not bind it. Help says `Ctrl+/`. Line tokens live on `Language::line_comment_prefix` (`//` or `#`). Markdown uses `Language::block_comment_pair` (`<!--`, `-->`): a one-line span wraps as `<!-- text -->`; a multi-line span inserts a `<!--` line before the first line and a `-->` line after the last, indented to the span’s leading whitespace. Plain text and JSON set the status notice `No comment for this file`. The Tools menu item is "Toggle Comment (Ctrl+/)".
@@ -82,7 +82,7 @@ pretty_assertions = "1.4"
 # insta = "1"          # only if we decide on snapshot testing for pure logic
 ```
 
-Run `cargo fmt` and `cargo clippy -- -D warnings` on every change.
+Run `cargo fmt` and `cargo clippy --all-targets -- -D warnings` on every change.
 
 ### Toolchain / cargo path (important for agents)
 
@@ -183,7 +183,7 @@ rust-edit/
 
 - Edition 2021.
 - `cargo fmt` (default rustfmt config is fine; add `rustfmt.toml` only if we need specific rules later).
-- `cargo clippy -- -D warnings` must pass. Allow only with `#[allow(...)]` + comment explaining why.
+- `cargo clippy --all-targets -- -D warnings` must pass. Allow only with `#[allow(...)]` + comment explaining why.
 - Error handling:
   - User-facing errors → `anyhow::Result` + context + nice popup message.
   - Internal recoverable → `Result<T, MyError>` with `thiserror` (only if we grow a small lib).
@@ -300,7 +300,7 @@ Do **not** ask for every tiny decision. Propose and note the reasoning.
 ### Automated
 
 - `cargo test` for all pure logic (buffer operations, config serde roundtrip, syntax language detection, find/replace engine, etc.).
-- `cargo clippy -- -D warnings && cargo fmt -- --check`.
+- `cargo clippy --all-targets -- -D warnings && cargo fmt -- --check`.
 
 ### Manual (required for any UI change)
 
@@ -373,7 +373,7 @@ cargo build --release
 ./target/release/rust-edit src/main.rs        # open a file
 ```
 
-Then explore the code, run `cargo fmt && cargo clippy -- -D warnings && cargo test`,
+Then explore the code, run `cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test`,
 and review `docs/Todo-List.md` for open Phase 2 ideas.
 
 ---

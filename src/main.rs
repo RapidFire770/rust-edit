@@ -782,21 +782,15 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 app.close_menu();
                             }
                             KeyCode::Char('j') | KeyCode::Down if app.active_menu.is_some() => {
-                                let len = match app.active_menu.as_deref() {
-                                    Some("File") => 6,
-                                    Some("Tools") => 6,
-                                    Some("Settings") => 3,
-                                    _ => 1,
-                                };
+                                let len = crate::ui::header::menu_len(
+                                    app.active_menu.as_deref().unwrap_or(""),
+                                );
                                 app.menu_selected = (app.menu_selected + 1) % len;
                             }
                             KeyCode::Char('k') | KeyCode::Up if app.active_menu.is_some() => {
-                                let len = match app.active_menu.as_deref() {
-                                    Some("File") => 6,
-                                    Some("Tools") => 6,
-                                    Some("Settings") => 3,
-                                    _ => 1,
-                                };
+                                let len = crate::ui::header::menu_len(
+                                    app.active_menu.as_deref().unwrap_or(""),
+                                );
                                 app.menu_selected = if app.menu_selected == 0 {
                                     len - 1
                                 } else {
@@ -1137,12 +1131,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
                     let inner_y = y - dropdown.y;
                     let item_idx = (inner_y as usize).saturating_sub(1);
 
-                    let item_count = match menu_name {
-                        "File" => 6,
-                        "Tools" => 6,
-                        "Settings" => 3,
-                        _ => 0,
-                    };
+                    let item_count = crate::ui::header::menu_len(menu_name);
 
                     if item_idx < item_count {
                         app.menu_selected = item_idx;
@@ -1411,12 +1400,10 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             // popup_is_open is false until after handle_menu_action.
             if !app.popup_is_open() {
                 if let Some(ref menu_name) = app.active_menu {
-                    let (menu_x, num_items) = match menu_name.as_str() {
-                        "File" => (0usize, 6),
-                        "Tools" => (7, 6),
-                        "Settings" => (15, 3),
-                        _ => (0, 0),
-                    };
+                    let (menu_x, num_items) = (
+                        crate::ui::header::menu_x(menu_name.as_str()) as usize,
+                        crate::ui::header::menu_len(menu_name.as_str()),
+                    );
                     let dy = crate::ui::layout::HEADER_ROWS as usize; // below header + rule
                     let dropdown_h = num_items + 2;
                     let in_dropdown_y = y >= dy && y < dy + dropdown_h;
@@ -2551,7 +2538,6 @@ fn handle_menu_action(app: &mut App) {
         ("File", 4) => app.close_current_tab(),
         ("File", 5) => app.request_quit(), // Quit
         ("Tools", 0) => {
-            // Find (focus query)
             if app.find_state.is_none() {
                 app.toggle_find();
             }
@@ -2559,21 +2545,12 @@ fn handle_menu_action(app: &mut App) {
                 fs.focus = FindFocus::Query;
             }
         }
-        ("Tools", 1) => {
-            // Find & Replace (focus replace field)
-            if app.find_state.is_none() {
-                app.toggle_find();
-            }
-            if let Some(fs) = &mut app.find_state {
-                fs.focus = FindFocus::Replace;
-            }
-        }
-        ("Tools", 2) => app.compute_and_show_word_count(),
-        ("Tools", 3) => {
+        ("Tools", 1) => app.compute_and_show_word_count(),
+        ("Tools", 2) => {
             app.format_current_document();
         }
-        ("Tools", 4) => app.toggle_word_wrap(),
-        ("Tools", 5) => app.toggle_line_comment(),
+        ("Tools", 3) => app.toggle_word_wrap(),
+        ("Tools", 4) => app.toggle_line_comment(),
         ("Settings", 0) => app.open_configure(),
         ("Settings", 1) => app.open_themes(),
         ("Settings", 2) => app.open_help(), // Help (F1)
@@ -3534,6 +3511,26 @@ mod popup_mouse_focus_tests {
         // leftover menu was not closed by handle_menu_action.
         assert_eq!(app.buffers.len(), 1);
         assert_eq!(app.active_menu.as_deref(), Some("File"));
+    }
+
+    #[test]
+    fn tools_menu_find_opens_query_and_index_1_is_word_count() {
+        let mut app = App::new(&[]);
+        app.active_menu = Some("Tools".into());
+        app.menu_selected = 0;
+        handle_menu_action(&mut app);
+        assert!(app.find_state.is_some());
+        assert_eq!(
+            app.find_state.as_ref().unwrap().focus,
+            crate::ui::find::FindFocus::Query
+        );
+
+        let mut app = App::new(&[]);
+        app.active_menu = Some("Tools".into());
+        app.menu_selected = 1;
+        handle_menu_action(&mut app);
+        assert!(app.show_word_count);
+        assert!(app.find_state.is_none());
     }
 
     #[test]
