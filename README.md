@@ -121,7 +121,7 @@ The notice prints that command with the path of the binary you are running.
 
 ### Menus
 
-The menu bar is **File**, **Tools**, and **Settings**. Alt+F, Alt+T, and Alt+S open them. A click opens them too.
+The menu bar is **File**, **Tools**, and **Settings**. Alt+F, Alt+T, and Alt+S open them. A click opens them too. Left, Right, and Tab move between those three menus while one is open.
 
 - **File** creates a tab, opens and saves, closes a tab, and quits. Closing or quitting with unsaved edits asks you to confirm.
 - **Open** and **Save As** start as a path dialog. **Browse…** opens the folder listing. On Open, that listing can switch to recent files; each recent row shows `name @ directory`, and a long directory is truncated from the left. Click `[x]`, or press Delete or Backspace, to drop one recent; **Clear** empties the list. Paths that no longer exist are removed when you open the list. On Save As, type a file name and choose **Use folder** to save into the folder you are viewing.

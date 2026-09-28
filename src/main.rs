@@ -797,6 +797,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                     app.menu_selected - 1
                                 };
                             }
+                            KeyCode::Left | KeyCode::BackTab if app.active_menu.is_some() => {
+                                app.cycle_open_menu(false);
+                            }
+                            KeyCode::Right | KeyCode::Tab if app.active_menu.is_some() => {
+                                app.cycle_open_menu(true);
+                            }
                             KeyCode::Enter if app.active_menu.is_some() => {
                                 handle_menu_action(app);
                                 app.close_menu();

@@ -960,6 +960,26 @@ impl App {
         self.menu_selected = 0;
     }
 
+    /// Move the open dropdown to the next or previous header menu.
+    /// No-op when no menu is open. Resets `menu_selected` because File,
+    /// Tools, and Settings have different lengths.
+    pub fn cycle_open_menu(&mut self, forward: bool) {
+        let Some(current) = self.active_menu.as_deref() else {
+            return;
+        };
+        let order = crate::ui::header::MENU_ORDER;
+        let idx = order.iter().position(|&n| n == current).unwrap_or(0);
+        let next = if forward {
+            (idx + 1) % order.len()
+        } else if idx == 0 {
+            order.len() - 1
+        } else {
+            idx - 1
+        };
+        self.active_menu = Some(order[next].to_string());
+        self.menu_selected = 0;
+    }
+
     // ----- Configure popup -----
     pub fn open_configure(&mut self) {
         if self.popup_is_open() {
@@ -2774,6 +2794,40 @@ mod tests {
     fn open_menu_is_blocked_while_a_popup_is_focused() {
         let mut app = App::new(&[]);
         app.open_configure();
+        app.open_menu("File");
+        assert!(app.active_menu.is_none());
+    }
+
+    #[test]
+    fn cycle_open_menu_wraps_and_resets_selection() {
+        let mut app = App::new(&[]);
+        app.cycle_open_menu(true);
+        assert!(app.active_menu.is_none());
+
+        app.open_menu("File");
+        app.menu_selected = 3;
+        app.cycle_open_menu(true);
+        assert_eq!(app.active_menu.as_deref(), Some("Tools"));
+        assert_eq!(app.menu_selected, 0);
+
+        app.cycle_open_menu(true);
+        assert_eq!(app.active_menu.as_deref(), Some("Settings"));
+        app.cycle_open_menu(true);
+        assert_eq!(app.active_menu.as_deref(), Some("File"));
+
+        app.cycle_open_menu(false);
+        assert_eq!(app.active_menu.as_deref(), Some("Settings"));
+        app.cycle_open_menu(false);
+        assert_eq!(app.active_menu.as_deref(), Some("Tools"));
+        app.cycle_open_menu(false);
+        assert_eq!(app.active_menu.as_deref(), Some("File"));
+    }
+
+    #[test]
+    fn open_menu_still_toggles_the_same_name_closed() {
+        let mut app = App::new(&[]);
+        app.open_menu("File");
+        assert_eq!(app.active_menu.as_deref(), Some("File"));
         app.open_menu("File");
         assert!(app.active_menu.is_none());
     }

@@ -114,6 +114,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Alt+H / Alt+L", "Scroll view left / right"),
                 ("Alt+F / T / S", "Open File / Tools / Settings menu"),
                 ("j / k, Up / Down", "Move selection in an open menu"),
+                ("Left / Right / Tab", "Switch File / Tools / Settings menus"),
                 ("Enter / Esc", "Run the menu item / close the menu"),
                 ("Alt+1..9", "Switch to tab N"),
                 ("[<] / [>]", "Scroll overflow file tabs"),
@@ -510,6 +511,11 @@ mod tests {
         let text = shortcuts_text();
         assert!(text.contains("Ctrl+/"), "{text}");
         assert!(text.contains("Toggle comment"), "{text}");
+        assert!(text.contains("Left / Right / Tab"), "{text}");
+        assert!(
+            text.contains("Switch File / Tools / Settings menus"),
+            "{text}"
+        );
         assert!(text.contains("Alt+W"), "{text}");
         assert!(text.contains("Word count"), "{text}");
         assert!(text.contains("Format Document"), "{text}");
