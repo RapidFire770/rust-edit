@@ -227,6 +227,21 @@ fn apply_help_scrollbar_at(app: &mut App, y: u16) {
     }
 }
 
+fn apply_themes_role_scrollbar_at(app: &mut App, y: u16) {
+    let popup = popups::themes::edit_rect(term_area());
+    let Some(edit) = app.themes_edit.as_mut() else {
+        return;
+    };
+    let bar = popups::themes::roles_overflow_bar(edit.role_scroll);
+    if !bar.overflowing() {
+        return;
+    }
+    let sb = popups::themes::roles_scrollbar_rect(popup);
+    if let Some(pos) = bar.target_for_row(y, sb) {
+        edit.role_scroll = bar.clamp_position(pos) as u16;
+    }
+}
+
 fn apply_browser_scrollbar_at(app: &mut App, y: u16) {
     let popup = popups::file_browser::file_browser_rect(term_area());
     let reserve = app.browser_origin_is_save;
@@ -1564,6 +1579,10 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                     apply_browser_scrollbar_at(app, y);
                     return;
                 }
+                Some(PopupFocus::Themes) => {
+                    apply_themes_role_scrollbar_at(app, y);
+                    return;
+                }
                 _ => {}
             }
             // Two drag modes (mutually exclusive): scrollbar scrub vs text
@@ -1827,6 +1846,7 @@ fn themes_popup_handle_esc(app: &mut App) {
         // Cancel editor → back to list.
         app.themes_edit = None;
         app.themes_mode = ThemesMode::List;
+        app.popup_scrollbar_drag = None;
     } else {
         app.close_themes();
     }
@@ -1878,6 +1898,7 @@ fn themes_popup_try_save(app: &mut App) {
             app.config.set_theme(&theme.name);
             app.themes_edit = None;
             app.themes_mode = ThemesMode::List;
+            app.popup_scrollbar_drag = None;
             // Re-select the saved theme in the list.
             let idx = registry.all().iter().position(|t| t.name == theme.name);
             if let Some(i) = idx {
@@ -2060,7 +2081,20 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
         return;
     }
 
-    let roles = popups::themes::roles_area(popup);
+    let overflowing = app
+        .themes_edit
+        .as_ref()
+        .map(|e| popups::themes::roles_overflow_bar(e.role_scroll).overflowing())
+        .unwrap_or(false);
+    if app.themes_mode == ThemesMode::Edit
+        && popups::themes::roles_click_is_scrollbar(x, y, popup, overflowing)
+    {
+        apply_themes_role_scrollbar_at(app, y as u16);
+        app.popup_scrollbar_drag = Some(PopupFocus::Themes);
+        return;
+    }
+
+    let roles = popups::themes::roles_list_area(popup, overflowing);
     if (y as u16) >= roles.y
         && (y as u16) < roles.y.saturating_add(roles.height)
         && (x as u16) >= roles.x
@@ -3354,6 +3388,81 @@ mod popup_focus_key_tests {
         let edit = app.themes_edit.as_ref().expect("edit state after typing");
         assert_eq!(edit.focus, EditFocus::Name);
         assert_eq!(edit.name, format!("{start_name}end"));
+    }
+
+    #[test]
+    fn handle_themes_edit_scrollbar_click_scrolls_without_changing_role() {
+        use popups::themes::ThemesMode;
+
+        let mut app = App::new(&[]);
+        app.open_themes();
+        handle_themes_key(KeyCode::Char('e'), &mut app);
+        assert_eq!(app.themes_mode, ThemesMode::Edit);
+        let selected_before = app.themes_edit.as_ref().expect("edit state").role_selected;
+        let popup = popups::themes::edit_rect(term_area());
+        let sb = popups::themes::roles_scrollbar_rect(popup);
+        let bar = popups::themes::roles_overflow_bar(0);
+        assert!(bar.overflowing());
+        let mut skip = false;
+        themes_popup_handle_click(&mut app, (sb.x as usize, sb.y as usize + 4), &mut skip);
+        assert!(skip, "themes click swallows editor input");
+        let edit = app.themes_edit.as_ref().expect("edit still open");
+        assert_eq!(
+            edit.role_selected, selected_before,
+            "scrollbar click must not change the selected role"
+        );
+        assert_eq!(app.popup_scrollbar_drag, Some(PopupFocus::Themes));
+        assert!(
+            edit.role_scroll > 0,
+            "mid-track click should advance role_scroll, got {}",
+            edit.role_scroll
+        );
+    }
+
+    #[test]
+    fn handle_themes_edit_role_label_click_still_selects() {
+        let mut app = App::new(&[]);
+        app.open_themes();
+        handle_themes_key(KeyCode::Char('e'), &mut app);
+        let popup = popups::themes::edit_rect(term_area());
+        let list = popups::themes::roles_list_area(popup, true);
+        let mut skip = false;
+        // Second visible row → role index 1 (header_fg) at scroll 0.
+        themes_popup_handle_click(&mut app, (list.x as usize, list.y as usize + 1), &mut skip);
+        let edit = app.themes_edit.as_ref().expect("edit still open");
+        assert_eq!(edit.role_selected, 1);
+        assert_eq!(edit.focus, popups::themes::EditFocus::Role);
+        assert_eq!(app.popup_scrollbar_drag, None);
+    }
+
+    #[test]
+    fn leaving_themes_edit_clears_popup_scrollbar_drag() {
+        use popups::themes::ThemesMode;
+
+        let mut app = App::new(&[]);
+        app.open_themes();
+        handle_themes_key(KeyCode::Char('e'), &mut app);
+        let popup = popups::themes::edit_rect(term_area());
+        let sb = popups::themes::roles_scrollbar_rect(popup);
+        let mut skip = false;
+        themes_popup_handle_click(&mut app, (sb.x as usize, sb.y as usize), &mut skip);
+        assert_eq!(app.popup_scrollbar_drag, Some(PopupFocus::Themes));
+
+        handle_themes_key(KeyCode::Esc, &mut app);
+        assert_eq!(app.themes_mode, ThemesMode::List);
+        assert_eq!(
+            app.popup_scrollbar_drag, None,
+            "canceling Edit must drop the role-list scrub"
+        );
+
+        handle_themes_key(KeyCode::Char('e'), &mut app);
+        themes_popup_handle_click(&mut app, (sb.x as usize, sb.y as usize), &mut skip);
+        assert_eq!(app.popup_scrollbar_drag, Some(PopupFocus::Themes));
+        app.close_themes();
+        assert_eq!(
+            app.popup_scrollbar_drag, None,
+            "closing Themes must drop the role-list scrub"
+        );
     }
 
     fn reload_prompt_app() -> (App, std::path::PathBuf) {

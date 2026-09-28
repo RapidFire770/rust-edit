@@ -3,9 +3,9 @@
 // Two modes (selected via `ThemesMode` on `App`):
 //   * List  — built-ins then customs, click/enter to apply, e/n/d to
 //             edit/new/delete.
-//   * Edit  — name field + scrolled color-role list + live preview, with
-//             reserved palette/slider rows; Tab cycles Name/Role/Palette/
-//             sliders/Hex; Enter saves.
+//   * Edit  — name field + scrolled color-role list (overflow bar) + live
+//             mini-chrome preview (header/tabs/gutter/selection/caret/find/
+//             status); Tab cycles Name/Role/Palette/sliders/Hex; Enter saves.
 //
 // State lives on `App` (state-on-App convention from confirm/file_browser);
 // this module only renders + exposes geometry helpers the mouse handler reuses.
@@ -23,6 +23,7 @@ use crate::theme::{ColorDef, Theme};
 use crate::ui::color_picker::{
     adjust_channel, premade, swatch_rect, to_rgb, Channel, SLIDER_BAR_W, SWATCH_COLS, SWATCH_ROWS,
 };
+use crate::ui::scrollbar::{self, OverflowBar};
 use crate::App;
 
 /// Which screen of the Themes popup is active.
@@ -448,7 +449,7 @@ pub const EDIT_POPUP_W: u16 = 76;
 pub const EDIT_POPUP_H: u16 = 22;
 pub const ROLE_VISIBLE: u16 = 8;
 
-/// Left pane width in inner columns (includes 2 cells reserved for a future swatch).
+/// Left pane width in inner columns (includes 1 cell for the overflow scrollbar).
 const ROLE_INNER_COLS: u16 = 38;
 
 pub fn edit_rect(area: Rect) -> Rect {
@@ -513,6 +514,55 @@ pub fn preview_area(popup: Rect) -> Rect {
     let inner_end = inner_x(popup).saturating_add(inner_width(popup));
     let w = inner_end.saturating_sub(x);
     Rect::new(x, roles.y, w, roles.height)
+}
+
+/// Role labels: `roles_area` minus the overflow-bar column when the list
+/// does not fit the viewport.
+pub fn roles_list_area(popup: Rect, overflowing: bool) -> Rect {
+    let roles = roles_area(popup);
+    if overflowing && roles.width > 0 {
+        Rect::new(
+            roles.x,
+            roles.y,
+            roles.width.saturating_sub(1),
+            roles.height,
+        )
+    } else {
+        roles
+    }
+}
+
+/// Rightmost column of [`roles_area`] — the overflow scrollbar track.
+pub fn roles_scrollbar_rect(popup: Rect) -> Rect {
+    let roles = roles_area(popup);
+    Rect::new(
+        roles.x.saturating_add(roles.width.saturating_sub(1)),
+        roles.y,
+        if roles.width == 0 { 0 } else { 1 },
+        roles.height,
+    )
+}
+
+pub fn roles_overflow_bar(scroll: u16) -> OverflowBar {
+    OverflowBar {
+        total: ROLE_FIELDS.len(),
+        position: scroll as usize,
+        viewport: ROLE_VISIBLE as usize,
+    }
+}
+
+/// True when `(x, y)` is on the role-list overflow track. Always false when
+/// the list fits so the last label column stays clickable.
+pub fn roles_click_is_scrollbar(x: usize, y: usize, popup: Rect, overflowing: bool) -> bool {
+    if !overflowing {
+        return false;
+    }
+    let sb = roles_scrollbar_rect(popup);
+    sb.width > 0
+        && x >= sb.x as usize
+        && x < (sb.x + sb.width) as usize
+        && y >= sb.y as usize
+        && y < (sb.y + sb.height) as usize
 }
 
 pub fn palette_area(popup: Rect) -> Rect {
@@ -890,106 +940,200 @@ fn slider_line(
     Line::from(spans)
 }
 
-fn preview_sample_lines(preview_theme: &Theme) -> Vec<Line<'static>> {
+fn role_label(idx: usize) -> &'static str {
+    ROLE_FIELDS.get(idx).map(|(label, _)| *label).unwrap_or("")
+}
+
+fn mark_selected(style: Style, selected: bool) -> Style {
+    if selected {
+        style.add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
+    } else {
+        style
+    }
+}
+
+fn pad_spans_style(spans: Vec<Span>, width: u16, style: Style) -> Vec<Span> {
+    let used = span_cols(&spans);
+    let mut spans = clip_spans(spans, width);
+    if (used as u16) < width {
+        spans.push(Span::styled(
+            " ".repeat((width as usize).saturating_sub(used)),
+            style,
+        ));
+    }
+    spans
+}
+
+/// Mini editor chrome: header, tabs, gutter+code, find, status. One row per
+/// [`ROLE_VISIBLE`] slot so the pane fills [`preview_area`].
+fn preview_chrome_lines(theme: &Theme, selected_role: usize, width: u16) -> Vec<Line<'static>> {
+    let sel = |name: &str| role_label(selected_role) == name;
+    let header = Style::default()
+        .bg(Color::from(&theme.header_bg))
+        .fg(Color::from(&theme.header_fg))
+        .add_modifier(Modifier::BOLD);
+    let header_mark = mark_selected(header, sel("header_bg") || sel("header_fg"));
+    let accent_on_header = mark_selected(
+        Style::default()
+            .bg(Color::from(&theme.accent))
+            .fg(Color::from(&theme.header_fg))
+            .add_modifier(Modifier::BOLD),
+        sel("accent"),
+    );
+    let editor = theme.editor_bg_style();
+    let editor_pad = mark_selected(editor, sel("editor_bg"));
+    let fg = mark_selected(
+        Style::default()
+            .fg(Color::from(&theme.editor_fg))
+            .bg(Color::from(&theme.editor_bg)),
+        sel("editor_fg"),
+    );
+    let gutter = mark_selected(
+        Style::default()
+            .fg(Color::from(&theme.line_number_fg))
+            .bg(Color::from(&theme.editor_bg)),
+        sel("line_number_fg"),
+    );
+    let kw = mark_selected(
+        Style::default()
+            .fg(Color::from(&theme.keyword))
+            .bg(Color::from(&theme.editor_bg))
+            .add_modifier(Modifier::BOLD),
+        sel("keyword"),
+    );
+    let fun = mark_selected(
+        Style::default()
+            .fg(Color::from(&theme.function))
+            .bg(Color::from(&theme.editor_bg)),
+        sel("function"),
+    );
+    let num = mark_selected(
+        Style::default()
+            .fg(Color::from(&theme.number))
+            .bg(Color::from(&theme.editor_bg)),
+        sel("number"),
+    );
+    let string = mark_selected(
+        Style::default()
+            .fg(Color::from(&theme.string))
+            .bg(Color::from(&theme.editor_bg)),
+        sel("string"),
+    );
+    let comment = mark_selected(
+        Style::default()
+            .fg(Color::from(&theme.comment))
+            .bg(Color::from(&theme.editor_bg)),
+        sel("comment"),
+    );
+    let ty = mark_selected(
+        Style::default()
+            .fg(Color::from(&theme.type_name))
+            .bg(Color::from(&theme.editor_bg)),
+        sel("type_name"),
+    );
+    let selection = mark_selected(
+        Style::default()
+            .fg(Color::from(&theme.editor_fg))
+            .bg(Color::from(&theme.selection_bg)),
+        sel("selection_bg"),
+    );
+    let cursor = mark_selected(theme.cursor_style(), sel("cursor_fg"));
+    let find_q = mark_selected(
+        Style::default()
+            .fg(Color::from(&theme.accent))
+            .bg(Color::from(&theme.editor_bg))
+            .add_modifier(Modifier::BOLD),
+        sel("accent"),
+    );
+    let status = mark_selected(theme.status_style(), sel("status_bg") || sel("status_fg"));
+
     vec![
-        Line::from(vec![
-            Span::styled(
-                "fn ",
-                Style::default()
-                    .fg(Color::from(&preview_theme.keyword))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "main",
-                Style::default().fg(Color::from(&preview_theme.function)),
-            ),
-            Span::styled(
-                "() {",
-                Style::default().fg(Color::from(&preview_theme.editor_fg)),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled(
-                "let ",
-                Style::default()
-                    .fg(Color::from(&preview_theme.keyword))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "x",
-                Style::default().fg(Color::from(&preview_theme.editor_fg)),
-            ),
-            Span::styled(
-                " = ",
-                Style::default().fg(Color::from(&preview_theme.editor_fg)),
-            ),
-            Span::styled(
-                "42",
-                Style::default().fg(Color::from(&preview_theme.number)),
-            ),
-            Span::styled(
-                ";",
-                Style::default().fg(Color::from(&preview_theme.editor_fg)),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled(
-                "let ",
-                Style::default()
-                    .fg(Color::from(&preview_theme.keyword))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "s",
-                Style::default().fg(Color::from(&preview_theme.editor_fg)),
-            ),
-            Span::styled(
-                " = ",
-                Style::default().fg(Color::from(&preview_theme.editor_fg)),
-            ),
-            Span::styled(
-                "\"hi\"",
-                Style::default().fg(Color::from(&preview_theme.string)),
-            ),
-            Span::styled(
-                "; ",
-                Style::default().fg(Color::from(&preview_theme.editor_fg)),
-            ),
-            Span::styled(
-                "// comment",
-                Style::default().fg(Color::from(&preview_theme.comment)),
-            ),
-        ]),
-        Line::from(Span::styled(
-            "}",
-            Style::default().fg(Color::from(&preview_theme.editor_fg)),
+        Line::from(pad_spans_style(
+            vec![
+                Span::styled(" File ", accent_on_header),
+                Span::styled("│", header_mark),
+                Span::styled(" Tools ", header_mark),
+                Span::styled("│", header_mark),
+                Span::styled(" Settings ", header_mark),
+            ],
+            width,
+            header_mark,
         )),
-        Line::from(vec![
-            Span::styled(
-                "type ",
-                Style::default()
-                    .fg(Color::from(&preview_theme.keyword))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "T",
-                Style::default().fg(Color::from(&preview_theme.type_name)),
-            ),
-            Span::styled(
-                " = ",
-                Style::default().fg(Color::from(&preview_theme.editor_fg)),
-            ),
-            Span::styled(
-                "String",
-                Style::default().fg(Color::from(&preview_theme.type_name)),
-            ),
-            Span::styled(
-                ";",
-                Style::default().fg(Color::from(&preview_theme.editor_fg)),
-            ),
-        ]),
+        Line::from(pad_spans_style(
+            vec![
+                Span::styled("[main.rs]", accent_on_header),
+                Span::styled(" ", header_mark),
+                Span::styled("[lib.rs]", header_mark),
+                Span::styled(" ", header_mark),
+                Span::styled("[+]", header_mark),
+            ],
+            width,
+            header_mark,
+        )),
+        Line::from(pad_spans_style(
+            vec![
+                Span::styled("   1| ", gutter),
+                Span::styled("fn ", kw),
+                Span::styled("main", fun),
+                Span::styled("() {", fg),
+            ],
+            width,
+            editor_pad,
+        )),
+        Line::from(pad_spans_style(
+            vec![
+                Span::styled("   2| ", gutter),
+                Span::styled("    ", fg),
+                Span::styled("let ", kw),
+                Span::styled("x", selection),
+                Span::styled(" = ", fg),
+                Span::styled("42", num),
+                Span::styled(";", fg),
+            ],
+            width,
+            editor_pad,
+        )),
+        Line::from(pad_spans_style(
+            vec![
+                Span::styled("   3| ", gutter),
+                Span::styled("    ", fg),
+                Span::styled("let ", kw),
+                Span::styled("s", fg),
+                Span::styled(" = ", fg),
+                Span::styled("\"hi\"", string),
+                Span::styled("; ", fg),
+                Span::styled("// cmt", comment),
+                Span::styled(" ", cursor),
+            ],
+            width,
+            editor_pad,
+        )),
+        Line::from(pad_spans_style(
+            vec![
+                Span::styled("   4| ", gutter),
+                Span::styled("type ", kw),
+                Span::styled("T", ty),
+                Span::styled(" = ", fg),
+                Span::styled("String", ty),
+                Span::styled(";", fg),
+            ],
+            width,
+            editor_pad,
+        )),
+        Line::from(pad_spans_style(
+            vec![
+                Span::styled(" Find: ", fg),
+                Span::styled("[hi]", find_q),
+                Span::styled("  1 match", fg),
+            ],
+            width,
+            editor_pad,
+        )),
+        Line::from(pad_spans_style(
+            vec![Span::styled(" main.rs  |  Rust  |  Ln 4", status)],
+            width,
+            status,
+        )),
     ]
 }
 
@@ -1027,14 +1171,15 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
         Span::styled("]", name_style),
     ]);
 
+    let overflowing = roles_overflow_bar(edit.role_scroll).overflowing();
+    let list = roles_list_area(popup, overflowing);
     let mut header_spans = pad_spans(vec![Span::styled("Roles", dim_dim)], roles.width);
     header_spans.push(Span::styled("Preview", dim_dim));
     let header_line = Line::from(header_spans);
 
-    let preview_lines = preview_sample_lines(&edit.theme);
     let start = edit.role_scroll as usize;
     let vis = ROLE_VISIBLE as usize;
-    let mut role_preview_lines: Vec<Line> = Vec::with_capacity(vis);
+    let mut role_lines: Vec<Line> = Vec::with_capacity(vis);
     for row in 0..vis {
         let idx = start + row;
         let mut left = if let Some((label, _)) = ROLE_FIELDS.get(idx) {
@@ -1054,11 +1199,8 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
         } else {
             Vec::new()
         };
-        left = pad_spans(left, roles.width);
-        if let Some(prev) = preview_lines.get(row) {
-            left.extend(clip_spans(prev.spans.clone(), preview.width));
-        }
-        role_preview_lines.push(Line::from(left));
+        left = pad_spans(left, list.width);
+        role_lines.push(Line::from(left));
     }
 
     let palette_style = if edit.focus == EditFocus::Palette {
@@ -1132,7 +1274,7 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
     lines.push(name_line); // n=0
     lines.push(Line::from("")); // n=1
     lines.push(header_line); // n=2
-    lines.extend(role_preview_lines); // n=3..10
+    lines.extend(role_lines); // n=3..10
     lines.push(Line::from("")); // n=11
     lines.push(palette_line); // n=12
     lines.push(Line::from(palette_row_spans(popup, edit, 0))); // n=13
@@ -1146,6 +1288,16 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
     let para = Paragraph::new(lines).block(block).style(dim);
     f.render_widget(ratatui::widgets::Clear, popup);
     f.render_widget(para, popup);
+
+    let bar = roles_overflow_bar(edit.role_scroll);
+    scrollbar::render(f, roles_scrollbar_rect(popup), bar, theme);
+    if preview.width > 0 && preview.height > 0 {
+        let preview_lines = preview_chrome_lines(&edit.theme, edit.role_selected, preview.width);
+        f.render_widget(
+            Paragraph::new(preview_lines).style(edit.theme.editor_bg_style()),
+            preview,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1449,5 +1601,170 @@ mod tests {
         st.set_channel_value(Channel::G, 200);
         assert_eq!(st.theme.header_bg, ColorDef::Rgb(10, 200, 34));
         assert_eq!(st.color_buf, "#0ac822");
+    }
+
+    fn typical_edit_popup() -> Rect {
+        edit_rect(Rect::new(0, 0, 80, 24))
+    }
+
+    #[test]
+    fn roles_scrollbar_rect_is_rightmost_column_of_roles_area() {
+        let popup = typical_edit_popup();
+        let roles = roles_area(popup);
+        let sb = roles_scrollbar_rect(popup);
+        assert_eq!(sb.width, 1);
+        assert_eq!(sb.height, roles.height);
+        assert_eq!(sb.y, roles.y);
+        assert_eq!(sb.x, roles.x + roles.width - 1);
+        assert_eq!(sb.height, ROLE_VISIBLE);
+    }
+
+    #[test]
+    fn roles_overflow_bar_overflows_sixteen_roles_in_eight_rows() {
+        let bar = roles_overflow_bar(0);
+        assert_eq!(bar.total, ROLE_FIELDS.len());
+        assert_eq!(bar.viewport, ROLE_VISIBLE as usize);
+        assert!(bar.overflowing());
+        assert_eq!(
+            bar.max_position(),
+            ROLE_FIELDS.len() - ROLE_VISIBLE as usize
+        );
+    }
+
+    #[test]
+    fn roles_click_is_scrollbar_only_on_track_when_overflowing() {
+        let popup = typical_edit_popup();
+        let sb = roles_scrollbar_rect(popup);
+        assert!(roles_click_is_scrollbar(
+            sb.x as usize,
+            sb.y as usize,
+            popup,
+            true
+        ));
+        assert!(!roles_click_is_scrollbar(
+            sb.x as usize - 1,
+            sb.y as usize,
+            popup,
+            true
+        ));
+        assert!(
+            !roles_click_is_scrollbar(sb.x as usize, sb.y as usize, popup, false),
+            "hidden bar must not steal the last role-label column"
+        );
+    }
+
+    #[test]
+    fn roles_list_area_shrinks_by_one_column_when_overflowing() {
+        let popup = typical_edit_popup();
+        let roles = roles_area(popup);
+        let list = roles_list_area(popup, true);
+        assert_eq!(list.x, roles.x);
+        assert_eq!(list.y, roles.y);
+        assert_eq!(list.height, roles.height);
+        assert_eq!(list.width, roles.width - 1);
+        let full = roles_list_area(popup, false);
+        assert_eq!(full, roles);
+    }
+
+    #[test]
+    fn preview_area_stays_right_of_roles_area() {
+        let popup = typical_edit_popup();
+        let roles = roles_area(popup);
+        let preview = preview_area(popup);
+        assert_eq!(preview.y, roles.y);
+        assert_eq!(preview.height, roles.height);
+        assert_eq!(preview.x, roles.x + roles.width);
+    }
+
+    fn unique_preview_theme() -> Theme {
+        Theme {
+            name: "unique".into(),
+            header_bg: ColorDef::Rgb(10, 1, 1),
+            header_fg: ColorDef::Rgb(11, 1, 1),
+            editor_bg: ColorDef::Rgb(12, 1, 1),
+            editor_fg: ColorDef::Rgb(13, 1, 1),
+            status_bg: ColorDef::Rgb(14, 1, 1),
+            status_fg: ColorDef::Rgb(15, 1, 1),
+            line_number_fg: ColorDef::Rgb(16, 1, 1),
+            selection_bg: ColorDef::Rgb(17, 1, 1),
+            cursor_fg: ColorDef::Rgb(18, 1, 1),
+            keyword: ColorDef::Rgb(19, 1, 1),
+            string: ColorDef::Rgb(20, 1, 1),
+            comment: ColorDef::Rgb(21, 1, 1),
+            function: ColorDef::Rgb(22, 1, 1),
+            number: ColorDef::Rgb(23, 1, 1),
+            type_name: ColorDef::Rgb(24, 1, 1),
+            accent: ColorDef::Rgb(25, 1, 1),
+        }
+    }
+
+    fn line_has_color(line: &Line, color: Color) -> bool {
+        line.spans
+            .iter()
+            .any(|s| s.style.fg == Some(color) || s.style.bg == Some(color))
+    }
+
+    fn preview_uses_role(theme: &Theme, role_idx: usize) -> bool {
+        let color = Color::from(&field_value(theme, role_idx));
+        preview_chrome_lines(theme, role_idx, 40)
+            .iter()
+            .any(|line| line_has_color(line, color))
+    }
+
+    #[test]
+    fn preview_chrome_lines_is_eight_rows() {
+        let lines = preview_chrome_lines(&Theme::dark_red(), 0, 36);
+        assert_eq!(lines.len(), ROLE_VISIBLE as usize);
+    }
+
+    #[test]
+    fn preview_chrome_lines_uses_every_color_role() {
+        let theme = unique_preview_theme();
+        for (i, (label, _)) in ROLE_FIELDS.iter().enumerate() {
+            assert!(
+                preview_uses_role(&theme, i),
+                "preview missing role {i} ({label})"
+            );
+        }
+    }
+
+    #[test]
+    fn preview_header_row_uses_header_bg() {
+        let theme = unique_preview_theme();
+        let lines = preview_chrome_lines(&theme, 0, 40);
+        let header_bg = Color::from(&theme.header_bg);
+        assert!(
+            line_has_color(&lines[0], header_bg),
+            "row 0 should paint header_bg"
+        );
+    }
+
+    #[test]
+    fn preview_status_row_uses_status_bg() {
+        let theme = unique_preview_theme();
+        let lines = preview_chrome_lines(&theme, 4, 40);
+        let status_bg = Color::from(&theme.status_bg);
+        let last = lines.last().expect("preview rows");
+        assert!(
+            line_has_color(last, status_bg),
+            "last row should paint status_bg"
+        );
+    }
+
+    #[test]
+    fn preview_marks_selected_role_with_underline() {
+        let theme = unique_preview_theme();
+        let status_idx = ROLE_FIELDS
+            .iter()
+            .position(|(l, _)| *l == "status_bg")
+            .unwrap();
+        let lines = preview_chrome_lines(&theme, status_idx, 40);
+        let last = lines.last().expect("preview rows");
+        assert!(
+            last.spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::UNDERLINED)),
+            "selected status_bg should underline the status row"
+        );
     }
 }

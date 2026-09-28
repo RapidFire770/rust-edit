@@ -1069,6 +1069,7 @@ impl App {
     pub fn close_themes(&mut self) {
         self.show_themes = false;
         self.themes_edit = None;
+        self.popup_scrollbar_drag = None;
     }
 
     /// Apply a theme by registry index (built-ins then customs) live + persist.
