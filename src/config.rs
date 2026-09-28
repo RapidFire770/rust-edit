@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 /// Maximum number of entries kept in the recent-files list (MRU order).
 pub const RECENT_FILES_MAX: usize = 10;
 
+/// Missing keys in `config.toml` fall back to [`Config::default`] per field,
+/// so an older or partial file keeps every setting it does contain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub tab_size: u8,
     pub theme: String,
@@ -22,12 +25,10 @@ pub struct Config {
     /// [`RECENT_FILES_MAX`] by [`Config::record_recent_file`]. Stored as
     /// strings (not `PathBuf`) so the TOML stays human-readable and survives
     /// serde round-trips cleanly across platforms.
-    #[serde(default)]
     pub recent_files: Vec<String>,
 
     /// When true, clean buffers reload from disk without prompting.
     /// Dirty buffers still prompt. Default false (ask per file).
-    #[serde(default)]
     pub auto_reload_all: bool,
 }
 
@@ -288,6 +289,19 @@ mod tests {
         )
         .unwrap();
         assert!(!cfg.auto_reload_all);
+    }
+
+    #[test]
+    fn partial_toml_keeps_present_fields_and_defaults_the_rest() {
+        let cfg: Config =
+            toml::from_str("theme = \"light\"\nrecent_files = [\"/tmp/a.rs\"]\n").unwrap();
+        let def = Config::default();
+        assert_eq!(cfg.theme, "light");
+        assert_eq!(cfg.recent_files, vec!["/tmp/a.rs".to_string()]);
+        assert_eq!(cfg.tab_size, def.tab_size);
+        assert_eq!(cfg.show_line_numbers, def.show_line_numbers);
+        assert_eq!(cfg.word_wrap, def.word_wrap);
+        assert_eq!(cfg.auto_reload_all, def.auto_reload_all);
     }
 
     #[test]
