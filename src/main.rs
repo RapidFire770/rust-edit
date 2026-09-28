@@ -2308,7 +2308,7 @@ fn handle_file_browser_key(code: KeyCode, app: &mut App) {
 
 fn handle_file_dialog_key(code: KeyCode, app: &mut App) {
     match code {
-        KeyCode::Left => {
+        KeyCode::Left | KeyCode::BackTab => {
             // Cycle 0 -> 2 -> 1 -> 0 (right-to-left visual order).
             app.file_dialog_selected = match app.file_dialog_selected {
                 0 => 2,
@@ -2316,7 +2316,7 @@ fn handle_file_dialog_key(code: KeyCode, app: &mut App) {
                 _ => 0,
             };
         }
-        KeyCode::Right => {
+        KeyCode::Right | KeyCode::Tab => {
             // Cycle 0 -> 1 -> 2 -> 0.
             app.file_dialog_selected = match app.file_dialog_selected {
                 0 => 1,
@@ -3158,6 +3158,27 @@ mod popup_focus_key_tests {
         handle_help_click((popup.x + 16) as usize, (popup.y + 1) as usize, &mut app);
         assert_eq!(app.help_tab, popups::help::HelpTab::Languages);
         assert_eq!(app.help_content_scroll.0, 0);
+    }
+
+    #[test]
+    fn handle_file_dialog_tab_cycles_footer_buttons() {
+        let mut app = App::new(&[]);
+        app.show_file_dialog(false);
+        assert_eq!(app.file_dialog_selected, 0);
+
+        handle_file_dialog_key(KeyCode::Tab, &mut app);
+        assert_eq!(app.file_dialog_selected, 1);
+        handle_file_dialog_key(KeyCode::Tab, &mut app);
+        assert_eq!(app.file_dialog_selected, 2);
+        handle_file_dialog_key(KeyCode::Tab, &mut app);
+        assert_eq!(app.file_dialog_selected, 0);
+
+        handle_file_dialog_key(KeyCode::BackTab, &mut app);
+        assert_eq!(app.file_dialog_selected, 2);
+        handle_file_dialog_key(KeyCode::Left, &mut app);
+        assert_eq!(app.file_dialog_selected, 1);
+        handle_file_dialog_key(KeyCode::Right, &mut app);
+        assert_eq!(app.file_dialog_selected, 2);
     }
 
     #[test]
