@@ -16,7 +16,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "[No Name]".into());
     let modified = if buf.is_modified { "•" } else { "" };
-    let lang = format!("{:?}", buf.language);
+    let lang = buf.language.label();
 
     // Everything after the path is fixed-width content that must stay visible.
     // Truncate the path from the left when it would push these off-screen.
@@ -29,8 +29,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     } else {
         None
     };
-    let mut fixed_rest =
-        status_fixed_rest(&lang, row + 1, col + 1, buf.line_count(), hint_override);
+    let mut fixed_rest = status_fixed_rest(lang, row + 1, col + 1, buf.line_count(), hint_override);
     let modified_len = modified.chars().count();
     let area_w = area.width as usize;
     if 1 + modified_len + fixed_rest.chars().count() > area_w {

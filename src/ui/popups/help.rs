@@ -178,17 +178,50 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
 
 fn languages_rows() -> Vec<Row<'static>> {
     vec![
-        ("Rust", ".rs"),
-        ("Python", ".py, .pyw"),
-        ("Markdown", ".md, .markdown"),
-        ("JSON", ".json"),
-        ("TOML", ".toml"),
-        ("YAML", ".yaml, .yml"),
-        ("Bash / Shell", ".sh, .bash, .zsh"),
+        ("Bash / Shell", ".sh, .bash, .zsh, .fish"),
+        ("Batch", ".bat, .cmd"),
         ("C", ".c, .h"),
+        ("C#", ".cs, .csx"),
         ("C++", ".cpp, .cc, .cxx, .hpp"),
-        ("JavaScript", ".js, .mjs"),
-        ("TypeScript", ".ts"),
+        ("Clojure", ".clj, .cljs, .cljc"),
+        ("CSS", ".css"),
+        ("D", ".d, .di"),
+        ("Diff", ".diff, .patch"),
+        ("Erlang", ".erl, .hrl"),
+        ("Go", ".go"),
+        ("Groovy", ".groovy, .gradle"),
+        ("Haskell", ".hs"),
+        ("HTML", ".html, .htm"),
+        ("INI", ".ini, .cfg"),
+        ("Java", ".java"),
+        ("Java Properties", ".properties"),
+        ("JavaScript", ".js, .mjs, .jsx"),
+        ("JSON", ".json"),
+        ("JSONC", ".jsonc"),
+        ("LaTeX", ".tex, .ltx"),
+        ("Lisp", ".lisp, .el, .scm"),
+        ("Lua", ".lua"),
+        ("Makefile", "Makefile, .mk"),
+        ("Markdown", ".md, .markdown"),
+        ("Objective-C", ".m"),
+        ("Objective-C++", ".mm"),
+        ("OCaml", ".ml, .mli"),
+        ("Perl", ".pl, .pm, .pod"),
+        ("PHP", ".php, .phtml"),
+        ("Python", ".py, .pyw, .pyi"),
+        ("R", ".r"),
+        ("reStructuredText", ".rst, .rest"),
+        ("Ruby", ".rb, .rake, Gemfile"),
+        ("Rust", ".rs"),
+        ("Scala", ".scala, .sbt"),
+        ("SQL", ".sql, .ddl, .dml"),
+        ("Tcl", ".tcl"),
+        ("TeX", ".sty, .cls"),
+        ("TOML", ".toml"),
+        ("TypeScript", ".ts, .tsx"),
+        ("XML", ".xml, .svg, .xsd"),
+        ("YAML", ".yaml, .yml"),
+        ("Zig", ".zig"),
         ("Plain Text", "(fallback)"),
     ]
 }
@@ -495,6 +528,22 @@ mod tests {
             assert!(
                 width <= 58,
                 "about line is {width} columns; min help body is 58"
+            );
+        }
+    }
+
+    #[test]
+    fn language_rows_fit_the_narrow_help_body() {
+        for (name, ext) in languages_rows() {
+            assert!(
+                name.chars().count() <= 16,
+                "{name} is wider than the 16-column name"
+            );
+            let pad = 16usize.saturating_sub(name.chars().count());
+            let width = 2 + name.chars().count() + pad + ext.chars().count();
+            assert!(
+                width <= 58,
+                "{name} / {ext} is {width} columns; min help body is 58"
             );
         }
     }

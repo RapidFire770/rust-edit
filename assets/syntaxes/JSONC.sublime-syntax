@@ -1,0 +1,49 @@
+%YAML 1.2
+---
+name: JSONC
+file_extensions:
+  - jsonc
+scope: source.json.comments
+
+contexts:
+  prototype:
+    - include: comments
+
+  main:
+    - include: value
+
+  comments:
+    - match: //
+      scope: punctuation.definition.comment.jsonc
+      push:
+        - meta_scope: comment.line.double-slash.jsonc
+        - match: $
+          pop: true
+    - match: /\*
+      scope: punctuation.definition.comment.begin.jsonc
+      push:
+        - meta_scope: comment.block.jsonc
+        - match: \*/
+          scope: punctuation.definition.comment.end.jsonc
+          pop: true
+
+  value:
+    - include: string
+    - match: \b(true|false|null)\b
+      scope: constant.language.jsonc
+    - match: '-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?'
+      scope: constant.numeric.jsonc
+    - match: '[{}\[\]:,]'
+      scope: punctuation.separator.jsonc
+
+  string:
+    - match: '"'
+      scope: punctuation.definition.string.begin.jsonc
+      push:
+        - meta_include_prototype: false
+        - meta_scope: string.quoted.double.jsonc
+        - match: '"'
+          scope: punctuation.definition.string.end.jsonc
+          pop: true
+        - match: '\\.'
+          scope: constant.character.escape.jsonc

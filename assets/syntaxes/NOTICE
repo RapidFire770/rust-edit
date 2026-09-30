@@ -1,0 +1,67 @@
+Syntax definitions linked onto syntect 5.3's default newlines set by build.rs.
+syntect 5.3 does not implement Sublime's `extends` key, so the current
+sublimehq TypeScript package cannot be vendored as-is. TypeScript.sublime-syntax
+embeds the bundled JavaScript grammar (scope:source.js). A keyword overlay was
+not added: syntect applies `with_prototype` inside strings and comments.
+JSONC.sublime-syntax is a small JSON-with-comments grammar written for this
+editor. Neither file is an upstream copy.
+
+TOML.sublime-syntax
+  Upstream: https://github.com/sourcegraph/TOML-syntax-highlighting
+  Commit: 22c6ec76d9c521247fddc61a09551eb2cc504a00
+  License: MIT
+
+  MIT License
+
+  Copyright (c) 2020 Sourcegraph
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+Zig.sublime-syntax
+  Upstream: https://github.com/gwenzek/sublime-zig-language
+  Path: Syntaxes/Zig.sublime-syntax
+  Commit: fc07bc651a7c8c98e995f189f9237942a1717f9e
+  License: MIT
+
+  The MIT License (Expat)
+
+  Copyright (c) 2024 Guillaume Wenzek
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+  THE SOFTWARE.
+
+INI.sublime-syntax
+  Upstream: https://github.com/jwortmann/ini-syntax
+  Commit: ebfb6d3618e2b3c3ba547e3dbbe01280f548af99
+  License: Apache-2.0 (see INI-LICENSE)

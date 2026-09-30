@@ -26,6 +26,9 @@ regex = "1.13.1"
 [dev-dependencies]
 pretty_assertions = "1.4"
 
+[build-dependencies]
+syntect = "5.3.0"
+
 [[bin]]
 name = "rust-edit"
 path = "src/main.rs"

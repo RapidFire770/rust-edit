@@ -42,6 +42,37 @@ fn block_wrap_lens(after_ws: &str, open: &str, close: &str) -> Option<(usize, us
     Some((open.len() + open_extra, close.len() + close_extra))
 }
 
+/// Byte length of `prefix` at the start of `after`, plus one following space
+/// when that space is present.
+///
+/// Alphabetic prefixes (`REM`) match any ASCII case and must end on a word
+/// boundary, so `REMote` is not a comment. Other prefixes match exactly.
+fn comment_prefix_len(after: &str, prefix: &str) -> Option<usize> {
+    if prefix.is_empty() {
+        return None;
+    }
+    let rest = if prefix.chars().any(|c| c.is_ascii_alphabetic()) {
+        let mut rest = after;
+        for expected in prefix.chars() {
+            let mut chars = rest.chars();
+            let got = chars.next()?;
+            if !got.eq_ignore_ascii_case(&expected) {
+                return None;
+            }
+            rest = chars.as_str();
+        }
+        if rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        rest
+    } else {
+        after.strip_prefix(prefix)?
+    };
+    let matched = after.len() - rest.len();
+    let extra = usize::from(rest.starts_with(' '));
+    Some(matched + extra)
+}
+
 fn line_body(raw: &str) -> &str {
     raw.trim_end_matches(['\n', '\r'])
 }
@@ -58,17 +89,159 @@ pub enum Language {
     Python,
     Markdown,
     Json,
+    Jsonc,
     Toml,
     Yaml,
+    Ini,
     Bash,
     C,
     Cpp,
     Javascript,
     Typescript,
+    Java,
+    CSharp,
+    Go,
+    Zig,
+    Php,
+    Ruby,
+    Perl,
+    Sql,
+    Html,
+    Css,
+    Xml,
+    Lua,
+    Scala,
+    Haskell,
+    R,
+    Clojure,
+    Erlang,
+    Groovy,
+    Makefile,
+    JavaProperties,
+    ObjectiveC,
+    ObjectiveCpp,
+    Diff,
+    Latex,
+    Tex,
+    Tcl,
+    OCaml,
+    RestructuredText,
+    Lisp,
+    D,
+    Batch,
 }
 
 impl Language {
+    /// Every variant, for tests that must not skip a newly added language.
+    pub const ALL: &[Language] = &[
+        Language::Plain,
+        Language::Rust,
+        Language::Python,
+        Language::Markdown,
+        Language::Json,
+        Language::Jsonc,
+        Language::Toml,
+        Language::Yaml,
+        Language::Ini,
+        Language::Bash,
+        Language::C,
+        Language::Cpp,
+        Language::Javascript,
+        Language::Typescript,
+        Language::Java,
+        Language::CSharp,
+        Language::Go,
+        Language::Zig,
+        Language::Php,
+        Language::Ruby,
+        Language::Perl,
+        Language::Sql,
+        Language::Html,
+        Language::Css,
+        Language::Xml,
+        Language::Lua,
+        Language::Scala,
+        Language::Haskell,
+        Language::R,
+        Language::Clojure,
+        Language::Erlang,
+        Language::Groovy,
+        Language::Makefile,
+        Language::JavaProperties,
+        Language::ObjectiveC,
+        Language::ObjectiveCpp,
+        Language::Diff,
+        Language::Latex,
+        Language::Tex,
+        Language::Tcl,
+        Language::OCaml,
+        Language::RestructuredText,
+        Language::Lisp,
+        Language::D,
+        Language::Batch,
+    ];
+
+    /// Status-bar name. Matches the Help list, shortened where that row is a sentence.
+    pub fn label(self) -> &'static str {
+        match self {
+            Language::Plain => "Plain",
+            Language::Rust => "Rust",
+            Language::Python => "Python",
+            Language::Markdown => "Markdown",
+            Language::Json => "JSON",
+            Language::Jsonc => "JSONC",
+            Language::Toml => "TOML",
+            Language::Yaml => "YAML",
+            Language::Ini => "INI",
+            Language::Bash => "Shell",
+            Language::C => "C",
+            Language::Cpp => "C++",
+            Language::Javascript => "JavaScript",
+            Language::Typescript => "TypeScript",
+            Language::Java => "Java",
+            Language::CSharp => "C#",
+            Language::Go => "Go",
+            Language::Zig => "Zig",
+            Language::Php => "PHP",
+            Language::Ruby => "Ruby",
+            Language::Perl => "Perl",
+            Language::Sql => "SQL",
+            Language::Html => "HTML",
+            Language::Css => "CSS",
+            Language::Xml => "XML",
+            Language::Lua => "Lua",
+            Language::Scala => "Scala",
+            Language::Haskell => "Haskell",
+            Language::R => "R",
+            Language::Clojure => "Clojure",
+            Language::Erlang => "Erlang",
+            Language::Groovy => "Groovy",
+            Language::Makefile => "Makefile",
+            Language::JavaProperties => "Properties",
+            Language::ObjectiveC => "Objective-C",
+            Language::ObjectiveCpp => "Objective-C++",
+            Language::Diff => "Diff",
+            Language::Latex => "LaTeX",
+            Language::Tex => "TeX",
+            Language::Tcl => "Tcl",
+            Language::OCaml => "OCaml",
+            Language::RestructuredText => "reStructuredText",
+            Language::Lisp => "Lisp",
+            Language::D => "D",
+            Language::Batch => "Batch",
+        }
+    }
+
     pub fn from_path(path: &Path) -> Self {
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            match name.to_ascii_lowercase().as_str() {
+                "makefile" | "gnumakefile" => return Language::Makefile,
+                "gemfile" | "rakefile" | "vagrantfile" | "config.ru" => return Language::Ruby,
+                ".bashrc" | ".bash_profile" | ".bash_login" | ".bash_logout" | ".profile"
+                | ".zshrc" | ".zprofile" => return Language::Bash,
+                _ => {}
+            }
+        }
         match path
             .extension()
             .and_then(|e| e.to_str())
@@ -77,41 +250,112 @@ impl Language {
             .as_str()
         {
             "rs" => Language::Rust,
-            "py" | "pyw" => Language::Python,
+            "py" | "pyw" | "pyi" | "py3" => Language::Python,
             "md" | "markdown" => Language::Markdown,
             "json" => Language::Json,
+            "jsonc" => Language::Jsonc,
             "toml" => Language::Toml,
             "yaml" | "yml" => Language::Yaml,
-            "sh" | "bash" | "zsh" => Language::Bash,
+            "ini" | "cfg" => Language::Ini,
+            "sh" | "bash" | "zsh" | "fish" => Language::Bash,
             "c" | "h" => Language::C,
-            "cpp" | "cc" | "cxx" | "hpp" => Language::Cpp,
-            "js" | "mjs" => Language::Javascript,
-            "ts" => Language::Typescript,
+            "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" | "inl" | "ipp" | "cp" => Language::Cpp,
+            "js" | "mjs" | "jsx" => Language::Javascript,
+            "ts" | "tsx" => Language::Typescript,
+            "java" => Language::Java,
+            "cs" | "csx" => Language::CSharp,
+            "go" => Language::Go,
+            "zig" => Language::Zig,
+            "php" | "phtml" | "php3" | "php4" | "php5" | "php7" | "phps" | "phpt" => Language::Php,
+            "rb" | "rake" | "gemspec" => Language::Ruby,
+            "pl" | "pm" | "pod" => Language::Perl,
+            "sql" | "ddl" | "dml" => Language::Sql,
+            "html" | "htm" | "shtml" | "xhtml" => Language::Html,
+            "css" => Language::Css,
+            "xml" | "xsd" | "xslt" | "svg" | "rss" | "opml" => Language::Xml,
+            "lua" => Language::Lua,
+            "scala" | "sbt" => Language::Scala,
+            "hs" => Language::Haskell,
+            "r" => Language::R,
+            "clj" | "cljs" | "cljc" => Language::Clojure,
+            "erl" | "hrl" => Language::Erlang,
+            "groovy" | "gvy" | "gradle" => Language::Groovy,
+            "mk" | "mak" => Language::Makefile,
+            "properties" => Language::JavaProperties,
+            "m" => Language::ObjectiveC,
+            "mm" => Language::ObjectiveCpp,
+            "diff" | "patch" => Language::Diff,
+            "tex" | "ltx" => Language::Latex,
+            "sty" | "cls" => Language::Tex,
+            "tcl" => Language::Tcl,
+            "ml" | "mli" => Language::OCaml,
+            "rst" | "rest" => Language::RestructuredText,
+            "lisp" | "cl" | "el" | "scm" | "ss" => Language::Lisp,
+            "d" | "di" => Language::D,
+            "bat" | "cmd" => Language::Batch,
             _ => Language::Plain,
         }
     }
 
     /// Token that starts a line comment, without the space inserted on comment.
-    /// Markdown has no line prefix (see `block_comment_pair`). Plain text and
-    /// JSON have neither.
+    /// Languages with only a block comment return `None` here. Plain text,
+    /// JSON, Diff, and reStructuredText have neither.
+    ///
+    /// A language that has both a line comment and a block comment uses the
+    /// line token. `/* */` is not toggled for Java, C#, Go, and the other
+    /// `//` languages.
     pub fn line_comment_prefix(self) -> Option<&'static str> {
         match self {
             Language::Rust
             | Language::C
             | Language::Cpp
             | Language::Javascript
-            | Language::Typescript => Some("//"),
-            Language::Python | Language::Toml | Language::Yaml | Language::Bash => Some("#"),
-            Language::Plain | Language::Markdown | Language::Json => None,
+            | Language::Typescript
+            | Language::Java
+            | Language::CSharp
+            | Language::Go
+            | Language::Php
+            | Language::Scala
+            | Language::Groovy
+            | Language::D
+            | Language::ObjectiveC
+            | Language::ObjectiveCpp
+            | Language::Zig
+            | Language::Jsonc => Some("//"),
+            Language::Python
+            | Language::Toml
+            | Language::Yaml
+            | Language::Bash
+            | Language::Ruby
+            | Language::Perl
+            | Language::R
+            | Language::Tcl
+            | Language::JavaProperties
+            | Language::Makefile => Some("#"),
+            Language::Sql | Language::Lua | Language::Haskell => Some("--"),
+            Language::Ini | Language::Clojure | Language::Lisp => Some(";"),
+            Language::Erlang | Language::Latex | Language::Tex => Some("%"),
+            Language::Batch => Some("REM"),
+            Language::Plain
+            | Language::Markdown
+            | Language::Json
+            | Language::Html
+            | Language::Css
+            | Language::Xml
+            | Language::OCaml
+            | Language::Diff
+            | Language::RestructuredText => None,
         }
     }
 
-    /// HTML-style wrap used as a Markdown comment. Open/close have no
+    /// Block wrap for languages that have no line comment. Open/close have no
     /// surrounding spaces; the toggle inserts those on a single line, or
     /// puts each token on its own line around a multi-line span.
     pub fn block_comment_pair(self) -> Option<(&'static str, &'static str)> {
         match self {
-            Language::Markdown => Some(("<!--", "-->")),
+            Language::Markdown | Language::Html | Language::Xml => Some(("<!--", "-->")),
+            Language::Css => Some(("/*", "*/")),
+            Language::OCaml => Some(("(*", "*)")),
             _ => None,
         }
     }
@@ -1005,8 +1249,8 @@ impl Buffer {
     }
 
     /// Toggle line comments on the cursor line, or on every line the selection
-    /// touches. `prefix` is `"//"` or `"#"` with no trailing space. Returns
-    /// whether the text changed.
+    /// touches. `prefix` is the language token (`//`, `#`, `--`, `;`, `%`,
+    /// `REM`) with no trailing space. Returns whether the text changed.
     pub fn toggle_line_comment(&mut self, prefix: &str) -> bool {
         if prefix.is_empty() {
             return false;
@@ -1025,12 +1269,10 @@ impl Buffer {
                     continue;
                 }
                 let after = &body[ws_len..];
-                let Some(rest) = after.strip_prefix(prefix) else {
+                let Some(n) = comment_prefix_len(after, prefix) else {
                     continue;
                 };
-                let extra = usize::from(rest.starts_with(' '));
                 let remove_at = line_start + ws_len;
-                let n = prefix.len() + extra;
                 self.remove_byte_range(remove_at, remove_at + n);
                 self.shift_positions_after_edit(remove_at, n, false);
             } else {
@@ -1045,10 +1287,11 @@ impl Buffer {
         true
     }
 
-    /// Toggle Markdown/HTML block comments. A one-line span wraps that line as
+    /// Toggle a block comment. A one-line span wraps that line as
     /// `{open} text {close}`. A multi-line span puts `open` on its own line
     /// before the first line and `close` on its own line after the last.
-    /// Returns whether the text changed.
+    /// Used for Markdown, HTML, and XML (`<!--` / `-->`), CSS (`/*` / `*/`),
+    /// and OCaml (`(*` / `*)`). Returns whether the text changed.
     pub fn toggle_block_comment(&mut self, open: &str, close: &str) -> bool {
         if open.is_empty() || close.is_empty() {
             return false;
@@ -1178,7 +1421,7 @@ impl Buffer {
                 continue;
             }
             saw_code = true;
-            if !body[ws_len..].starts_with(prefix) {
+            if comment_prefix_len(&body[ws_len..], prefix).is_none() {
                 return false;
             }
         }
@@ -1687,43 +1930,122 @@ mod tests {
     }
 
     #[test]
-    fn line_comment_prefix_matches_supported_languages() {
-        assert_eq!(Language::Rust.line_comment_prefix(), Some("//"));
-        assert_eq!(Language::C.line_comment_prefix(), Some("//"));
-        assert_eq!(Language::Cpp.line_comment_prefix(), Some("//"));
-        assert_eq!(Language::Javascript.line_comment_prefix(), Some("//"));
-        assert_eq!(Language::Typescript.line_comment_prefix(), Some("//"));
-        assert_eq!(Language::Python.line_comment_prefix(), Some("#"));
-        assert_eq!(Language::Toml.line_comment_prefix(), Some("#"));
-        assert_eq!(Language::Yaml.line_comment_prefix(), Some("#"));
-        assert_eq!(Language::Bash.line_comment_prefix(), Some("#"));
-        assert_eq!(Language::Plain.line_comment_prefix(), None);
-        assert_eq!(Language::Markdown.line_comment_prefix(), None);
-        assert_eq!(Language::Json.line_comment_prefix(), None);
+    fn comment_tokens_cover_every_language() {
+        type CommentRow = (
+            Language,
+            Option<&'static str>,
+            Option<(&'static str, &'static str)>,
+        );
+        let table: &[CommentRow] = &[
+            (Language::Rust, Some("//"), None),
+            (Language::C, Some("//"), None),
+            (Language::Cpp, Some("//"), None),
+            (Language::Javascript, Some("//"), None),
+            (Language::Typescript, Some("//"), None),
+            (Language::Java, Some("//"), None),
+            (Language::CSharp, Some("//"), None),
+            (Language::Go, Some("//"), None),
+            (Language::Php, Some("//"), None),
+            (Language::Scala, Some("//"), None),
+            (Language::Groovy, Some("//"), None),
+            (Language::D, Some("//"), None),
+            (Language::ObjectiveC, Some("//"), None),
+            (Language::ObjectiveCpp, Some("//"), None),
+            (Language::Zig, Some("//"), None),
+            (Language::Jsonc, Some("//"), None),
+            (Language::Python, Some("#"), None),
+            (Language::Toml, Some("#"), None),
+            (Language::Yaml, Some("#"), None),
+            (Language::Bash, Some("#"), None),
+            (Language::Ruby, Some("#"), None),
+            (Language::Perl, Some("#"), None),
+            (Language::R, Some("#"), None),
+            (Language::Tcl, Some("#"), None),
+            (Language::JavaProperties, Some("#"), None),
+            (Language::Makefile, Some("#"), None),
+            (Language::Sql, Some("--"), None),
+            (Language::Lua, Some("--"), None),
+            (Language::Haskell, Some("--"), None),
+            (Language::Ini, Some(";"), None),
+            (Language::Clojure, Some(";"), None),
+            (Language::Lisp, Some(";"), None),
+            (Language::Erlang, Some("%"), None),
+            (Language::Latex, Some("%"), None),
+            (Language::Tex, Some("%"), None),
+            (Language::Batch, Some("REM"), None),
+            (Language::Markdown, None, Some(("<!--", "-->"))),
+            (Language::Html, None, Some(("<!--", "-->"))),
+            (Language::Xml, None, Some(("<!--", "-->"))),
+            (Language::Css, None, Some(("/*", "*/"))),
+            (Language::OCaml, None, Some(("(*", "*)"))),
+            (Language::Plain, None, None),
+            (Language::Json, None, None),
+            (Language::Diff, None, None),
+            (Language::RestructuredText, None, None),
+        ];
+        let mut unseen: Vec<Language> = Language::ALL.to_vec();
+        for (lang, line, block) in table {
+            assert_eq!(lang.line_comment_prefix(), *line, "{lang:?} line");
+            assert_eq!(lang.block_comment_pair(), *block, "{lang:?} block");
+            let before = unseen.len();
+            unseen.retain(|item| item != lang);
+            assert_eq!(
+                unseen.len(),
+                before - 1,
+                "{lang:?} missing from Language::ALL or duplicated"
+            );
+        }
+        assert!(unseen.is_empty(), "no comment expectation for {unseen:?}");
+        for lang in Language::ALL {
+            assert!(!lang.label().is_empty(), "{lang:?}");
+        }
+        assert_eq!(Language::CSharp.label(), "C#");
+        assert_eq!(Language::Json.label(), "JSON");
+        assert_eq!(Language::ObjectiveCpp.label(), "Objective-C++");
     }
 
     #[test]
-    fn block_comment_pair_is_markdown_only() {
-        assert_eq!(
-            Language::Markdown.block_comment_pair(),
-            Some(("<!--", "-->"))
-        );
-        for lang in [
-            Language::Plain,
-            Language::Json,
-            Language::Rust,
-            Language::Python,
-            Language::Toml,
-            Language::Yaml,
-            Language::Bash,
-            Language::C,
-            Language::Cpp,
-            Language::Javascript,
-            Language::Typescript,
+    fn toggle_line_comment_round_trips_other_prefixes() {
+        for (src, prefix, commented) in [
+            ("select 1", "--", "-- select 1"),
+            ("(def x 1)", ";", "; (def x 1)"),
+            ("io:format", "%", "% io:format"),
+            ("echo hi", "REM", "REM echo hi"),
         ] {
-            assert_eq!(lang.block_comment_pair(), None, "{lang:?}");
+            let mut b = Buffer::from_str(src, None);
+            assert!(b.toggle_line_comment(prefix), "{prefix}");
+            assert_eq!(b.text(), commented, "{prefix}");
+            assert!(b.toggle_line_comment(prefix), "{prefix}");
+            assert_eq!(b.text(), src, "{prefix}");
         }
-        assert_eq!(Language::Markdown.line_comment_prefix(), None);
+    }
+
+    #[test]
+    fn toggle_batch_comment_matches_any_case_but_not_a_longer_word() {
+        let mut lower = Buffer::from_str("rem echo", None);
+        assert!(lower.toggle_line_comment("REM"));
+        assert_eq!(lower.text(), "echo");
+
+        let mut word = Buffer::from_str("REMote", None);
+        assert!(word.toggle_line_comment("REM"));
+        assert_eq!(word.text(), "REM REMote");
+        assert!(word.toggle_line_comment("REM"));
+        assert_eq!(word.text(), "REMote");
+    }
+
+    #[test]
+    fn toggle_block_comment_css_and_ocaml_round_trip() {
+        let mut css = Buffer::from_str("color: red;", None);
+        assert!(css.toggle_block_comment("/*", "*/"));
+        assert_eq!(css.text(), "/* color: red; */");
+        assert!(css.toggle_block_comment("/*", "*/"));
+        assert_eq!(css.text(), "color: red;");
+
+        let mut ml = Buffer::from_str("let x = 1", None);
+        assert!(ml.toggle_block_comment("(*", "*)"));
+        assert_eq!(ml.text(), "(* let x = 1 *)");
+        assert!(ml.toggle_block_comment("(*", "*)"));
+        assert_eq!(ml.text(), "let x = 1");
     }
 
     fn commented(src: &str, prefix: &str) -> String {
@@ -1996,18 +2318,41 @@ mod tests {
 
     #[test]
     fn language_detection() {
-        assert_eq!(
-            Language::from_path(&PathBuf::from("foo.rs")),
-            Language::Rust
-        );
-        assert_eq!(
-            Language::from_path(&PathBuf::from("bar.py")),
-            Language::Python
-        );
-        assert_eq!(
-            Language::from_path(&PathBuf::from("notes.md")),
-            Language::Markdown
-        );
+        let cases = [
+            ("foo.rs", Language::Rust),
+            ("bar.py", Language::Python),
+            ("types.pyi", Language::Python),
+            ("notes.md", Language::Markdown),
+            ("App.java", Language::Java),
+            ("Main.cs", Language::CSharp),
+            ("page.HTML", Language::Html),
+            ("site.css", Language::Css),
+            ("query.sql", Language::Sql),
+            ("index.php", Language::Php),
+            ("lib.pl", Language::Perl),
+            ("main.go", Language::Go),
+            ("app.rb", Language::Ruby),
+            ("Gemfile", Language::Ruby),
+            ("note.xml", Language::Xml),
+            ("icon.svg", Language::Xml),
+            ("cfg.ini", Language::Ini),
+            ("app.jsonc", Language::Jsonc),
+            ("main.zig", Language::Zig),
+            ("header.h", Language::C),
+            ("widget.m", Language::ObjectiveC),
+            ("Makefile", Language::Makefile),
+            ("lib.mk", Language::Makefile),
+            (".bashrc", Language::Bash),
+            ("script.fish", Language::Bash),
+            ("notes.rst", Language::RestructuredText),
+            ("data.conf", Language::Plain),
+            ("suite.t", Language::Plain),
+            ("mod.pyx", Language::Plain),
+            ("readme", Language::Plain),
+        ];
+        for (path, lang) in cases {
+            assert_eq!(Language::from_path(Path::new(path)), lang, "{path}");
+        }
     }
 
     // Investigation tests for regressions (page, mouse-like set on blank/eof, insert row stability, undo after moves)

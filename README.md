@@ -38,8 +38,8 @@ It keeps the habits of a desktop editor inside the terminal: several files open 
 - **Themes you can switch or design.** Dark Red, Light, High Contrast, Solarized, Monochrome, and Terminal Green apply as soon as you choose them. You can also build, edit, and delete your own themes.
 - **Find and replace you can type into.** Match case, a regular expression, or a whole word. You type the search, then Tab to the keys that jump between matches.
 - **A prompt when a file changes on disk.** You can reload it, keep your copy, or reload that file quietly for the rest of the session. With **Auto-reload all** turned on, unmodified files reload on their own. rust-edit asks before it replaces a file that has unsaved edits.
-- **Format the current file from the Tools menu.** rust-edit runs `rustfmt`, `black`, `prettier`, or `clang-format` when that program is already installed. Otherwise it expands tabs to your tab size, strips trailing whitespace, and ends the file with a newline.
-- **Color for common languages.** Rust, Python, Markdown, JSON, TOML, YAML, shell, C, C++, JavaScript, and TypeScript. Other files stay plain text.
+- **Format the current file from the Tools menu.** rust-edit runs `rustfmt`, `black`, `prettier`, `clang-format`, `gofmt`, `zig fmt`, `perltidy`, `stylua`, or `xmllint` when that program is already installed. Otherwise it expands tabs to your tab size, strips trailing whitespace, and ends the file with a newline.
+- **Color for many languages and config files.** Rust, Python, Go, Java, C, C++, C#, JavaScript, TypeScript, HTML, CSS, JSON, JSONC, TOML, YAML, INI, XML, and shell are among them. Help lists every extension. Other files stay plain text.
 
 ## When to use it
 
@@ -127,7 +127,7 @@ The menu bar is **File**, **Tools**, and **Settings**. Alt+F, Alt+T, and Alt+S o
 - **Open** and **Save As** start as a path dialog. **Browse…** opens the folder listing. On Open, that listing can switch to recent files; each recent row shows `name @ directory`, and a long directory is truncated from the left. Click `[x]`, or press Delete or Backspace, to drop one recent; **Clear** empties the list. Paths that no longer exist are removed when you open the list. On Save As, type a file name and choose **Use folder** to save into the folder you are viewing.
 - **Tools → Find & Replace** opens the find bar. Tab moves from the query, to the replacement, to the command keys. On the command keys, `n` and `N` move between matches, and `c`, `x`, and `w` toggle case, regular expression, and whole word. Whole word applies to a plain search. A regular expression is the pattern you type.
 - Enter and `r` replace the current match and insert the replacement as written. While the bar is open, Ctrl+A replaces every match. An empty replacement leaves the text alone. Replace All on a regular expression expands `$` groups such as `$1`, and it matches case exactly even when the case toggle is off.
-- **Tools → Format Document** formats the current file. The status bar names the formatter that ran (`rustfmt`, `black`, `prettier`, `clang-format`, or editor preferences). TOML, shell, and plain text always use the editor-preferences cleanup. When an external formatter runs and fails, the file is left as it was and a message explains why.
+- **Tools → Format Document** formats the current file. The status bar names the formatter that ran (`rustfmt`, `black`, `prettier`, `clang-format`, `gofmt`, `zig`, `perltidy`, `stylua`, `xmllint`, or editor preferences). PHP, Ruby, SQL, INI, TOML, shell, and the other languages without one of those tools use the editor-preferences cleanup. When an external formatter runs and fails, the file is left as it was and a message explains why.
 - **Tools → Word Count** (Alt+W) reports words, characters, and lines for the file. A selection adds the same word and character counts for that span.
 - **Settings → Configure** sets tab size, word wrap, line numbers, and whether unmodified files reload on their own.
 - **Settings → Themes** applies a built-in theme or edits a custom one. The editor redraws with the new colors immediately.
@@ -163,7 +163,18 @@ F1 lists every shortcut. These are the ones you need on the first day.
 | Switch to tab 1–9            | Alt+1 … Alt+9                           |
 | Open File / Tools / Settings | Alt+F / Alt+T / Alt+S                   |
 
-Ctrl+/ comments or uncomments the current line, or the selected lines. Rust, C, C++, JavaScript, and TypeScript use `//`. Python, TOML, YAML, and shell use `#`. Markdown wraps one line as `<!-- text -->`, and wraps a multi-line selection as a single `<!--` / `-->` block. JSON and plain text have no comment syntax; the status bar says so.
+Ctrl+/ comments or uncomments the current line, or the selected lines.
+
+- `//` for Rust, C, C++, JavaScript, TypeScript, Java, C#, Go, PHP, Scala, Groovy, D, Objective-C, Objective-C++, Zig, and JSONC
+- `#` for Python, TOML, YAML, shell, Ruby, Perl, R, Tcl, Java Properties, and Makefiles
+- `--` for SQL, Lua, and Haskell
+- `;` for INI, Clojure, and Lisp. An INI line that starts with `#` is not treated as a comment, so the toggle inserts `;` in front of it
+- `%` for Erlang, LaTeX, and TeX
+- `REM` for Batch, in any letter case. A longer word such as `REMote` is not a comment
+- Markdown, HTML, and XML wrap one line as `<!-- text -->`, and wrap a multi-line selection as a `<!--` line above and a `-->` line below
+- CSS uses `/* */` the same way. OCaml uses `(* *)`
+
+JSON, Diff, reStructuredText, and plain text have no comment syntax. The status bar says so.
 
 Shift with the arrow keys, Home, End, Page Up, or Page Down extends the selection. Page Up and Page Down move by a page. Alt+H and Alt+L scroll sideways.
 
@@ -191,33 +202,71 @@ Theme names in that file are `dark-red`, `light`, `high-contrast`, `solarized`, 
 
 ## Languages
 
-Highlighting follows the file extension.
+Highlighting follows the file extension. A few names are recognized with no extension: `Makefile`, `GNUmakefile`, `Gemfile`, `Rakefile`, `Vagrantfile`, `config.ru`, and the shell startup files `.bashrc`, `.bash_profile`, `.bash_login`, `.bash_logout`, `.profile`, `.zshrc`, and `.zprofile`.
 
-| Language     | Extensions                    |
-|--------------|-------------------------------|
-| Rust         | `.rs`                         |
-| Python       | `.py`, `.pyw`                 |
-| Markdown     | `.md`, `.markdown`            |
-| JSON         | `.json`                       |
-| TOML         | `.toml`                       |
-| YAML         | `.yaml`, `.yml`               |
-| Bash / shell | `.sh`, `.bash`, `.zsh`        |
-| C            | `.c`, `.h`                    |
-| C++          | `.cpp`, `.cc`, `.cxx`, `.hpp` |
-| JavaScript   | `.js`, `.mjs`                 |
-| TypeScript   | `.ts`                         |
+| Language         | Extensions                                              |
+|------------------|---------------------------------------------------------|
+| Bash / shell     | `.sh`, `.bash`, `.zsh`, `.fish`                         |
+| Batch            | `.bat`, `.cmd`                                          |
+| C                | `.c`, `.h`                                              |
+| C#               | `.cs`, `.csx`                                           |
+| C++              | `.cpp`, `.cc`, `.cxx`, `.cp`, `.hpp`, `.hh`, `.hxx`, `.inl`, `.ipp` |
+| Clojure          | `.clj`, `.cljs`, `.cljc`                                |
+| CSS              | `.css`                                                  |
+| D                | `.d`, `.di`                                             |
+| Diff             | `.diff`, `.patch`                                       |
+| Erlang           | `.erl`, `.hrl`                                          |
+| Go               | `.go`                                                   |
+| Groovy           | `.groovy`, `.gvy`, `.gradle`                            |
+| Haskell          | `.hs`                                                   |
+| HTML             | `.html`, `.htm`, `.shtml`, `.xhtml`                     |
+| INI              | `.ini`, `.cfg`                                          |
+| Java             | `.java`                                                 |
+| Java Properties  | `.properties`                                           |
+| JavaScript       | `.js`, `.mjs`, `.jsx`                                   |
+| JSON             | `.json`                                                 |
+| JSONC            | `.jsonc`                                                |
+| LaTeX            | `.tex`, `.ltx`                                          |
+| Lisp             | `.lisp`, `.cl`, `.el`, `.scm`, `.ss`                    |
+| Lua              | `.lua`                                                  |
+| Makefile         | `.mk`, `.mak`, and the filename `Makefile`              |
+| Markdown         | `.md`, `.markdown`                                      |
+| Objective-C      | `.m`                                                    |
+| Objective-C++    | `.mm`                                                   |
+| OCaml            | `.ml`, `.mli`                                           |
+| Perl             | `.pl`, `.pm`, `.pod`                                    |
+| PHP              | `.php`, `.phtml`, `.php3`, `.php4`, `.php5`, `.php7`, `.phps`, `.phpt` |
+| Python           | `.py`, `.pyw`, `.pyi`, `.py3`                           |
+| R                | `.r`                                                    |
+| reStructuredText | `.rst`, `.rest`                                         |
+| Ruby             | `.rb`, `.rake`, `.gemspec`, plus `Gemfile` and `Rakefile` |
+| Rust             | `.rs`                                                   |
+| Scala            | `.scala`, `.sbt`                                        |
+| SQL              | `.sql`, `.ddl`, `.dml`                                  |
+| Tcl              | `.tcl`                                                  |
+| TeX              | `.sty`, `.cls`                                          |
+| TOML             | `.toml`                                                 |
+| TypeScript       | `.ts`, `.tsx`                                           |
+| XML              | `.xml`, `.xsd`, `.xslt`, `.svg`, `.rss`, `.opml`        |
+| YAML             | `.yaml`, `.yml`                                         |
+| Zig              | `.zig`                                                  |
 
-Markdown is highlighted as Markdown source.
+Markdown is highlighted as Markdown source. `.h` is C. `.conf`, `.t`, and `.pyx` stay plain text.
 
 **Format Document** calls a formatter only when it is installed:
 
-| Files                                        | Program                                                              |
-|----------------------------------------------|----------------------------------------------------------------------|
-| Rust                                         | `rustfmt`                                                            |
-| Python                                       | `black`                                                              |
-| JavaScript, TypeScript, JSON, YAML, Markdown | `prettier`                                                           |
-| C, C++                                       | `clang-format`                                                       |
-| TOML, shell, plain text                      | editor-preferences cleanup: tabs, trailing whitespace, final newline |
+| Files                                                         | Program                                                              |
+|---------------------------------------------------------------|----------------------------------------------------------------------|
+| Rust                                                          | `rustfmt`                                                            |
+| Python                                                        | `black`                                                              |
+| JavaScript, TypeScript, JSON, JSONC, YAML, Markdown, HTML, CSS | `prettier`                                                         |
+| C, C++, Java, C#, Objective-C, Objective-C++                  | `clang-format`                                                       |
+| Go                                                            | `gofmt`                                                              |
+| Zig                                                           | `zig fmt --stdin`                                                    |
+| Perl                                                          | `perltidy`                                                           |
+| Lua                                                           | `stylua`                                                             |
+| XML                                                           | `xmllint`                                                            |
+| Other highlighted files, including PHP, Ruby, SQL, INI, TOML, and shell | editor-preferences cleanup: tabs, trailing whitespace, final newline |
 
 ## Prerequisites
 

@@ -3,7 +3,7 @@
 **Project:** Rust-Edit — Feature-rich terminal text & code editor (TUI)  
 **Primary Framework:** Ratatui v0.30+  
 **Status:** Phase 1 complete (June 2026). MVP + high-value additions shipped.   
-**Last Updated:** September 28, 2026
+**Last Updated:** September 30, 2026
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
 
@@ -41,7 +41,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
      - **Help lists only chords terminals deliver.** Word count is `Alt+W`. Format Document is the Tools menu item (`Ctrl+Shift+F` arrives as `Ctrl+F` on a standard terminal; a Shift-aware handler remains for terminals that report Shift, and help does not advertise it). Help opens with `F1`; `?` inserts a question mark. Find/Replace is `Ctrl+F` (Tab moves to the replace field). The Tools menu item is "Find & Replace (Ctrl+F)" and opens that bar on the query field. `Ctrl+H` toggles hidden files in the file browser only.
      - **Single Find/Replace shortcut (**`Ctrl+F`**)** — the bar has query/replace fields reachable via Tab, so a separate `Ctrl+H` was dropped.
      - **Tab at caret inserts spaces** — Design Spec §7 said Tab/Shift+Tab indent/dedent the line. Caret Tab now inserts `config.tab_size` spaces at the cursor (always the full width, not a remainder to the next tab stop). Non-empty selections still indent; Shift+Tab still dedents. Smart-indent extra width on Enter also uses `tab_size` (no more hardcoded 4).
-     - **Ctrl+/ toggles a comment.** The unshifted `/` `?` key sends `0x1F`. Crossterm reports that as `KeyCode::Char('7')` with Control. The key arm also accepts `Char('/')` with Control. Ctrl+? is `0x7F` and is Backspace; do not bind it. Help says `Ctrl+/`. Line tokens live on `Language::line_comment_prefix` (`//` or `#`). Markdown uses `Language::block_comment_pair` (`<!--`, `-->`): a one-line span wraps as `<!-- text -->`; a multi-line span inserts a `<!--` line before the first line and a `-->` line after the last, indented to the span’s leading whitespace. Plain text and JSON set the status notice `No comment for this file`. The Tools menu item is "Toggle Comment (Ctrl+/)".
+     - **Ctrl+/ toggles a comment.** The unshifted `/` `?` key sends `0x1F`. Crossterm reports that as `KeyCode::Char('7')` with Control. The key arm also accepts `Char('/')` with Control. Ctrl+? is `0x7F` and is Backspace; do not bind it. Help says `Ctrl+/`. The Tools menu item is "Toggle Comment (Ctrl+/)". Line tokens live on `Language::line_comment_prefix`: `//` (Rust, C, C++, JavaScript, TypeScript, Java, C#, Go, PHP, Scala, Groovy, D, Objective-C, Objective-C++, Zig, JSONC), `#` (Python, TOML, YAML, shell, Ruby, Perl, R, Tcl, Java Properties, Makefile), `--` (SQL, Lua, Haskell), `;` (INI, Clojure, Lisp), `%` (Erlang, LaTeX, TeX), `REM` (Batch). INI also highlights `#`, but the toggle writes `;`. Languages with both a line comment and `/* */` use the line token only. Block pairs live on `Language::block_comment_pair` when there is no line token: Markdown, HTML, and XML use `<!--` / `-->`; CSS uses `/*` / `*/`; OCaml uses `(*` / `*)`. A one-line span wraps inline (`<!-- text -->`); a multi-line span inserts the open token on its own line before the first line and the close token on its own line after the last, indented to the span’s leading whitespace. Plain text, JSON, Diff, and reStructuredText set the status notice `No comment for this file`.
      - **v1 packaging is a home-folder tarball.** Design Spec Sprint 3 named `cargo install` and an optional `.deb`. The release path is `scripts/package.sh`, which packs the host release binary, `docs/logo.svg`, `README.md`, `LICENSE`, and `scripts/install.sh` into `dist/rust-edit-<version>-<host>.tar.gz`. `dist/` is generated and gitignored. The bundle binary is the maintainer's glibc build (glibc >= 2.39, Linux kernel >= 6.1). The binary's ELF version need includes a non-weak `GLIBC_2.39` (`pidfd_spawnp`), so Debian 12 and Fedora 38 cannot run that build. macOS and Windows stay out of scope.
      - **README.md is the end-user page.** It covers install, daily use, shortcuts, settings, and requirements. It does not link this file, the design specification, or contributor workflows. Keep contributor instructions here.
    - LSP is Phase 2+ only.
@@ -108,6 +108,7 @@ you've set this `CARGO` variable (or that the proxy is fixed).
 ```
 rust-edit/
 ├── Cargo.toml
+├── build.rs                   # links assets/syntaxes onto syntect's default set
 ├── README.md
 ├── AGENTS.md                  # this file
 ├── docs/
@@ -121,7 +122,7 @@ rust-edit/
 │   ├── config.rs              # Config loading/saving (toml + XDG)
 │   ├── theme.rs               # Theme struct + color roles + built-in themes + serde
 │   ├── highlight_cache.rs     # Parse-state checkpoints + overscan span window
-│   ├── format.rs              # Format Document: rustfmt/black/prettier/clang-format + builtin pass
+│   ├── format.rs              # Format Document: rustfmt/black/prettier/clang-format/gofmt/zig/perltidy/stylua/xmllint + builtin pass
 │   ├── file_watch.rs          # FileStamp mtime+len + DiskEvent classify for external reloads
 │   ├── fs_access.rs           # Write probe + read-only / save-denied notice text
 │   ├── syntax.rs              # Syntect wrapper, highlight_range / from_state resume
@@ -151,7 +152,8 @@ rust-edit/
 ├── scripts/
 │   ├── install.sh             # ~/.local install, menu entry, version prompt
 │   └── package.sh             # release tarball into dist/
-├── assets/                    # (future) bundled syntect syntax/theme packs if needed
+├── assets/
+│   └── syntaxes/              # TOML, TypeScript, Zig, INI, JSONC grammars + NOTICE / INI-LICENSE
 └── tests/                     # Integration or property tests (optional early)
 ```
 
@@ -167,6 +169,7 @@ rust-edit/
 - Line-number gutter: `Buffer::GUTTER_WIDTH` is 6 ASCII columns (`{:>4}| `) when `config.show_line_numbers` is true. `App::gutter_width()` returns that or `0`. Paint (`ui/editor.rs` `gutter_prefix`), `ui()` `content_w`, hardware cursor X, mouse hit-testing, drag-edge, and `editor_hscrollbar_rect` must all use the live width. Hidden numbers do not leave a blank prefix. Wrap continuation rows indent 6 spaces only when the gutter is shown.
 - `FindState.focus: FindFocus` — a 3-state model (Query → Replace → Command) so letters like `n`/`N` type normally into the boxes and navigate only in Command mode.
 - An open dropdown is cycled with Left/Right/Tab via `App::cycle_open_menu`; `open_menu` remains a toggle.
+- Extra syntaxes: `build.rs` loads `SyntaxSet::load_defaults_newlines()`, adds every `assets/syntaxes/*.sublime-syntax` with newlines mode, and writes an uncompressed packdump. Runtime loads that dump. syntect 5.3's default set has no TOML, TypeScript, Zig, INI, or JSONC grammar, and it does not implement Sublime `extends`, so TypeScript embeds `scope:source.js` without an extra keyword list (`with_prototype` also matches inside strings and comments), and JSONC is a small self-contained grammar. The status bar uses `Language::label()` (JSON, C#, Objective-C++), not the Debug name. Detection stays on `Language::from_path` (do not use syntect's extension finder: `.h` is claimed by C, C++, and Objective-C). `.h` stays C. `.conf`, `.t`, and `.pyx` stay plain. Filenames matched before the extension: `Makefile` / `GNUmakefile`, `Gemfile` / `Rakefile` / `Vagrantfile` / `config.ru`, and `.bashrc` / `.bash_profile` / `.bash_login` / `.bash_logout` / `.profile` / `.zshrc` / `.zprofile`.
 - Syntax highlighting: `HighlightCache` (`src/highlight_cache.rs`) stores syntect `ParseState`/`HighlightState` checkpoints every 64 lines plus an overscanned span window and a frontier. `App::refresh_highlight_cache` is a cache fill, not a full viewport reparse. Scrolling inside the padded window is a hit. Mid-file multi-line constructs resume from the last checkpoint — never `HighlightLines::new` at the viewport. Cache key is `(language, generation, Buffer.id)` so two gen-0 tabs cannot alias. Under wrap, `wrap::visible_logical_window` translates the screen-row scroll into a logical-line window (clamping past-end scroll to the last page). Syntect rayon-style parallel highlighting is not used for a single buffer (grammars are sequential). A background highlight thread is deferred until large-file *jumps* still hitch after checkpoints exist. `editor.rs` reads `line_spans` and paints via `ui::spans::paint_line_spans` (batched tokens, not per-character Spans). `render_wrapped` uses `wrap::first_logical_line_for_screen_row` so cache fill and paint cannot disagree on the first visible logical line.
 - Event coalescing: `run_app` drains queued events and sums consecutive mouse-wheel deltas into one scroll → one redraw per burst.
 - Popup focus: at most one centered popup owns input (`App::popup_focus`). Other popups cannot open. Global shortcuts are swallowed except Ctrl+Q. Quit confirm paints last and stacks on top of the current popup without dismissing it. The external-reload prompt (`PopupFocus::Reload`) stacks above other popups and below quit confirm; `check_external_changes` queues the prompt while `show_confirm` is up and presents it after `close_confirm`. File browser may stack only on the file dialog (Browse…). Save As browse has a Name field plus `[ Use folder ]` (joins cwd + the typed filename; never invents `untitled`). Open browse still only confirms files. Mouse and wheel follow `popup_focus`, not independent `show_*` flags.
@@ -312,7 +315,7 @@ Test checklist (run in at least 2 different terminals, e.g. kitty + alacritty):
 - [ ] Open file from CLI and from menu; tabs appear and switch correctly.
 - [ ] Typing, cursor movement (arrows, Home/End, word jumps), selection, copy/paste all work.
 - [ ] Line numbers visible and correct.
-- [ ] Syntax highlighting appears for supported languages (test .rs, .py, .md, .json at minimum).
+- [ ] Syntax highlighting appears for supported languages (test .rs, .py, .md, .json, .java, .html, .css, .toml, .jsonc, .zig at minimum).
 - [ ] Smart indent on Enter behaves reasonably for code.
 - [ ] Find bar opens, incremental highlight works, basic replace functions.
 - [ ] Theme switch in Settings applies immediately and looks good in both dark/light.
@@ -326,6 +329,7 @@ Test checklist (run in at least 2 different terminals, e.g. kitty + alacritty):
 - [ ] Application menu entry Rust-Edit shows the logo and opens the editor in the desktop's default terminal.
 - [ ] Open browse Recent: `[x]` and Delete remove one row; `[ Clear ]` empties the list; missing files disappear from the list and from config.toml.
 - [ ] Markdown Ctrl+/ wraps one line as `<!-- text -->`; a multi-line selection becomes a single `<!--` / `-->` block; a second press unwraps; JSON still shows `No comment for this file`.
+- [ ] Ctrl+/ on a Java line inserts `//` and a second press removes it. CSS wraps as `/* text */`. HTML wraps as `<!-- text -->`.
 - [ ] Themes Edit: role list shows an overflow bar (wheel + click/drag); the right preview shows header, tabs, gutter, selection, caret, find accent, and status from the draft theme; Save still required to apply to the real UI.
 
 Document any terminal-specific quirks you discover.

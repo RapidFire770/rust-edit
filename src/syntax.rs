@@ -73,8 +73,15 @@ impl Default for SyntaxHighlighter {
 
 impl SyntaxHighlighter {
     pub fn new() -> Self {
+        // Produced by build.rs from the default newlines set plus assets/syntaxes.
+        // A bad dump is a compile artifact, not a runtime condition.
+        let syntax_set = syntect::dumps::from_uncompressed_data(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/syntaxes.packdump"
+        )))
+        .expect("embedded syntax packdump");
         Self {
-            syntax_set: SyntaxSet::load_defaults_newlines(),
+            syntax_set,
             theme_set: ThemeSet::load_defaults(),
         }
     }
@@ -86,13 +93,46 @@ impl SyntaxHighlighter {
             Language::Python => "Python",
             Language::Markdown => "Markdown",
             Language::Json => "JSON",
+            Language::Jsonc => "JSONC",
             Language::Toml => "TOML",
             Language::Yaml => "YAML",
+            Language::Ini => "INI",
             Language::Bash => "Bourne Again Shell (bash)",
             Language::C => "C",
             Language::Cpp => "C++",
             Language::Javascript => "JavaScript",
             Language::Typescript => "TypeScript",
+            Language::Java => "Java",
+            Language::CSharp => "C#",
+            Language::Go => "Go",
+            Language::Zig => "Zig",
+            Language::Php => "PHP",
+            Language::Ruby => "Ruby",
+            Language::Perl => "Perl",
+            Language::Sql => "SQL",
+            Language::Html => "HTML",
+            Language::Css => "CSS",
+            Language::Xml => "XML",
+            Language::Lua => "Lua",
+            Language::Scala => "Scala",
+            Language::Haskell => "Haskell",
+            Language::R => "R",
+            Language::Clojure => "Clojure",
+            Language::Erlang => "Erlang",
+            Language::Groovy => "Groovy",
+            Language::Makefile => "Makefile",
+            Language::JavaProperties => "Java Properties",
+            Language::ObjectiveC => "Objective-C",
+            Language::ObjectiveCpp => "Objective-C++",
+            Language::Diff => "Diff",
+            Language::Latex => "LaTeX",
+            Language::Tex => "TeX",
+            Language::Tcl => "Tcl",
+            Language::OCaml => "OCaml",
+            Language::RestructuredText => "reStructuredText",
+            Language::Lisp => "Lisp",
+            Language::D => "D",
+            Language::Batch => "Batch File",
             Language::Plain => "Plain Text",
         }
     }
@@ -260,6 +300,7 @@ impl SyntaxHighlighter {
 mod tests {
     use super::*;
     use crate::buffer::Language;
+    use ratatui::text::Span;
 
     #[test]
     fn highlights_rust_without_panic() {
@@ -375,6 +416,79 @@ mod tests {
         assert_eq!(
             resumed_fg, full_mid_fg,
             "resuming from prior parse state must keep the block-comment color"
+        );
+    }
+
+    #[test]
+    fn every_language_resolves_to_a_real_syntax() {
+        let sh = SyntaxHighlighter::new();
+        for lang in crate::buffer::Language::ALL {
+            let name = sh.syntax_name(*lang);
+            let found = sh
+                .syntax_set
+                .find_syntax_by_name(name)
+                .unwrap_or_else(|| panic!("{lang:?} looked up {name:?} and missed"));
+            assert_eq!(found.name, name, "{lang:?}");
+            if *lang != Language::Plain {
+                assert_ne!(found.name, "Plain Text", "{lang:?} fell back to plain text");
+            }
+        }
+    }
+
+    fn distinct_fg_count(sh: &SyntaxHighlighter, text: &str, lang: Language) -> usize {
+        let mut colors = Vec::new();
+        for line in sh.highlight(text, lang) {
+            for span in line {
+                if span.content.is_empty() {
+                    continue;
+                }
+                if !colors.contains(&span.style.fg) {
+                    colors.push(span.style.fg);
+                }
+            }
+        }
+        colors.len()
+    }
+
+    fn fg_containing(spans: &[Span], piece: &str) -> Option<ratatui::style::Color> {
+        spans
+            .iter()
+            .find(|span| span.content.contains(piece))
+            .and_then(|span| span.style.fg)
+    }
+
+    #[test]
+    fn added_grammars_use_more_than_one_color() {
+        let sh = SyntaxHighlighter::new();
+        assert!(distinct_fg_count(&sh, "public class A {}", Language::Java) > 1);
+        assert!(distinct_fg_count(&sh, "key = \"v\"", Language::Toml) > 1);
+        assert!(distinct_fg_count(&sh, "const x: number = 1;", Language::Typescript) > 1);
+        assert!(distinct_fg_count(&sh, "pub fn main() void {}", Language::Zig) > 1);
+
+        let ts = sh.highlight("const \"interface\"\n// interface\n", Language::Typescript);
+        let keyword_fg = fg_containing(&ts[0], "const");
+        let in_string = fg_containing(&ts[0], "interface");
+        assert_ne!(
+            keyword_fg, in_string,
+            "a TypeScript string must not pick up a keyword color"
+        );
+        let comment_fg = fg_containing(&ts[1], "//");
+        let in_comment = fg_containing(&ts[1], "interface");
+        assert_eq!(
+            comment_fg, in_comment,
+            "a word inside a TypeScript comment stays a comment"
+        );
+
+        let jsonc = sh.highlight("// c\n{ \"a\": 1 }", Language::Jsonc);
+        let comment_fg = fg_containing(&jsonc[0], "c");
+        let key_fg = fg_containing(&jsonc[1], "a");
+        assert_ne!(comment_fg, key_fg, "JSONC comment and string must differ");
+
+        let quoted = sh.highlight("\"http://x\"", Language::Jsonc);
+        let inside = fg_containing(&quoted[0], "http");
+        assert_eq!(
+            inside, key_fg,
+            "a URL inside a JSONC string must stay a string, not a comment"
         );
     }
 }

@@ -49,18 +49,68 @@ fn dummy_filename(language: Language) -> &'static str {
         Language::Python => "buffer.py",
         Language::Markdown => "buffer.md",
         Language::Json => "buffer.json",
+        Language::Jsonc => "buffer.jsonc",
         Language::Yaml => "buffer.yaml",
         Language::Javascript => "buffer.js",
         Language::Typescript => "buffer.ts",
         Language::C => "buffer.c",
         Language::Cpp => "buffer.cpp",
-        Language::Toml | Language::Bash | Language::Plain => "buffer.txt",
+        Language::Java => "buffer.java",
+        Language::CSharp => "buffer.cs",
+        Language::ObjectiveC => "buffer.m",
+        Language::ObjectiveCpp => "buffer.mm",
+        Language::Html => "buffer.html",
+        Language::Css => "buffer.css",
+        Language::Xml => "buffer.xml",
+        Language::Go => "buffer.go",
+        Language::Zig => "buffer.zig",
+        Language::Perl => "buffer.pl",
+        Language::Lua => "buffer.lua",
+        Language::Plain
+        | Language::Toml
+        | Language::Ini
+        | Language::Bash
+        | Language::Php
+        | Language::Ruby
+        | Language::Sql
+        | Language::Scala
+        | Language::Haskell
+        | Language::R
+        | Language::Clojure
+        | Language::Erlang
+        | Language::Groovy
+        | Language::Makefile
+        | Language::JavaProperties
+        | Language::Diff
+        | Language::Latex
+        | Language::Tex
+        | Language::Tcl
+        | Language::OCaml
+        | Language::RestructuredText
+        | Language::Lisp
+        | Language::D
+        | Language::Batch => "buffer.txt",
     }
 }
 
 fn stdin_filename(language: Language, path: Option<&Path>) -> String {
     path.map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| dummy_filename(language).to_string())
+}
+
+/// clang-format picks the language from this name. `.cs` is C#. `.csx` is not
+/// in its table, so an unrecognized name is formatted as C++ and still exits 0.
+fn clang_format_filename(language: Language, path: Option<&Path>) -> String {
+    let name = stdin_filename(language, path);
+    if language == Language::CSharp && !name.to_ascii_lowercase().ends_with(".cs") {
+        if let Some(path) = path {
+            let mut rewritten = path.to_path_buf();
+            rewritten.set_extension("cs");
+            return rewritten.to_string_lossy().into_owned();
+        }
+        return "buffer.cs".to_string();
+    }
+    name
 }
 
 fn parent_cwd(path: Option<&Path>) -> Option<PathBuf> {
@@ -100,21 +150,77 @@ pub fn command_spec(language: Language, path: Option<&Path>) -> Option<CommandSp
         Language::Javascript
         | Language::Typescript
         | Language::Json
+        | Language::Jsonc
         | Language::Yaml
-        | Language::Markdown => Some(CommandSpec {
+        | Language::Markdown
+        | Language::Html
+        | Language::Css => Some(CommandSpec {
             program: "prettier",
             args: vec!["--stdin-filepath".into(), stdin_filename(language, path)],
             cwd,
         }),
-        Language::C | Language::Cpp => Some(CommandSpec {
+        Language::C
+        | Language::Cpp
+        | Language::Java
+        | Language::CSharp
+        | Language::ObjectiveC
+        | Language::ObjectiveCpp => Some(CommandSpec {
             program: "clang-format",
             args: vec![format!(
                 "--assume-filename={}",
-                stdin_filename(language, path)
+                clang_format_filename(language, path)
             )],
             cwd,
         }),
-        Language::Plain | Language::Toml | Language::Bash => None,
+        Language::Go => Some(CommandSpec {
+            program: "gofmt",
+            args: Vec::new(),
+            cwd,
+        }),
+        Language::Zig => Some(CommandSpec {
+            program: "zig",
+            args: vec!["fmt".into(), "--stdin".into()],
+            cwd,
+        }),
+        Language::Perl => Some(CommandSpec {
+            program: "perltidy",
+            args: Vec::new(),
+            cwd,
+        }),
+        Language::Lua => Some(CommandSpec {
+            program: "stylua",
+            args: vec!["-".into()],
+            cwd,
+        }),
+        Language::Xml => Some(CommandSpec {
+            program: "xmllint",
+            args: vec!["--format".into(), "-".into()],
+            cwd,
+        }),
+        Language::Plain
+        | Language::Toml
+        | Language::Ini
+        | Language::Bash
+        | Language::Php
+        | Language::Ruby
+        | Language::Sql
+        | Language::Scala
+        | Language::Haskell
+        | Language::R
+        | Language::Clojure
+        | Language::Erlang
+        | Language::Groovy
+        | Language::Makefile
+        | Language::JavaProperties
+        | Language::Diff
+        | Language::Latex
+        | Language::Tex
+        | Language::Tcl
+        | Language::OCaml
+        | Language::RestructuredText
+        | Language::Lisp
+        | Language::D
+        | Language::Batch => None,
     }
 }
 
@@ -431,8 +537,11 @@ mod spec_tests {
             (Language::Javascript, "buffer.js"),
             (Language::Typescript, "buffer.ts"),
             (Language::Json, "buffer.json"),
+            (Language::Jsonc, "buffer.jsonc"),
             (Language::Yaml, "buffer.yaml"),
             (Language::Markdown, "buffer.md"),
+            (Language::Html, "buffer.html"),
+            (Language::Css, "buffer.css"),
         ] {
             let spec = command_spec(lang, None).unwrap();
             assert_eq!(spec.program, "prettier");
@@ -456,13 +565,69 @@ mod spec_tests {
             .iter()
             .any(|a| a == "--assume-filename=/x/foo.cpp"));
         assert_eq!(spec.cwd.as_deref(), Some(Path::new("/x")));
+        for (lang, dummy) in [
+            (Language::Java, "buffer.java"),
+            (Language::CSharp, "buffer.cs"),
+            (Language::ObjectiveC, "buffer.m"),
+            (Language::ObjectiveCpp, "buffer.mm"),
+        ] {
+            let spec = command_spec(lang, None).unwrap();
+            assert_eq!(spec.program, "clang-format");
+            assert!(
+                spec.args
+                    .iter()
+                    .any(|a| a == &format!("--assume-filename={dummy}")),
+                "{lang:?}"
+            );
+        }
+        let csx = command_spec(Language::CSharp, Some(Path::new("/x/Foo.csx"))).unwrap();
+        assert!(
+            csx.args.iter().any(|a| a == "--assume-filename=/x/Foo.cs"),
+            "clang-format treats .csx as C++"
+        );
+        let cs = command_spec(Language::CSharp, Some(Path::new("/x/Foo.cs"))).unwrap();
+        assert!(cs.args.iter().any(|a| a == "--assume-filename=/x/Foo.cs"));
     }
 
     #[test]
-    fn plain_toml_bash_have_no_external_tool() {
-        assert!(command_spec(Language::Plain, None).is_none());
-        assert!(command_spec(Language::Toml, None).is_none());
-        assert!(command_spec(Language::Bash, None).is_none());
+    fn go_zig_perl_lua_xml_commands() {
+        let go = command_spec(Language::Go, None).unwrap();
+        assert_eq!(go.program, "gofmt");
+        assert!(go.args.is_empty());
+
+        let zig = command_spec(Language::Zig, None).unwrap();
+        assert_eq!(zig.program, "zig");
+        assert_eq!(zig.args, ["fmt", "--stdin"]);
+
+        let perl = command_spec(Language::Perl, None).unwrap();
+        assert_eq!(perl.program, "perltidy");
+        assert!(perl.args.is_empty());
+
+        let lua = command_spec(Language::Lua, None).unwrap();
+        assert_eq!(lua.program, "stylua");
+        assert_eq!(lua.args, ["-"]);
+
+        let xml = command_spec(Language::Xml, Some(Path::new("/d/a.xml"))).unwrap();
+        assert_eq!(xml.program, "xmllint");
+        assert_eq!(xml.args, ["--format", "-"]);
+        assert_eq!(xml.cwd.as_deref(), Some(Path::new("/d")));
+    }
+
+    #[test]
+    fn languages_without_a_stdin_tool_use_the_builtin_pass() {
+        for lang in [
+            Language::Plain,
+            Language::Toml,
+            Language::Ini,
+            Language::Bash,
+            Language::Php,
+            Language::Ruby,
+            Language::Sql,
+            Language::Haskell,
+            Language::Makefile,
+        ] {
+            assert!(command_spec(lang, None).is_none(), "{lang:?}");
+        }
     }
 }
 
