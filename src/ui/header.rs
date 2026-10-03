@@ -229,6 +229,7 @@ pub fn tools_menu_items() -> &'static [&'static str] {
         "Toggle Comment (Ctrl+/)",
         "Toggle Spellcheck",
         "Spelling (F7)",
+        "Dictionary",
     ]
 }
 
@@ -593,6 +594,7 @@ mod tests {
                 "Toggle Comment (Ctrl+/)",
                 "Toggle Spellcheck",
                 "Spelling (F7)",
+                "Dictionary",
             ]
         );
         let joined = items.join("\n");
@@ -606,7 +608,7 @@ mod tests {
         assert_eq!(menu_len("File"), file_menu_items().len());
         assert_eq!(menu_len("Tools"), tools_menu_items().len());
         assert_eq!(menu_len("Settings"), settings_menu_items().len());
-        assert_eq!(menu_len("Tools"), 7);
+        assert_eq!(menu_len("Tools"), 8);
         assert_eq!(MENU_ORDER, ["File", "Tools", "Settings"]);
     }
 
@@ -627,7 +629,7 @@ mod tests {
         assert_eq!(rect.x, 7);
         assert_eq!(rect.y, crate::ui::layout::HEADER_ROWS);
         assert_eq!(rect.width, 26);
-        assert_eq!(rect.height, 9);
+        assert_eq!(rect.height, 10);
     }
 
     #[test]

@@ -108,8 +108,120 @@ pub fn append_personal_word(path: &Path, word: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+    let existing = fs::read(path).unwrap_or_default();
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    // A hand-edited file with no trailing newline would glue the new word
+    // onto the last line (`Foo` + `Bar` → `FooBar`).
+    if !existing.is_empty() && !existing.ends_with(b"\n") {
+        writeln!(file)?;
+    }
     writeln!(file, "{word}")?;
+    Ok(())
+}
+
+/// Trimmed personal word the checker can actually mark, or a status message.
+///
+/// One token, at least two letters. Digits, one-letter tokens, and all-ASCII
+/// capitals are already skipped by the underline pass.
+pub fn acceptable_personal_word(word: &str) -> Result<String, &'static str> {
+    let trimmed = word.trim();
+    if trimmed.is_empty() {
+        return Err("Enter a word");
+    }
+    let ranges = word_ranges(trimmed);
+    if ranges.len() != 1 || ranges[0] != (0..trimmed.len()) {
+        return Err("Enter one word");
+    }
+    if skip_token(trimmed) {
+        return Err("That word is not checked");
+    }
+    Ok(trimmed.to_string())
+}
+
+pub fn same_personal_word(a: &str, b: &str) -> bool {
+    fold_key(a.trim()) == fold_key(b.trim())
+}
+
+/// Display list: skip blanks and `#` lines, keep the first spelling of each
+/// case-insensitive word, sort A–Z ignoring case.
+pub fn personal_word_list(text: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut words = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if seen.insert(fold_key(line)) {
+            words.push(line.to_string());
+        }
+    }
+    words.sort_by_key(|word| fold_key(word));
+    words
+}
+
+fn is_word_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty() && !trimmed.starts_with('#')
+}
+
+/// Drop every word line whose folded form matches `word`. Keep comments and
+/// blanks, and keep their original text.
+pub fn dictionary_text_without(text: &str, word: &str) -> String {
+    let key = fold_key(word.trim());
+    let mut out = String::new();
+    for line in text.lines() {
+        if is_word_line(line) && fold_key(line.trim()) == key {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Replace every line matching `from` with a single `to` line at the first
+/// match. Other lines, comments, and blanks stay put.
+pub fn dictionary_text_replacing(text: &str, from: &str, to: &str) -> String {
+    let key = fold_key(from.trim());
+    let replacement = to.trim();
+    let mut out = String::new();
+    let mut inserted = false;
+    for line in text.lines() {
+        if is_word_line(line) && fold_key(line.trim()) == key {
+            if !inserted {
+                out.push_str(replacement);
+                out.push('\n');
+                inserted = true;
+            }
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !inserted {
+        out.push_str(replacement);
+        out.push('\n');
+    }
+    out
+}
+
+/// Replace `path` by writing a sibling temp file and renaming it into place.
+/// A failed rename leaves the original file untouched.
+pub fn rewrite_personal_dictionary(path: &Path, text: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let mut tmp_name = path.as_os_str().to_owned();
+    tmp_name.push(".tmp");
+    let tmp = PathBuf::from(tmp_name);
+    fs::write(&tmp, text)?;
+    if let Err(err) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
     Ok(())
 }
 
@@ -174,6 +286,22 @@ impl SpellEngine {
                 .map_err(|_| "Could not write dictionary.txt".to_string())?;
         }
         Ok(())
+    }
+
+    /// Drop `word` from this process. Does not touch `dictionary.txt`.
+    pub fn forget_personal(&mut self, word: &str) {
+        let trimmed = word.trim();
+        if !trimmed.is_empty() {
+            self.personal.remove(&fold_key(trimmed));
+        }
+    }
+
+    /// Remember `word` for this process. Does not touch `dictionary.txt`.
+    pub fn remember_personal(&mut self, word: &str) {
+        let trimmed = word.trim();
+        if !trimmed.is_empty() {
+            self.personal.insert(fold_key(trimmed));
+        }
     }
 
     pub fn ignore(&mut self, word: &str) {
@@ -608,6 +736,84 @@ mod tests {
     }
 
     #[test]
+    fn acceptable_personal_word_accepts_one_checker_token() {
+        assert_eq!(acceptable_personal_word(" don't ").unwrap(), "don't");
+        assert_eq!(
+            acceptable_personal_word("well-known").unwrap(),
+            "well-known"
+        );
+        assert_eq!(acceptable_personal_word(""), Err("Enter a word"));
+        assert_eq!(acceptable_personal_word("   "), Err("Enter a word"));
+        assert_eq!(acceptable_personal_word("foo bar"), Err("Enter one word"));
+        assert_eq!(acceptable_personal_word("foo!"), Err("Enter one word"));
+        assert_eq!(
+            acceptable_personal_word("a"),
+            Err("That word is not checked")
+        );
+        assert_eq!(
+            acceptable_personal_word("C3PO"),
+            Err("That word is not checked")
+        );
+        assert_eq!(
+            acceptable_personal_word("NASA"),
+            Err("That word is not checked")
+        );
+    }
+
+    #[test]
+    fn personal_word_list_keeps_first_spelling_and_sorts() {
+        let words = personal_word_list("# note\n\nZzzx\nzzzx\nAlpha\n");
+        assert_eq!(words, vec!["Alpha".to_string(), "Zzzx".to_string()]);
+    }
+
+    #[test]
+    fn dictionary_text_without_drops_every_matching_line() {
+        let text = "# note\n\nFoo\nfoo\nBar\n";
+        assert_eq!(dictionary_text_without(text, "FOO"), "# note\n\nBar\n");
+    }
+
+    #[test]
+    fn dictionary_text_replacing_collapses_duplicates_and_keeps_case_edits() {
+        let text = "# note\nFoo\nfoo\nBaz\n";
+        assert_eq!(
+            dictionary_text_replacing(text, "Foo", "Bar"),
+            "# note\nBar\nBaz\n"
+        );
+        assert_eq!(dictionary_text_replacing("Foo\n", "Foo", "foo"), "foo\n");
+    }
+
+    #[test]
+    fn rewrite_personal_dictionary_replaces_the_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "rust-edit-dict-rewrite-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = dir.join("dictionary.txt");
+        rewrite_personal_dictionary(&path, "Foo\nBar\n").unwrap();
+        let next = dictionary_text_without("Foo\nBar\n", "Foo");
+        rewrite_personal_dictionary(&path, &next).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "Bar\n");
+        let again = dictionary_text_without("Bar\n", "Missing");
+        rewrite_personal_dictionary(&path, &again).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "Bar\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn forget_and_remember_personal_do_not_need_the_file() {
+        let mut engine = engine();
+        assert!(engine.is_misspelled("Zzzxnotaword"));
+        engine.remember_personal("Zzzxnotaword");
+        assert!(!engine.is_misspelled("zzzxnotaword"));
+        engine.forget_personal("ZZZXNOTAWORD");
+        assert!(engine.is_misspelled("Zzzxnotaword"));
+    }
+
+    #[test]
     fn append_personal_word_writes_a_line() {
         let dir = std::env::temp_dir().join(format!(
             "rust-edit-dict-{}-{}",
@@ -622,6 +828,9 @@ mod tests {
         append_personal_word(&path, "Anotherword").unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(text, "Zzzxnotaword\nAnotherword\n");
+        std::fs::write(&path, "Foo").unwrap();
+        append_personal_word(&path, "Bar").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "Foo\nBar\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

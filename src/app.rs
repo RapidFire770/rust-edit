@@ -167,6 +167,13 @@ pub struct App {
     pub spell_cache: crate::spellcheck::SpellCache,
     /// Open suggestion popup. `None` when it is closed.
     pub spelling: Option<crate::ui::popups::spelling::SpellingState>,
+    /// Personal-word list. `None` when it is closed. The word editor, when
+    /// open, lives inside this state and is painted on top of the list.
+    pub dictionary: Option<crate::ui::popups::dictionary::DictionaryState>,
+    /// Tests point dictionary reads and writes here so they never touch the
+    /// real `dictionary.txt`. `None` means the list is empty and writes fail.
+    #[cfg(test)]
+    pub dictionary_path_override: Option<PathBuf>,
 }
 
 /// Which centered popup currently owns input. Highest z-order wins.
@@ -181,6 +188,7 @@ pub enum PopupFocus {
     Help,
     WordCount,
     Spelling,
+    Dictionary,
 }
 
 /// Result of a successful open. `loaded` is false when an existing tab was
@@ -320,6 +328,9 @@ impl App {
             spell_engine: None,
             spell_cache: crate::spellcheck::SpellCache::default(),
             spelling: None,
+            dictionary: None,
+            #[cfg(test)]
+            dictionary_path_override: None,
         }
     }
 
@@ -1253,6 +1264,409 @@ impl App {
         self.spelling = None;
     }
 
+    fn dictionary_file(&self) -> Option<PathBuf> {
+        #[cfg(test)]
+        {
+            self.dictionary_path_override.clone()
+        }
+        #[cfg(not(test))]
+        {
+            crate::spellcheck::personal_dictionary_path()
+        }
+    }
+
+    /// `Ok("")` when the file or the config directory is missing. Any other
+    /// read error is `Err` so a later rewrite cannot replace the file with
+    /// an empty list.
+    fn read_dictionary_text(&self) -> Result<String, ()> {
+        let Some(path) = self.dictionary_file() else {
+            return Ok(String::new());
+        };
+        match std::fs::read_to_string(path) {
+            Ok(text) => Ok(text),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(_) => Err(()),
+        }
+    }
+
+    fn dictionary_io_error(&mut self) {
+        self.format_status = Some("Could not write dictionary.txt".into());
+    }
+
+    fn dictionary_read_error(&mut self) {
+        self.format_status = Some("Could not read dictionary.txt".into());
+    }
+
+    /// Replace the open list with `text` and keep `select` on screen.
+    fn show_dictionary_text(&mut self, text: &str, select: Option<&str>, viewport: usize) {
+        let words = crate::spellcheck::personal_word_list(text);
+        let Some(state) = self.dictionary.as_mut() else {
+            return;
+        };
+        state.words = words;
+        state.editor = None;
+        state.row_hover = None;
+        state.button_hover = None;
+        if state.words.is_empty() {
+            state.selected = 0;
+            state.scroll = 0;
+            state.focus = crate::ui::popups::dictionary::DictionaryFocus::Buttons;
+            state.button = 0;
+            return;
+        }
+        if let Some(word) = select {
+            if let Some(index) = state
+                .words
+                .iter()
+                .position(|entry| crate::spellcheck::same_personal_word(entry, word))
+            {
+                state.selected = index;
+            }
+        }
+        if state.selected >= state.words.len() {
+            state.selected = state.words.len() - 1;
+        }
+        state.focus = crate::ui::popups::dictionary::DictionaryFocus::List;
+        state.scroll =
+            crate::ui::popups::dictionary::reveal(state.selected, state.scroll, viewport.max(1));
+    }
+
+    pub fn open_dictionary(&mut self) {
+        if self.popup_is_open() {
+            return;
+        }
+        let words = match self.read_dictionary_text() {
+            Ok(text) => crate::spellcheck::personal_word_list(&text),
+            Err(()) => {
+                self.dictionary_read_error();
+                Vec::new()
+            }
+        };
+        self.dictionary = Some(crate::ui::popups::dictionary::DictionaryState::new(words));
+        self.close_menu();
+    }
+
+    pub fn close_dictionary(&mut self) {
+        self.dictionary = None;
+        if self.popup_scrollbar_drag == Some(PopupFocus::Dictionary) {
+            self.popup_scrollbar_drag = None;
+        }
+    }
+
+    pub fn dictionary_begin_add(&mut self) {
+        let Some(state) = self.dictionary.as_mut() else {
+            return;
+        };
+        if state.editor.is_some() {
+            return;
+        }
+        state.begin_add();
+        self.popup_scrollbar_drag = None;
+    }
+
+    pub fn dictionary_begin_edit(&mut self) {
+        let Some(state) = self.dictionary.as_ref() else {
+            return;
+        };
+        if state.editor.is_some() {
+            return;
+        }
+        if state.words.is_empty() {
+            self.format_status = Some("No custom words".into());
+            return;
+        }
+        if let Some(state) = self.dictionary.as_mut() {
+            state.begin_edit();
+        }
+        self.popup_scrollbar_drag = None;
+    }
+
+    pub fn dictionary_cancel_editor(&mut self) {
+        if let Some(state) = self.dictionary.as_mut() {
+            state.editor = None;
+        }
+    }
+
+    pub fn dictionary_move(&mut self, delta: i32, viewport: usize) {
+        let Some(state) = self.dictionary.as_mut() else {
+            return;
+        };
+        if state.editor.is_some()
+            || state.focus != crate::ui::popups::dictionary::DictionaryFocus::List
+        {
+            return;
+        }
+        let len = state.words.len();
+        if len == 0 {
+            return;
+        }
+        let next = (state.selected as i32 + delta).clamp(0, len as i32 - 1) as usize;
+        state.selected = next;
+        state.scroll = crate::ui::popups::dictionary::reveal(next, state.scroll, viewport);
+        state.row_hover = None;
+    }
+
+    pub fn dictionary_wheel(&mut self, delta: i32, viewport: usize) {
+        let can_scroll = self
+            .dictionary
+            .as_ref()
+            .is_some_and(|state| state.editor.is_none() && !state.words.is_empty());
+        if !can_scroll {
+            return;
+        }
+        if let Some(state) = self.dictionary.as_mut() {
+            state.focus = crate::ui::popups::dictionary::DictionaryFocus::List;
+        }
+        self.dictionary_move(delta, viewport);
+    }
+
+    pub fn dictionary_set_scroll(&mut self, pos: usize, viewport: usize) {
+        let Some(state) = self.dictionary.as_mut() else {
+            return;
+        };
+        if state.editor.is_some() {
+            return;
+        }
+        let viewport = viewport.max(1);
+        let max = state.words.len().saturating_sub(viewport);
+        state.scroll = pos.min(max);
+        if state.words.is_empty() {
+            return;
+        }
+        let last = (state.scroll + viewport - 1).min(state.words.len() - 1);
+        if state.selected < state.scroll {
+            state.selected = state.scroll;
+        } else if state.selected > last {
+            state.selected = last;
+        }
+    }
+
+    pub fn dictionary_toggle_focus(&mut self) {
+        let Some(state) = self.dictionary.as_mut() else {
+            return;
+        };
+        if state.editor.is_some() {
+            return;
+        }
+        use crate::ui::popups::dictionary::DictionaryFocus;
+        state.focus = if state.words.is_empty() || state.focus == DictionaryFocus::List {
+            DictionaryFocus::Buttons
+        } else {
+            DictionaryFocus::List
+        };
+        state.row_hover = None;
+        state.button_hover = None;
+    }
+
+    pub fn dictionary_cycle_button(&mut self, delta: i32) {
+        let Some(state) = self.dictionary.as_mut() else {
+            return;
+        };
+        if state.editor.is_some()
+            || state.focus != crate::ui::popups::dictionary::DictionaryFocus::Buttons
+        {
+            return;
+        }
+        state.button = (state.button as i32 + delta).rem_euclid(3) as usize;
+        state.button_hover = None;
+    }
+
+    pub fn dictionary_activate_button(&mut self, index: usize) {
+        match index {
+            0 => self.dictionary_begin_add(),
+            1 => self.dictionary_begin_edit(),
+            _ => self.close_dictionary(),
+        }
+    }
+
+    pub fn dictionary_activate_focused(&mut self) {
+        let on_list = self.dictionary.as_ref().is_some_and(|state| {
+            state.focus == crate::ui::popups::dictionary::DictionaryFocus::List
+                && !state.words.is_empty()
+        });
+        if on_list {
+            self.dictionary_begin_edit();
+        } else {
+            let button = self
+                .dictionary
+                .as_ref()
+                .map(|state| state.button)
+                .unwrap_or(2);
+            self.dictionary_activate_button(button);
+        }
+    }
+
+    pub fn dictionary_remove_selected(&mut self, viewport: usize) {
+        let Some(state) = self.dictionary.as_ref() else {
+            return;
+        };
+        if state.editor.is_some() {
+            return;
+        }
+        if state.words.is_empty() {
+            self.format_status = Some("No custom words".into());
+            return;
+        }
+        if state.focus != crate::ui::popups::dictionary::DictionaryFocus::List {
+            return;
+        }
+        let index = state.selected;
+        self.dictionary_remove_at(index, viewport);
+    }
+
+    pub fn dictionary_remove_at(&mut self, index: usize, viewport: usize) {
+        let Some(word) = self
+            .dictionary
+            .as_ref()
+            .and_then(|state| state.words.get(index).cloned())
+        else {
+            return;
+        };
+        let text = match self.read_dictionary_text() {
+            Ok(text) => text,
+            Err(()) => {
+                self.dictionary_read_error();
+                return;
+            }
+        };
+        let next = crate::spellcheck::dictionary_text_without(&text, &word);
+        let Some(path) = self.dictionary_file() else {
+            self.dictionary_io_error();
+            return;
+        };
+        if crate::spellcheck::rewrite_personal_dictionary(&path, &next).is_err() {
+            self.dictionary_io_error();
+            return;
+        }
+        if let Some(engine) = self.spell_engine.as_mut() {
+            engine.forget_personal(&word);
+        }
+        self.spell_cache.clear();
+        self.show_dictionary_text(&next, None, viewport);
+        if let Some(state) = self.dictionary.as_mut() {
+            if !state.words.is_empty() {
+                state.selected = index.min(state.words.len() - 1);
+                state.scroll = crate::ui::popups::dictionary::reveal(
+                    state.selected,
+                    state.scroll,
+                    viewport.max(1),
+                );
+                state.focus = crate::ui::popups::dictionary::DictionaryFocus::List;
+            }
+        }
+        self.format_status = Some(format!("Removed \"{word}\" from your dictionary"));
+    }
+
+    pub fn dictionary_commit_editor(&mut self, viewport: usize) {
+        let Some(editor) = self
+            .dictionary
+            .as_ref()
+            .and_then(|state| state.editor.clone())
+        else {
+            return;
+        };
+        let word = match crate::spellcheck::acceptable_personal_word(&editor.draft) {
+            Ok(word) => word,
+            Err(message) => {
+                self.format_status = Some(message.into());
+                return;
+            }
+        };
+        if editor.adding {
+            self.add_dictionary_word(word, viewport);
+        } else {
+            self.edit_dictionary_word(&editor.origin, word, viewport);
+        }
+    }
+
+    fn add_dictionary_word(&mut self, word: String, viewport: usize) {
+        if let Some(index) = self.dictionary.as_ref().and_then(|state| {
+            state
+                .words
+                .iter()
+                .position(|entry| crate::spellcheck::same_personal_word(entry, &word))
+        }) {
+            if let Some(state) = self.dictionary.as_mut() {
+                state.selected = index;
+                state.editor = None;
+                state.focus = crate::ui::popups::dictionary::DictionaryFocus::List;
+                state.scroll =
+                    crate::ui::popups::dictionary::reveal(index, state.scroll, viewport.max(1));
+            }
+            self.format_status = Some("Already in your dictionary".into());
+            return;
+        }
+        let text = match self.read_dictionary_text() {
+            Ok(text) => text,
+            Err(()) => {
+                self.dictionary_read_error();
+                return;
+            }
+        };
+        let Some(path) = self.dictionary_file() else {
+            self.dictionary_io_error();
+            return;
+        };
+        if crate::spellcheck::append_personal_word(&path, &word).is_err() {
+            self.dictionary_io_error();
+            return;
+        }
+        if let Some(engine) = self.spell_engine.as_mut() {
+            engine.remember_personal(&word);
+        }
+        self.spell_cache.clear();
+        let mut next = text;
+        if !next.is_empty() && !next.ends_with('\n') {
+            next.push('\n');
+        }
+        next.push_str(&word);
+        next.push('\n');
+        self.show_dictionary_text(&next, Some(&word), viewport);
+        self.format_status = Some(format!("Added \"{word}\" to your dictionary"));
+    }
+
+    fn edit_dictionary_word(&mut self, from: &str, to: String, viewport: usize) {
+        if from == to {
+            self.dictionary_cancel_editor();
+            return;
+        }
+        let clash = self.dictionary.as_ref().is_some_and(|state| {
+            state.words.iter().any(|entry| {
+                crate::spellcheck::same_personal_word(entry, &to)
+                    && !crate::spellcheck::same_personal_word(entry, from)
+            })
+        });
+        if clash {
+            self.format_status = Some("Already in your dictionary".into());
+            return;
+        }
+        let text = match self.read_dictionary_text() {
+            Ok(text) => text,
+            Err(()) => {
+                self.dictionary_read_error();
+                return;
+            }
+        };
+        let next = crate::spellcheck::dictionary_text_replacing(&text, from, &to);
+        let Some(path) = self.dictionary_file() else {
+            self.dictionary_io_error();
+            return;
+        };
+        if crate::spellcheck::rewrite_personal_dictionary(&path, &next).is_err() {
+            self.dictionary_io_error();
+            return;
+        }
+        if let Some(engine) = self.spell_engine.as_mut() {
+            if !crate::spellcheck::same_personal_word(from, &to) {
+                engine.forget_personal(from);
+                engine.remember_personal(&to);
+            }
+        }
+        self.spell_cache.clear();
+        self.show_dictionary_text(&next, Some(&to), viewport);
+        self.format_status = Some(format!("Updated \"{from}\" to \"{to}\""));
+    }
+
     /// Toggle the focused Configure row (bools flip; tab size steps up by one).
     pub fn configure_toggle(&mut self, row: usize) {
         match row {
@@ -1354,6 +1768,8 @@ impl App {
             Some(PopupFocus::Themes)
         } else if self.show_configure {
             Some(PopupFocus::Configure)
+        } else if self.dictionary.is_some() {
+            Some(PopupFocus::Dictionary)
         } else if self.spelling.is_some() {
             Some(PopupFocus::Spelling)
         } else if self.show_help {
@@ -4013,5 +4429,232 @@ mod tests {
         app.open_spelling();
         assert!(app.spelling.is_none());
         assert_eq!(app.format_status.as_deref(), Some("Spellcheck is off"));
+    }
+
+    fn dictionary_fixture(text: &str) -> (App, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "rust-edit-dict-app-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dictionary.txt");
+        fs::write(&path, text).unwrap();
+        let mut app = App::new(&[]);
+        app.dictionary_path_override = Some(path);
+        app.spell_engine = Some(crate::spellcheck::SpellEngine::load().expect("dict"));
+        (app, dir)
+    }
+
+    #[test]
+    fn dictionary_lists_adds_edits_removes_and_rejects() {
+        let (mut app, dir) = dictionary_fixture("# note\n\nZzzxnotaword\n");
+        app.open_help();
+        app.open_dictionary();
+        assert!(app.dictionary.is_none(), "another popup owns input");
+        app.close_help();
+        assert!(!app.config.spellcheck);
+        app.open_dictionary();
+        let words = app.dictionary.as_ref().unwrap().words.clone();
+        assert_eq!(words, vec!["Zzzxnotaword".to_string()]);
+
+        app.dictionary_begin_add();
+        {
+            let editor = app.dictionary.as_mut().unwrap().editor.as_mut().unwrap();
+            editor.draft = "a".into();
+        }
+        app.dictionary_commit_editor(12);
+        assert!(app.dictionary.as_ref().unwrap().editor.is_some());
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("That word is not checked")
+        );
+        assert_eq!(app.dictionary.as_ref().unwrap().words.len(), 1);
+
+        {
+            let editor = app.dictionary.as_mut().unwrap().editor.as_mut().unwrap();
+            editor.draft = "Qqqnotaword".into();
+        }
+        app.dictionary_commit_editor(12);
+        assert!(app.dictionary.as_ref().unwrap().editor.is_none());
+        assert_eq!(
+            app.dictionary.as_ref().unwrap().words,
+            vec!["Qqqnotaword".to_string(), "Zzzxnotaword".to_string()]
+        );
+        assert!(!app
+            .spell_engine
+            .as_ref()
+            .unwrap()
+            .is_misspelled("qqqnotaword"));
+
+        app.dictionary_begin_add();
+        {
+            let editor = app.dictionary.as_mut().unwrap().editor.as_mut().unwrap();
+            editor.draft = "qqqnotaword".into();
+        }
+        app.dictionary_commit_editor(12);
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Already in your dictionary")
+        );
+        assert_eq!(app.dictionary.as_ref().unwrap().words.len(), 2);
+        let saved = fs::read_to_string(dir.join("dictionary.txt")).unwrap();
+        assert_eq!(saved.matches("Qqqnotaword").count(), 1);
+
+        app.dictionary.as_mut().unwrap().selected = 0;
+        app.dictionary_begin_edit();
+        {
+            let editor = app.dictionary.as_mut().unwrap().editor.as_mut().unwrap();
+            assert_eq!(editor.draft, "Qqqnotaword");
+            editor.draft = "Rrrnotaword".into();
+        }
+        app.dictionary_commit_editor(12);
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Updated \"Qqqnotaword\" to \"Rrrnotaword\"")
+        );
+        assert!(app
+            .spell_engine
+            .as_ref()
+            .unwrap()
+            .is_misspelled("Qqqnotaword"));
+        assert!(!app
+            .spell_engine
+            .as_ref()
+            .unwrap()
+            .is_misspelled("Rrrnotaword"));
+
+        let index = app
+            .dictionary
+            .as_ref()
+            .unwrap()
+            .words
+            .iter()
+            .position(|word| word == "Rrrnotaword")
+            .unwrap();
+        app.dictionary_remove_at(index, 12);
+        assert!(app
+            .spell_engine
+            .as_ref()
+            .unwrap()
+            .is_misspelled("Rrrnotaword"));
+        assert!(!app
+            .dictionary
+            .as_ref()
+            .unwrap()
+            .words
+            .iter()
+            .any(|word| word == "Rrrnotaword"));
+        let saved = fs::read_to_string(dir.join("dictionary.txt")).unwrap();
+        assert!(saved.contains("# note"));
+        assert!(!saved.contains("Rrrnotaword"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dictionary_write_failure_keeps_the_word() {
+        let (mut app, dir) = dictionary_fixture("Zzzxnotaword\n");
+        app.spell_engine
+            .as_mut()
+            .unwrap()
+            .remember_personal("Zzzxnotaword");
+        app.open_dictionary();
+        let blocker = dir.join("not-a-directory");
+        fs::write(&blocker, "x").unwrap();
+        app.dictionary_path_override = Some(blocker.join("dictionary.txt"));
+        app.dictionary_remove_at(0, 12);
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Could not read dictionary.txt")
+        );
+        assert_eq!(
+            app.dictionary.as_ref().unwrap().words,
+            vec!["Zzzxnotaword".to_string()]
+        );
+        assert!(!app
+            .spell_engine
+            .as_ref()
+            .unwrap()
+            .is_misspelled("Zzzxnotaword"));
+        let saved = fs::read_to_string(dir.join("dictionary.txt")).unwrap();
+        assert_eq!(saved, "Zzzxnotaword\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dictionary_edit_keeps_case_only_and_rejects_a_clash() {
+        let (mut app, dir) = dictionary_fixture("Foo\nBar\n");
+        app.spell_engine.as_mut().unwrap().remember_personal("Foo");
+        app.spell_engine.as_mut().unwrap().remember_personal("Bar");
+        app.open_dictionary();
+        app.dictionary.as_mut().unwrap().selected = 1;
+        app.dictionary_begin_edit();
+        {
+            let editor = app.dictionary.as_mut().unwrap().editor.as_mut().unwrap();
+            editor.draft = "foo".into();
+        }
+        app.dictionary_commit_editor(2);
+        assert!(app.dictionary.as_ref().unwrap().editor.is_none());
+        assert_eq!(
+            fs::read_to_string(dir.join("dictionary.txt")).unwrap(),
+            "foo\nBar\n"
+        );
+        assert!(!app.spell_engine.as_ref().unwrap().is_misspelled("FOO"));
+        assert_eq!(app.dictionary.as_ref().unwrap().scroll, 0);
+
+        app.dictionary.as_mut().unwrap().selected = app
+            .dictionary
+            .as_ref()
+            .unwrap()
+            .words
+            .iter()
+            .position(|word| word == "foo")
+            .unwrap();
+        app.dictionary_begin_edit();
+        {
+            let editor = app.dictionary.as_mut().unwrap().editor.as_mut().unwrap();
+            editor.draft = "Bar".into();
+        }
+        app.dictionary_commit_editor(2);
+        assert!(app.dictionary.as_ref().unwrap().editor.is_some());
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Already in your dictionary")
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("dictionary.txt")).unwrap(),
+            "foo\nBar\n"
+        );
+
+        use std::os::unix::fs::PermissionsExt;
+        let mut locked = fs::metadata(&dir).unwrap().permissions();
+        locked.set_mode(0o555);
+        fs::set_permissions(&dir, locked).unwrap();
+        {
+            let editor = app.dictionary.as_mut().unwrap().editor.as_mut().unwrap();
+            editor.draft = "Qqqnotaword".into();
+        }
+        app.dictionary_commit_editor(2);
+        let mut unlocked = fs::metadata(&dir).unwrap().permissions();
+        unlocked.set_mode(0o755);
+        fs::set_permissions(&dir, unlocked).unwrap();
+        assert!(app.dictionary.as_ref().unwrap().editor.is_some());
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Could not write dictionary.txt")
+        );
+        assert!(app
+            .spell_engine
+            .as_ref()
+            .unwrap()
+            .is_misspelled("Qqqnotaword"));
+        assert_eq!(
+            fs::read_to_string(dir.join("dictionary.txt")).unwrap(),
+            "foo\nBar\n"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

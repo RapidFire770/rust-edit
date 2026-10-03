@@ -135,6 +135,9 @@ struct HoverVisual {
     themes_button_hover: Option<usize>,
     spelling_row_hover: Option<usize>,
     spelling_button_hover: Option<usize>,
+    dictionary_row_hover: Option<usize>,
+    dictionary_button_hover: Option<usize>,
+    dictionary_editor_hover: Option<usize>,
     menu_selected: usize,
 }
 
@@ -154,6 +157,12 @@ fn hover_visual(app: &App) -> HoverVisual {
         themes_button_hover: app.themes_button_hover,
         spelling_row_hover: app.spelling.as_ref().and_then(|state| state.row_hover),
         spelling_button_hover: app.spelling.as_ref().and_then(|state| state.button_hover),
+        dictionary_row_hover: app.dictionary.as_ref().and_then(|state| state.row_hover),
+        dictionary_button_hover: app.dictionary.as_ref().and_then(|state| state.button_hover),
+        dictionary_editor_hover: app
+            .dictionary
+            .as_ref()
+            .and_then(|state| state.editor.as_ref().and_then(|editor| editor.button_hover)),
         menu_selected: app.menu_selected,
     }
 }
@@ -187,6 +196,7 @@ enum WheelTarget {
     Swallow,
     TabStrip,
     Themes,
+    Dictionary,
 }
 
 fn wheel_target(app: &App, wheel_col: u16, wheel_row: u16) -> WheelTarget {
@@ -194,6 +204,17 @@ fn wheel_target(app: &App, wheel_col: u16, wheel_row: u16) -> WheelTarget {
         Some(PopupFocus::Help) => WheelTarget::Help,
         Some(PopupFocus::FileBrowser) => WheelTarget::FileBrowser,
         Some(PopupFocus::Themes) => WheelTarget::Themes,
+        Some(PopupFocus::Dictionary) => {
+            if app
+                .dictionary
+                .as_ref()
+                .is_some_and(|state| state.editor.is_some())
+            {
+                WheelTarget::Swallow
+            } else {
+                WheelTarget::Dictionary
+            }
+        }
         Some(_) => WheelTarget::Swallow,
         None => {
             if (wheel_row as usize) < crate::ui::layout::HEADER_ROWS as usize
@@ -315,6 +336,7 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
         || app.show_confirm
         || app.show_reload
         || app.spelling.is_some()
+        || app.dictionary.is_some()
         || app.active_menu.is_some()
     {
         return None;
@@ -525,6 +547,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             themes_popup_handle_vert(app, wheel_delta.signum() as i32);
                         }
                     }
+                    WheelTarget::Dictionary => {
+                        let viewport = dictionary_viewport();
+                        app.dictionary_wheel(wheel_delta as i32, viewport);
+                    }
                     WheelTarget::Swallow => {}
                     WheelTarget::TabStrip => {
                         app.scroll_tab_strip(wheel_delta.signum() * (wheel_delta.abs() / 3).max(1));
@@ -662,6 +688,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 PopupFocus::Themes => handle_themes_key(key.code, app),
                                 PopupFocus::WordCount => handle_word_count_key(key.code, app),
                                 PopupFocus::Spelling => handle_spelling_key(key.code, app),
+                                PopupFocus::Dictionary => handle_dictionary_key(key.code, app),
                             }
                             continue;
                         }
@@ -1013,6 +1040,13 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
         spelling.row_hover = None;
         spelling.button_hover = None;
     }
+    if let Some(dictionary) = app.dictionary.as_mut() {
+        dictionary.row_hover = None;
+        dictionary.button_hover = None;
+        if let Some(editor) = dictionary.editor.as_mut() {
+            editor.button_hover = None;
+        }
+    }
 
     match app.popup_focus() {
         Some(PopupFocus::FileDialog) => {
@@ -1177,6 +1211,7 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
                 popups::spelling::SpellingHit::Inside | popups::spelling::SpellingHit::Outside => {}
             }
         }
+        Some(PopupFocus::Dictionary) => dictionary_hover(app, term_area, x, y),
         None => {
             // Menus are not a PopupFocus; skip them entirely while a popup owns input.
             if let Some(menu_name) = app.active_menu.as_deref() {
@@ -1504,6 +1539,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                             app.close_word_count();
                         }
                         PopupFocus::Spelling => handle_spelling_click(x, y, app),
+                        PopupFocus::Dictionary => handle_dictionary_click(x, y, app),
                     }
                     skip_editor = true;
                 }
@@ -1620,6 +1656,10 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 }
                 Some(PopupFocus::Themes) => {
                     apply_themes_role_scrollbar_at(app, y);
+                    return;
+                }
+                Some(PopupFocus::Dictionary) => {
+                    apply_dictionary_scrollbar_at(app, y);
                     return;
                 }
                 _ => {}
@@ -2650,6 +2690,314 @@ fn handle_spelling_click(x: usize, y: usize, app: &mut App) {
     }
 }
 
+fn dictionary_viewport() -> usize {
+    popups::dictionary::list_viewport(popups::dictionary::dictionary_rect(term_area()))
+}
+
+fn apply_dictionary_scrollbar_at(app: &mut App, y: u16) {
+    let popup = popups::dictionary::dictionary_rect(term_area());
+    let sb = popups::dictionary::scrollbar_rect(popup);
+    let (count, scroll) = app
+        .dictionary
+        .as_ref()
+        .map(|state| (state.words.len(), state.scroll))
+        .unwrap_or((0, 0));
+    let bar = popups::dictionary::list_overflow(count, scroll, popup);
+    if let Some(pos) = bar.target_for_row(y, sb) {
+        app.dictionary_set_scroll(pos, popups::dictionary::list_viewport(popup));
+    }
+}
+
+fn dictionary_hover(app: &mut App, area: Rect, x: u16, y: u16) {
+    let editing = app
+        .dictionary
+        .as_ref()
+        .is_some_and(|state| state.editor.is_some());
+    if editing {
+        if let popups::dictionary::EditorHit::Button(index) =
+            popups::dictionary::editor_hit(area, x, y)
+        {
+            if let Some(editor) = app
+                .dictionary
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+            {
+                editor.button_hover = Some(index);
+                editor.button = index;
+                editor.focus = popups::dictionary::EditorFocus::Buttons;
+            }
+        }
+        return;
+    }
+    let (words, scroll) = app
+        .dictionary
+        .as_ref()
+        .map(|state| (state.words.clone(), state.scroll))
+        .unwrap_or_default();
+    match popups::dictionary::hit_test(area, &words, scroll, x, y) {
+        popups::dictionary::DictionaryHit::Row(index)
+        | popups::dictionary::DictionaryHit::Clear(index) => {
+            if let Some(state) = app.dictionary.as_mut() {
+                state.row_hover = Some(index);
+                state.selected = index;
+                state.focus = popups::dictionary::DictionaryFocus::List;
+            }
+        }
+        popups::dictionary::DictionaryHit::Button(index) => {
+            if let Some(state) = app.dictionary.as_mut() {
+                state.button_hover = Some(index);
+                state.button = index;
+                state.focus = popups::dictionary::DictionaryFocus::Buttons;
+            }
+        }
+        popups::dictionary::DictionaryHit::Scrollbar
+        | popups::dictionary::DictionaryHit::Inside
+        | popups::dictionary::DictionaryHit::Outside => {}
+    }
+}
+
+fn handle_dictionary_key(code: KeyCode, app: &mut App) {
+    let editing = app
+        .dictionary
+        .as_ref()
+        .is_some_and(|state| state.editor.is_some());
+    if editing {
+        handle_dictionary_editor_key(code, app);
+    } else {
+        handle_dictionary_list_key(code, app);
+    }
+}
+
+fn handle_dictionary_list_key(code: KeyCode, app: &mut App) {
+    use popups::dictionary::DictionaryFocus;
+    let on_list = app
+        .dictionary
+        .as_ref()
+        .is_some_and(|state| state.focus == DictionaryFocus::List && !state.words.is_empty());
+    let viewport = dictionary_viewport();
+    match code {
+        KeyCode::Esc => app.close_dictionary(),
+        KeyCode::Tab | KeyCode::BackTab => app.dictionary_toggle_focus(),
+        KeyCode::Up | KeyCode::Char('k') => {
+            if on_list {
+                app.dictionary_move(-1, viewport);
+            } else {
+                app.dictionary_cycle_button(-1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if on_list {
+                app.dictionary_move(1, viewport);
+            } else {
+                app.dictionary_cycle_button(1);
+            }
+        }
+        KeyCode::Left => app.dictionary_cycle_button(-1),
+        KeyCode::Right => app.dictionary_cycle_button(1),
+        KeyCode::Enter => app.dictionary_activate_focused(),
+        KeyCode::Char('a') => app.dictionary_begin_add(),
+        KeyCode::Char('e') => app.dictionary_begin_edit(),
+        KeyCode::Delete | KeyCode::Backspace => {
+            app.dictionary_remove_selected(dictionary_viewport())
+        }
+        _ => {}
+    }
+}
+
+fn handle_dictionary_editor_key(code: KeyCode, app: &mut App) {
+    use popups::dictionary::EditorFocus;
+    let on_field = app.dictionary.as_ref().is_some_and(|state| {
+        state
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.focus == EditorFocus::Field)
+    });
+    match code {
+        KeyCode::Esc => app.dictionary_cancel_editor(),
+        KeyCode::Enter => {
+            let cancel = app.dictionary.as_ref().is_some_and(|state| {
+                state.editor.as_ref().is_some_and(|editor| {
+                    editor.focus == EditorFocus::Buttons && editor.button == 1
+                })
+            });
+            if cancel {
+                app.dictionary_cancel_editor();
+            } else {
+                app.dictionary_commit_editor(dictionary_viewport());
+            }
+        }
+        KeyCode::Tab | KeyCode::BackTab => {
+            if let Some(editor) = app
+                .dictionary
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+            {
+                editor.focus = if editor.focus == EditorFocus::Field {
+                    EditorFocus::Buttons
+                } else {
+                    EditorFocus::Field
+                };
+                editor.button_hover = None;
+            }
+        }
+        KeyCode::Left => {
+            if on_field {
+                if let Some(editor) = app
+                    .dictionary
+                    .as_mut()
+                    .and_then(|state| state.editor.as_mut())
+                {
+                    editor.move_caret(-1);
+                }
+            } else if let Some(editor) = app
+                .dictionary
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+            {
+                editor.button = if editor.button == 0 { 1 } else { 0 };
+                editor.button_hover = None;
+            }
+        }
+        KeyCode::Right => {
+            if on_field {
+                if let Some(editor) = app
+                    .dictionary
+                    .as_mut()
+                    .and_then(|state| state.editor.as_mut())
+                {
+                    editor.move_caret(1);
+                }
+            } else if let Some(editor) = app
+                .dictionary
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+            {
+                editor.button = if editor.button == 0 { 1 } else { 0 };
+                editor.button_hover = None;
+            }
+        }
+        KeyCode::Home => {
+            if let Some(editor) = app
+                .dictionary
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+            {
+                editor.caret_home();
+            }
+        }
+        KeyCode::End => {
+            if let Some(editor) = app
+                .dictionary
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+            {
+                editor.caret_end();
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(editor) = app
+                .dictionary
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+            {
+                editor.backspace();
+            }
+        }
+        KeyCode::Delete => {
+            if let Some(editor) = app
+                .dictionary
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+            {
+                editor.delete_forward();
+            }
+        }
+        KeyCode::Char(ch) => {
+            if let Some(editor) = app
+                .dictionary
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+            {
+                editor.insert_char(ch);
+            }
+        }
+        KeyCode::Up | KeyCode::Down if !on_field => {
+            if let Some(editor) = app
+                .dictionary
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+            {
+                editor.button = if editor.button == 0 { 1 } else { 0 };
+                editor.focus = EditorFocus::Buttons;
+                editor.button_hover = None;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_dictionary_click(x: usize, y: usize, app: &mut App) {
+    let term_area = term_area();
+    let editing = app
+        .dictionary
+        .as_ref()
+        .and_then(|state| state.editor.clone());
+    if let Some(editor) = editing {
+        match popups::dictionary::editor_hit(term_area, x as u16, y as u16) {
+            popups::dictionary::EditorHit::Field => {
+                let field = popups::dictionary::editor_field_rect(popups::dictionary::editor_rect(
+                    term_area,
+                ));
+                let caret = popups::dictionary::caret_from_click(
+                    &editor.draft,
+                    editor.caret,
+                    field,
+                    x as u16,
+                );
+                if let Some(editor) = app
+                    .dictionary
+                    .as_mut()
+                    .and_then(|state| state.editor.as_mut())
+                {
+                    editor.caret = caret;
+                    editor.focus = popups::dictionary::EditorFocus::Field;
+                    editor.button_hover = None;
+                }
+            }
+            popups::dictionary::EditorHit::Button(0) => {
+                app.dictionary_commit_editor(dictionary_viewport())
+            }
+            popups::dictionary::EditorHit::Button(_) => app.dictionary_cancel_editor(),
+            popups::dictionary::EditorHit::Outside => app.dictionary_cancel_editor(),
+            popups::dictionary::EditorHit::Inside => {}
+        }
+        return;
+    }
+    let (words, scroll) = app
+        .dictionary
+        .as_ref()
+        .map(|state| (state.words.clone(), state.scroll))
+        .unwrap_or_default();
+    match popups::dictionary::hit_test(term_area, &words, scroll, x as u16, y as u16) {
+        popups::dictionary::DictionaryHit::Row(index) => {
+            if let Some(state) = app.dictionary.as_mut() {
+                state.selected = index;
+                state.focus = popups::dictionary::DictionaryFocus::List;
+            }
+        }
+        popups::dictionary::DictionaryHit::Clear(index) => {
+            app.dictionary_remove_at(index, dictionary_viewport())
+        }
+        popups::dictionary::DictionaryHit::Button(index) => app.dictionary_activate_button(index),
+        popups::dictionary::DictionaryHit::Scrollbar => {
+            apply_dictionary_scrollbar_at(app, y as u16);
+            app.popup_scrollbar_drag = Some(PopupFocus::Dictionary);
+        }
+        popups::dictionary::DictionaryHit::Outside => app.close_dictionary(),
+        popups::dictionary::DictionaryHit::Inside => {}
+    }
+}
+
 /// True when `(x, y)` is the editor vertical scrollbar column. Header row
 /// last cells (`[+]`, `[>]`) must not be treated as the scrollbar.
 fn is_editor_vscrollbar_col(x: usize, y: usize, term_width: usize) -> bool {
@@ -2668,6 +3016,7 @@ fn any_modal_open(app: &App) -> bool {
         || app.show_confirm
         || app.show_reload
         || app.spelling.is_some()
+        || app.dictionary.is_some()
         || app.active_menu.is_some()
         || app.find_state.is_some()
 }
@@ -2748,6 +3097,7 @@ fn handle_menu_action(app: &mut App) {
         ("Tools", 4) => app.toggle_line_comment(),
         ("Tools", 5) => app.toggle_spellcheck(),
         ("Tools", 6) => app.open_spelling(),
+        ("Tools", 7) => app.open_dictionary(),
         ("Settings", 0) => app.open_configure(),
         ("Settings", 1) => app.open_themes(),
         ("Settings", 2) => app.open_help(), // Help (F1)
@@ -2831,6 +3181,10 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     if app.spelling.is_some() {
         popups::spelling::render(f, area, app.current_theme(), app);
+    }
+
+    if app.dictionary.is_some() {
+        popups::dictionary::render(f, area, app.current_theme(), app);
     }
 
     if app.show_themes {
@@ -3828,6 +4182,77 @@ mod popup_mouse_focus_tests {
         handle_menu_action(&mut app);
         assert!(app.show_word_count);
         assert!(app.find_state.is_none());
+    }
+
+    #[test]
+    fn tools_menu_spelling_stays_at_index_6_and_dictionary_is_7() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().language = crate::buffer::Language::Plain;
+        app.active_buffer_mut().insert("zzzxnotaword");
+        app.config.set_spellcheck(true);
+        app.apply_editor_viewport(24, 80);
+        app.active_menu = Some("Tools".into());
+        app.menu_selected = 6;
+        handle_menu_action(&mut app);
+        assert!(app.spelling.is_some(), "{:?}", app.format_status);
+        assert!(app.dictionary.is_none());
+
+        let mut app = App::new(&[]);
+        app.active_menu = Some("Tools".into());
+        app.menu_selected = 7;
+        handle_menu_action(&mut app);
+        assert!(app.dictionary.is_some());
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Dictionary));
+    }
+
+    #[test]
+    fn dictionary_editor_keys_type_and_escape_returns_to_the_list() {
+        let dir = std::env::temp_dir().join(format!(
+            "rust-edit-dict-keys-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = App::new(&[]);
+        app.dictionary_path_override = Some(dir.join("dictionary.txt"));
+        app.open_dictionary();
+        app.dictionary_begin_add();
+        handle_dictionary_key(KeyCode::Char('a'), &mut app);
+        handle_dictionary_key(KeyCode::Char('e'), &mut app);
+        handle_dictionary_key(KeyCode::Left, &mut app);
+        handle_dictionary_key(KeyCode::Delete, &mut app);
+        let draft = app
+            .dictionary
+            .as_ref()
+            .unwrap()
+            .editor
+            .as_ref()
+            .unwrap()
+            .draft
+            .clone();
+        assert_eq!(draft, "a");
+        handle_dictionary_key(KeyCode::Esc, &mut app);
+        assert!(app.dictionary.as_ref().unwrap().editor.is_none());
+        assert!(app.dictionary.is_some());
+
+        app.dictionary_begin_add();
+        for ch in "zzzxnotaword".chars() {
+            handle_dictionary_key(KeyCode::Char(ch), &mut app);
+        }
+        handle_dictionary_key(KeyCode::Enter, &mut app);
+        assert!(app.dictionary.as_ref().unwrap().editor.is_none());
+        assert_eq!(
+            app.dictionary.as_ref().unwrap().words,
+            vec!["zzzxnotaword".to_string()]
+        );
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Added \"zzzxnotaword\" to your dictionary")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
