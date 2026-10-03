@@ -30,6 +30,9 @@ pub struct Config {
     /// When true, clean buffers reload from disk without prompting.
     /// Dirty buffers still prompt. Default false (ask per file).
     pub auto_reload_all: bool,
+
+    /// Underline misspellings and offer dictionary suggestions. Default off.
+    pub spellcheck: bool,
 }
 
 impl Default for Config {
@@ -42,6 +45,7 @@ impl Default for Config {
 
             recent_files: Vec::new(),
             auto_reload_all: false,
+            spellcheck: false,
         }
     }
 }
@@ -108,6 +112,13 @@ impl Config {
     /// Toggle auto-reload of all clean files and persist (except in tests).
     pub fn set_auto_reload_all(&mut self, on: bool) {
         self.auto_reload_all = on;
+        #[cfg(not(test))]
+        self.save();
+    }
+
+    /// Toggle spellcheck and persist (except in tests).
+    pub fn set_spellcheck(&mut self, on: bool) {
+        self.spellcheck = on;
         #[cfg(not(test))]
         self.save();
     }
@@ -289,6 +300,18 @@ mod tests {
         )
         .unwrap();
         assert!(!cfg.auto_reload_all);
+        assert!(!cfg.spellcheck);
+    }
+
+    #[test]
+    fn spellcheck_defaults_false_and_roundtrips() {
+        let cfg = Config::default();
+        assert!(!cfg.spellcheck);
+        let mut cfg = cfg;
+        cfg.spellcheck = true;
+        let saved = toml::to_string(&cfg).unwrap();
+        let back: Config = toml::from_str(&saved).unwrap();
+        assert!(back.spellcheck);
     }
 
     #[test]
@@ -302,6 +325,7 @@ mod tests {
         assert_eq!(cfg.show_line_numbers, def.show_line_numbers);
         assert_eq!(cfg.word_wrap, def.word_wrap);
         assert_eq!(cfg.auto_reload_all, def.auto_reload_all);
+        assert_eq!(cfg.spellcheck, def.spellcheck);
     }
 
     #[test]

@@ -626,6 +626,7 @@ pub const ROLE_FIELDS: &[(&str, &str)] = &[
     ("number", "number"),
     ("type_name", "type_name"),
     ("accent", "accent"),
+    ("spell_error", "spell_error"),
 ];
 
 pub fn field_value(theme: &Theme, role_idx: usize) -> ColorDef {
@@ -647,6 +648,7 @@ pub fn field_value(theme: &Theme, role_idx: usize) -> ColorDef {
         "number" => theme.number.clone(),
         "type_name" => theme.type_name.clone(),
         "accent" => theme.accent.clone(),
+        "spell_error" => theme.spell_error.clone(),
         _ => ColorDef::Rgb(0, 0, 0),
     }
 }
@@ -670,6 +672,7 @@ fn set_field_value(theme: &mut Theme, role_idx: usize, value: ColorDef) {
         "number" => theme.number = value,
         "type_name" => theme.type_name = value,
         "accent" => theme.accent = value,
+        "spell_error" => theme.spell_error = value,
         _ => {}
     }
 }
@@ -1025,6 +1028,14 @@ fn preview_chrome_lines(theme: &Theme, selected_role: usize, width: u16) -> Vec<
             .bg(Color::from(&theme.editor_bg)),
         sel("comment"),
     );
+    let spell = mark_selected(
+        Style::default()
+            .fg(Color::from(&theme.comment))
+            .bg(Color::from(&theme.editor_bg))
+            .add_modifier(Modifier::UNDERLINED)
+            .underline_color(Color::from(&theme.spell_error)),
+        sel("spell_error"),
+    );
     let ty = mark_selected(
         Style::default()
             .fg(Color::from(&theme.type_name))
@@ -1102,7 +1113,8 @@ fn preview_chrome_lines(theme: &Theme, selected_role: usize, width: u16) -> Vec<
                 Span::styled(" = ", fg),
                 Span::styled("\"hi\"", string),
                 Span::styled("; ", fg),
-                Span::styled("// cmt", comment),
+                Span::styled("// ", comment),
+                Span::styled("teh", spell),
                 Span::styled(" ", cursor),
             ],
             width,
@@ -1387,8 +1399,8 @@ mod tests {
         // (the set_field_value match arms enforce this at compile time, but we
         // also assert the count matches the Theme struct's color roles).
         let theme = Theme::light();
-        // 16 color roles (name is a separate text field, not a role).
-        assert_eq!(ROLE_FIELDS.len(), 16);
+        // Color roles (name is a separate text field, not a role).
+        assert_eq!(ROLE_FIELDS.len(), 17);
         // Reading each must not panic.
         for i in 0..ROLE_FIELDS.len() {
             let _ = field_value(&theme, i);
@@ -1482,8 +1494,9 @@ mod tests {
     }
 
     #[test]
-    fn role_fields_are_the_16_color_roles() {
-        assert_eq!(ROLE_FIELDS.len(), 16);
+    fn role_fields_include_spell_error() {
+        assert_eq!(ROLE_FIELDS.len(), 17);
+        assert!(ROLE_FIELDS.iter().any(|(label, _)| *label == "spell_error"));
         assert!(ROLE_FIELDS.iter().all(|(l, _)| *l != "name"));
     }
 
@@ -1620,7 +1633,7 @@ mod tests {
     }
 
     #[test]
-    fn roles_overflow_bar_overflows_sixteen_roles_in_eight_rows() {
+    fn roles_overflow_bar_overflows_the_role_list_in_eight_rows() {
         let bar = roles_overflow_bar(0);
         assert_eq!(bar.total, ROLE_FIELDS.len());
         assert_eq!(bar.viewport, ROLE_VISIBLE as usize);
@@ -1695,13 +1708,16 @@ mod tests {
             number: ColorDef::Rgb(23, 1, 1),
             type_name: ColorDef::Rgb(24, 1, 1),
             accent: ColorDef::Rgb(25, 1, 1),
+            spell_error: ColorDef::Rgb(26, 1, 1),
         }
     }
 
     fn line_has_color(line: &Line, color: Color) -> bool {
-        line.spans
-            .iter()
-            .any(|s| s.style.fg == Some(color) || s.style.bg == Some(color))
+        line.spans.iter().any(|span| {
+            span.style.fg == Some(color)
+                || span.style.bg == Some(color)
+                || span.style.underline_color == Some(color)
+        })
     }
 
     fn preview_uses_role(theme: &Theme, role_idx: usize) -> bool {

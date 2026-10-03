@@ -161,6 +161,12 @@ pub struct App {
     /// Parse-state checkpoint cache for the active buffer. `refresh_highlight_cache`
     /// ensures an overscanned window; the editor reads spans via `line_spans`.
     pub highlight_cache: crate::highlight_cache::HighlightCache,
+    /// Lazily built English dictionary. `None` until spellcheck is used.
+    pub spell_engine: Option<crate::spellcheck::SpellEngine>,
+    /// Misspelling ranges for the highlight window of the active buffer.
+    pub spell_cache: crate::spellcheck::SpellCache,
+    /// Open suggestion popup. `None` when it is closed.
+    pub spelling: Option<crate::ui::popups::spelling::SpellingState>,
 }
 
 /// Which centered popup currently owns input. Highest z-order wins.
@@ -174,6 +180,7 @@ pub enum PopupFocus {
     Configure,
     Help,
     WordCount,
+    Spelling,
 }
 
 /// Result of a successful open. `loaded` is false when an existing tab was
@@ -310,6 +317,9 @@ impl App {
             tab_scroll: 0,
             header_width: std::cell::Cell::new(0),
             highlight_cache: crate::highlight_cache::HighlightCache::new(),
+            spell_engine: None,
+            spell_cache: crate::spellcheck::SpellCache::default(),
+            spelling: None,
         }
     }
 
@@ -377,6 +387,7 @@ impl App {
         } else {
             self.refresh_highlight_cache(scroll_row, vis_h);
         }
+        self.refresh_spell_cache();
     }
 
     /// Ensure the highlight cache covers the active buffer's visible window.
@@ -1030,9 +1041,216 @@ impl App {
                     let _ = self.check_external_changes();
                 }
             }
-
+            4 => self.toggle_spellcheck(),
             _ => {}
         }
+    }
+
+    pub fn toggle_spellcheck(&mut self) {
+        let on = !self.config.spellcheck;
+        self.config.set_spellcheck(on);
+        if !on {
+            self.spell_cache.clear();
+            self.spelling = None;
+        }
+    }
+
+    fn refresh_spell_cache(&mut self) {
+        if !self.config.spellcheck {
+            self.spell_cache.clear();
+            return;
+        }
+        if self.spell_engine.is_none() {
+            match crate::spellcheck::SpellEngine::load() {
+                Ok(engine) => self.spell_engine = Some(engine),
+                Err(message) => {
+                    self.format_status = Some(message);
+                    self.spell_cache.clear();
+                    return;
+                }
+            }
+        }
+        let App {
+            spell_engine,
+            spell_cache,
+            highlight_cache,
+            highlighter,
+            buffers,
+            active,
+            ..
+        } = self;
+        let Some(engine) = spell_engine.as_ref() else {
+            return;
+        };
+        let buf = &buffers[*active];
+        let language = buf.language;
+        let generation = buf.generation;
+        let source = buf.id;
+        spell_cache.sync(
+            engine,
+            highlighter,
+            highlight_cache,
+            language,
+            generation,
+            source,
+            |index| buf.line(index),
+            |index| buf.rope.line_to_byte(index),
+        );
+    }
+
+    pub fn open_spelling(&mut self) {
+        if self.popup_is_open() {
+            return;
+        }
+        if !self.config.spellcheck {
+            self.format_status = Some("Spellcheck is off".into());
+            return;
+        }
+        let vis = self.editor_visible_lines.get().max(1);
+        let width = self.editor_visible_width.get().max(1);
+        self.apply_editor_viewport(vis, width);
+        let len = self.active_buffer().rope.len_bytes();
+        if len == 0 {
+            self.format_status = Some("No misspelling at the cursor".into());
+            return;
+        }
+        let cursor = self.active_buffer().cursor.min(len);
+        let line = self.active_buffer().rope.byte_to_line(cursor);
+        let ranges = self.misspelling_ranges_on_line(line);
+        let Some(range) = crate::spellcheck::misspelling_at(&ranges, cursor) else {
+            self.format_status = Some("No misspelling at the cursor".into());
+            return;
+        };
+        let word = {
+            let rope = &self.active_buffer().rope;
+            let start = rope.byte_to_char(range.start.min(rope.len_bytes()));
+            let end = rope.byte_to_char(range.end.min(rope.len_bytes()));
+            rope.slice(start..end).to_string()
+        };
+        let Some(engine) = self.spell_engine.as_ref() else {
+            self.format_status = Some("Spellcheck dictionary failed to load".into());
+            return;
+        };
+        let suggestions = engine.suggestions(&word);
+        let focus = if suggestions.is_empty() {
+            crate::ui::popups::spelling::SpellingFocus::Buttons
+        } else {
+            crate::ui::popups::spelling::SpellingFocus::List
+        };
+        self.spelling = Some(crate::ui::popups::spelling::SpellingState {
+            word,
+            range,
+            suggestions,
+            selected: 0,
+            button: 0,
+            focus,
+            row_hover: None,
+            button_hover: None,
+        });
+        self.close_menu();
+    }
+
+    fn misspelling_ranges_on_line(&self, line: usize) -> Vec<std::ops::Range<usize>> {
+        if self.spell_cache.covers_line(line) {
+            return self.spell_cache.line_ranges(line).to_vec();
+        }
+        let App {
+            spell_engine,
+            highlight_cache,
+            highlighter,
+            buffers,
+            active,
+            ..
+        } = self;
+        let Some(engine) = spell_engine.as_ref() else {
+            return Vec::new();
+        };
+        let buf = &buffers[*active];
+        let kind = crate::spellcheck::spell_kind(buf.language);
+        if kind == crate::spellcheck::SpellKind::Off {
+            return Vec::new();
+        }
+        let Some((checkpoint, snap)) = highlight_cache.resume_at(line) else {
+            return Vec::new();
+        };
+        crate::spellcheck::misspellings_from_checkpoint(
+            engine,
+            highlighter,
+            snap,
+            checkpoint,
+            line,
+            line + 1,
+            kind,
+            &mut |index| buf.line(index),
+            &mut |index| buf.rope.line_to_byte(index),
+        )
+        .pop()
+        .unwrap_or_default()
+    }
+
+    pub fn close_spelling(&mut self) {
+        self.spelling = None;
+    }
+
+    pub fn accept_spelling(&mut self, index: usize) {
+        let Some(state) = self.spelling.clone() else {
+            return;
+        };
+        if self.active_buffer().read_only {
+            self.format_status = Some("Read-only".into());
+            return;
+        }
+        let current = {
+            let rope = &self.active_buffer().rope;
+            if state.range.end > rope.len_bytes() {
+                String::new()
+            } else {
+                let start = rope.byte_to_char(state.range.start);
+                let end = rope.byte_to_char(state.range.end);
+                rope.slice(start..end).to_string()
+            }
+        };
+        if current != state.word {
+            self.spelling = None;
+            self.format_status = Some("The word changed".into());
+            return;
+        }
+        let Some(suggestion) = state.suggestions.get(index).cloned() else {
+            return;
+        };
+        let replacement = crate::spellcheck::apply_case(&state.word, &suggestion);
+        self.active_buffer_mut()
+            .replace_byte_range(state.range, &replacement);
+        self.spelling = None;
+    }
+
+    pub fn spelling_add_word(&mut self) {
+        let Some(state) = self.spelling.clone() else {
+            return;
+        };
+        let Some(engine) = self.spell_engine.as_mut() else {
+            self.format_status = Some("Spellcheck dictionary failed to load".into());
+            return;
+        };
+        match engine.add_personal(&state.word) {
+            Ok(()) => {
+                self.format_status = Some(format!("Added \"{}\" to your dictionary", state.word));
+            }
+            Err(message) => self.format_status = Some(message),
+        }
+        self.spell_cache.clear();
+        self.spelling = None;
+    }
+
+    pub fn spelling_ignore(&mut self) {
+        let Some(state) = self.spelling.clone() else {
+            return;
+        };
+        if let Some(engine) = self.spell_engine.as_mut() {
+            engine.ignore(&state.word);
+        }
+        self.spell_cache.clear();
+        self.spelling = None;
     }
 
     /// Toggle the focused Configure row (bools flip; tab size steps up by one).
@@ -1136,6 +1354,8 @@ impl App {
             Some(PopupFocus::Themes)
         } else if self.show_configure {
             Some(PopupFocus::Configure)
+        } else if self.spelling.is_some() {
+            Some(PopupFocus::Spelling)
         } else if self.show_help {
             Some(PopupFocus::Help)
         } else if self.show_word_count {
@@ -1323,6 +1543,7 @@ impl App {
         self.buffers[idx].disk_gone_notified = false;
         if idx == self.active {
             self.highlight_cache.invalidate();
+            self.spelling = None;
             if self.is_find_active() {
                 self.update_find_matches();
             }
@@ -3704,5 +3925,93 @@ mod tests {
         );
         assert_ne!(after, before);
         let _ = fs::remove_file(&path);
+    }
+
+    fn plain_spell_app(text: &str) -> App {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().rope = ropey::Rope::from(text);
+        app.active_buffer_mut().language = crate::buffer::Language::Plain;
+        app.active_buffer_mut().bump_generation();
+        app.config.set_spellcheck(true);
+        app.apply_editor_viewport(24, 80);
+        app
+    }
+
+    #[test]
+    fn spelling_popup_replaces_adds_ignores_and_respects_read_only() {
+        let mut app = plain_spell_app("teh\n");
+        app.open_spelling();
+        let index = app
+            .spelling
+            .as_ref()
+            .expect("popup")
+            .suggestions
+            .iter()
+            .position(|word| word == "the")
+            .expect("suggestion the");
+        app.accept_spelling(index);
+        assert!(app.spelling.is_none());
+        assert_eq!(app.active_buffer().text(), "the\n");
+        app.undo();
+        assert_eq!(app.active_buffer().text(), "teh\n");
+
+        app.open_spelling();
+        app.close_spelling();
+        assert!(app.spelling.is_none());
+
+        let mut app = plain_spell_app("teh\n");
+        app.open_spelling();
+        let index = app
+            .spelling
+            .as_ref()
+            .unwrap()
+            .suggestions
+            .iter()
+            .position(|word| word == "the")
+            .unwrap();
+        app.active_buffer_mut().rope = ropey::Rope::from("hello\n");
+        app.accept_spelling(index);
+        assert!(app.spelling.is_none());
+        assert_eq!(app.active_buffer().text(), "hello\n");
+        assert_eq!(app.format_status.as_deref(), Some("The word changed"));
+
+        let mut app = plain_spell_app("zzzxnotaword\n");
+        app.open_spelling();
+        assert!(app.spelling.is_some(), "unknown word opens the popup");
+        app.spelling_add_word();
+        assert!(app.spelling.is_none());
+        app.apply_editor_viewport(24, 80);
+        assert!(
+            app.spell_cache.line_ranges(0).is_empty(),
+            "added word is no longer marked"
+        );
+
+        let mut app = plain_spell_app("qqqnotaword\n");
+        app.open_spelling();
+        app.spelling_ignore();
+        app.apply_editor_viewport(24, 80);
+        assert!(app.spell_cache.line_ranges(0).is_empty());
+
+        let mut app = plain_spell_app("teh\n");
+        app.active_buffer_mut().read_only = true;
+        app.open_spelling();
+        let index = app
+            .spelling
+            .as_ref()
+            .unwrap()
+            .suggestions
+            .iter()
+            .position(|word| word == "the")
+            .unwrap();
+        app.accept_spelling(index);
+        assert!(app.spelling.is_some());
+        assert_eq!(app.active_buffer().text(), "teh\n");
+        assert_eq!(app.format_status.as_deref(), Some("Read-only"));
+
+        app.close_spelling();
+        app.config.set_spellcheck(false);
+        app.open_spelling();
+        assert!(app.spelling.is_none());
+        assert_eq!(app.format_status.as_deref(), Some("Spellcheck is off"));
     }
 }

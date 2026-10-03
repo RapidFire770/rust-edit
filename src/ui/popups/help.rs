@@ -126,6 +126,9 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("F1", "Toggle this help"),
                 ("Alt+W", "Word count"),
                 ("Alt+Z", "Toggle word wrap"),
+                ("F7", "Spelling suggestions at the cursor"),
+                ("Enter", "Spelling: replace with the selected word"),
+                ("a / i", "Spelling: add the word / ignore until quit"),
                 ("Format Document", "Tools menu (tool or tab size)"),
                 ("1 / 2 / 3", "Help tab: Shortcuts / Languages / About"),
             ],
@@ -138,6 +141,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                     "Auto-reload all",
                     "Configure: reload every clean file without asking",
                 ),
+                ("Spellcheck", "Configure or Tools: underline misspellings"),
                 (
                     "j / k, Up / Down",
                     "Move selection in Configure / Themes list",

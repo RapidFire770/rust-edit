@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -153,6 +153,8 @@ fn render_unwrapped(
             buf.selection.as_ref(),
             theme.selection_style(),
             None,
+            app.spell_cache.line_ranges(line_idx),
+            Color::from(&theme.spell_error),
         ));
         lines.push(Line::from(spans));
     }
@@ -248,6 +250,8 @@ fn render_wrapped(
                 buf.selection.as_ref(),
                 theme.selection_style(),
                 Some(sub_start_byte..sub_end_byte),
+                app.spell_cache.line_ranges(lidx),
+                Color::from(&theme.spell_error),
             ));
             lines.push(Line::from(spans));
         }

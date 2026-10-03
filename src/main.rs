@@ -9,6 +9,7 @@ mod file_watch;
 mod format;
 mod fs_access;
 mod highlight_cache;
+mod spellcheck;
 mod syntax;
 mod theme;
 mod themes;
@@ -132,6 +133,8 @@ struct HoverVisual {
     configure_button_hover: Option<usize>,
     themes_list_hover: Option<usize>,
     themes_button_hover: Option<usize>,
+    spelling_row_hover: Option<usize>,
+    spelling_button_hover: Option<usize>,
     menu_selected: usize,
 }
 
@@ -149,6 +152,8 @@ fn hover_visual(app: &App) -> HoverVisual {
         configure_button_hover: app.configure_button_hover,
         themes_list_hover: app.themes_list_hover,
         themes_button_hover: app.themes_button_hover,
+        spelling_row_hover: app.spelling.as_ref().and_then(|state| state.row_hover),
+        spelling_button_hover: app.spelling.as_ref().and_then(|state| state.button_hover),
         menu_selected: app.menu_selected,
     }
 }
@@ -309,6 +314,7 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
         || app.show_file_browser
         || app.show_confirm
         || app.show_reload
+        || app.spelling.is_some()
         || app.active_menu.is_some()
     {
         return None;
@@ -655,6 +661,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 PopupFocus::Configure => handle_configure_key(key.code, app),
                                 PopupFocus::Themes => handle_themes_key(key.code, app),
                                 PopupFocus::WordCount => handle_word_count_key(key.code, app),
+                                PopupFocus::Spelling => handle_spelling_key(key.code, app),
                             }
                             continue;
                         }
@@ -662,6 +669,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         match key.code {
                             KeyCode::F(1) => {
                                 app.open_help();
+                            }
+                            KeyCode::F(7) => {
+                                app.open_spelling();
                             }
                             KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::ALT) => {
                                 app.toggle_word_wrap();
@@ -999,6 +1009,10 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
     app.configure_button_hover = None;
     app.themes_list_hover = None;
     app.themes_button_hover = None;
+    if let Some(spelling) = app.spelling.as_mut() {
+        spelling.row_hover = None;
+        spelling.button_hover = None;
+    }
 
     match app.popup_focus() {
         Some(PopupFocus::FileDialog) => {
@@ -1139,6 +1153,30 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
             themes_popup_handle_hover(app, (x as usize, y as usize), (tw, th));
         }
         Some(PopupFocus::Help | PopupFocus::WordCount) => {}
+        Some(PopupFocus::Spelling) => {
+            let suggestions = app
+                .spelling
+                .as_ref()
+                .map(|state| state.suggestions.clone())
+                .unwrap_or_default();
+            match popups::spelling::hit_test(term_area, &suggestions, x, y) {
+                popups::spelling::SpellingHit::Suggestion(index) => {
+                    if let Some(state) = app.spelling.as_mut() {
+                        state.row_hover = Some(index);
+                        state.selected = index;
+                        state.focus = popups::spelling::SpellingFocus::List;
+                    }
+                }
+                popups::spelling::SpellingHit::Button(index) => {
+                    if let Some(state) = app.spelling.as_mut() {
+                        state.button_hover = Some(index);
+                        state.button = index;
+                        state.focus = popups::spelling::SpellingFocus::Buttons;
+                    }
+                }
+                popups::spelling::SpellingHit::Inside | popups::spelling::SpellingHit::Outside => {}
+            }
+        }
         None => {
             // Menus are not a PopupFocus; skip them entirely while a popup owns input.
             if let Some(menu_name) = app.active_menu.as_deref() {
@@ -1465,6 +1503,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                         PopupFocus::WordCount => {
                             app.close_word_count();
                         }
+                        PopupFocus::Spelling => handle_spelling_click(x, y, app),
                     }
                     skip_editor = true;
                 }
@@ -2496,6 +2535,121 @@ fn handle_word_count_key(code: KeyCode, app: &mut App) {
     }
 }
 
+fn handle_spelling_key(code: KeyCode, app: &mut App) {
+    use popups::spelling::SpellingFocus;
+    let (list_len, on_list) = {
+        let Some(state) = app.spelling.as_ref() else {
+            return;
+        };
+        let list_len = state.suggestions.len();
+        (list_len, state.focus == SpellingFocus::List && list_len > 0)
+    };
+    match code {
+        KeyCode::Esc => app.close_spelling(),
+        KeyCode::Tab | KeyCode::BackTab => {
+            if let Some(state) = app.spelling.as_mut() {
+                state.focus = if state.focus == SpellingFocus::List && list_len > 0 {
+                    SpellingFocus::Buttons
+                } else if list_len > 0 {
+                    SpellingFocus::List
+                } else {
+                    SpellingFocus::Buttons
+                };
+                state.row_hover = None;
+                state.button_hover = None;
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(state) = app.spelling.as_mut() {
+                if on_list {
+                    state.selected = if state.selected == 0 {
+                        list_len - 1
+                    } else {
+                        state.selected - 1
+                    };
+                } else {
+                    state.button = if state.button == 0 {
+                        2
+                    } else {
+                        state.button - 1
+                    };
+                    state.focus = SpellingFocus::Buttons;
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(state) = app.spelling.as_mut() {
+                if on_list {
+                    state.selected = (state.selected + 1) % list_len;
+                } else {
+                    state.button = (state.button + 1) % 3;
+                    state.focus = SpellingFocus::Buttons;
+                }
+            }
+        }
+        KeyCode::Left => {
+            if let Some(state) = app.spelling.as_mut() {
+                if !on_list {
+                    state.button = if state.button == 0 {
+                        2
+                    } else {
+                        state.button - 1
+                    };
+                    state.focus = SpellingFocus::Buttons;
+                }
+            }
+        }
+        KeyCode::Right => {
+            if let Some(state) = app.spelling.as_mut() {
+                if !on_list {
+                    state.button = (state.button + 1) % 3;
+                    state.focus = SpellingFocus::Buttons;
+                }
+            }
+        }
+        KeyCode::Enter => {
+            if on_list {
+                let index = app
+                    .spelling
+                    .as_ref()
+                    .map(|state| state.selected)
+                    .unwrap_or(0);
+                app.accept_spelling(index);
+            } else {
+                let button = app.spelling.as_ref().map(|state| state.button).unwrap_or(2);
+                spelling_activate_button(button, app);
+            }
+        }
+        KeyCode::Char('a') => app.spelling_add_word(),
+        KeyCode::Char('i') => app.spelling_ignore(),
+        _ => {}
+    }
+}
+
+fn spelling_activate_button(button: usize, app: &mut App) {
+    match button {
+        0 => app.spelling_add_word(),
+        1 => app.spelling_ignore(),
+        _ => app.close_spelling(),
+    }
+}
+
+fn handle_spelling_click(x: usize, y: usize, app: &mut App) {
+    let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+    let term_area = Rect::new(0, 0, tw, th);
+    let suggestions = app
+        .spelling
+        .as_ref()
+        .map(|state| state.suggestions.clone())
+        .unwrap_or_default();
+    match popups::spelling::hit_test(term_area, &suggestions, x as u16, y as u16) {
+        popups::spelling::SpellingHit::Suggestion(index) => app.accept_spelling(index),
+        popups::spelling::SpellingHit::Button(index) => spelling_activate_button(index, app),
+        popups::spelling::SpellingHit::Outside => app.close_spelling(),
+        popups::spelling::SpellingHit::Inside => {}
+    }
+}
+
 /// True when `(x, y)` is the editor vertical scrollbar column. Header row
 /// last cells (`[+]`, `[>]`) must not be treated as the scrollbar.
 fn is_editor_vscrollbar_col(x: usize, y: usize, term_width: usize) -> bool {
@@ -2513,6 +2667,7 @@ fn any_modal_open(app: &App) -> bool {
         || app.show_file_browser
         || app.show_confirm
         || app.show_reload
+        || app.spelling.is_some()
         || app.active_menu.is_some()
         || app.find_state.is_some()
 }
@@ -2591,6 +2746,8 @@ fn handle_menu_action(app: &mut App) {
         }
         ("Tools", 3) => app.toggle_word_wrap(),
         ("Tools", 4) => app.toggle_line_comment(),
+        ("Tools", 5) => app.toggle_spellcheck(),
+        ("Tools", 6) => app.open_spelling(),
         ("Settings", 0) => app.open_configure(),
         ("Settings", 1) => app.open_themes(),
         ("Settings", 2) => app.open_help(), // Help (F1)
@@ -2670,6 +2827,10 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     if app.show_configure {
         popups::configure::render(f, area, app.current_theme(), app);
+    }
+
+    if app.spelling.is_some() {
+        popups::spelling::render(f, area, app.current_theme(), app);
     }
 
     if app.show_themes {

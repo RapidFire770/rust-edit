@@ -29,6 +29,13 @@ pub struct Theme {
     pub number: ColorDef,
     pub type_name: ColorDef,
     pub accent: ColorDef, // for find highlights, active tab etc.
+    /// Underline color for misspelled words. Older theme files omit it.
+    #[serde(default = "default_spell_error")]
+    pub spell_error: ColorDef,
+}
+
+fn default_spell_error() -> ColorDef {
+    ColorDef::Rgb(220, 60, 60)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -205,6 +212,7 @@ impl Theme {
             number: ColorDef::Rgb(180, 210, 255),
             type_name: ColorDef::Rgb(130, 220, 255),
             accent: ColorDef::Rgb(255, 100, 80),
+            spell_error: ColorDef::Rgb(220, 70, 70),
         }
     }
 
@@ -227,6 +235,7 @@ impl Theme {
             number: ColorDef::Rgb(50, 80, 150),
             type_name: ColorDef::Rgb(30, 110, 140),
             accent: ColorDef::Rgb(200, 70, 50),
+            spell_error: ColorDef::Rgb(178, 34, 34),
         }
     }
 
@@ -249,6 +258,7 @@ impl Theme {
             number: ColorDef::Rgb(120, 200, 255),
             type_name: ColorDef::Rgb(100, 220, 255),
             accent: ColorDef::Rgb(255, 220, 0),
+            spell_error: ColorDef::Rgb(255, 40, 40),
         }
     }
 
@@ -274,6 +284,7 @@ impl Theme {
             number: ColorDef::Rgb(203, 75, 22),          // orange
             type_name: ColorDef::Rgb(181, 137, 0),       // yellow
             accent: ColorDef::Rgb(108, 113, 196),        // violet
+            spell_error: ColorDef::Rgb(220, 50, 47),     // red
         }
     }
 
@@ -299,6 +310,7 @@ impl Theme {
             number: ColorDef::Rgb(210, 210, 210),
             type_name: ColorDef::Rgb(232, 232, 232),
             accent: ColorDef::Rgb(255, 255, 255),
+            spell_error: ColorDef::Rgb(220, 60, 60),
         }
     }
 
@@ -324,6 +336,7 @@ impl Theme {
             number: ColorDef::Rgb(100, 240, 100),
             type_name: ColorDef::Rgb(140, 255, 140),
             accent: ColorDef::Rgb(0, 255, 0),
+            spell_error: ColorDef::Rgb(220, 60, 60),
         }
     }
 
@@ -431,6 +444,18 @@ mod tests {
                 "duplicate theme name '{n}'"
             );
         }
+    }
+
+    #[test]
+    fn missing_spell_error_uses_default_red() {
+        let raw = toml::to_string(&Theme::dark_red()).expect("serialize");
+        let stripped: String = raw
+            .lines()
+            .filter(|line| !line.starts_with("spell_error"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let back: Theme = toml::from_str(&stripped).expect("older theme file");
+        assert_eq!(back.spell_error, ColorDef::Rgb(220, 60, 60));
     }
 
     #[test]

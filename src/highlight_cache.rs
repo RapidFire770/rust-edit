@@ -111,6 +111,16 @@ impl HighlightCache {
         &self.spans
     }
 
+    /// Parse state at the start of the checkpoint at or before `line`.
+    /// The caller replays from the returned line through the line it needs.
+    pub fn resume_at(&self, line: usize) -> Option<(usize, crate::syntax::HighlightSnapshot)> {
+        if self.checkpoints.is_empty() {
+            None
+        } else {
+            Some(self.last_checkpoint_at_or_before(line))
+        }
+    }
+
     pub fn line_spans(&self, logical_line: usize) -> Option<&[Span<'static>]> {
         logical_line
             .checked_sub(self.start_line)

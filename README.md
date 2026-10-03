@@ -129,7 +129,8 @@ The menu bar is **File**, **Tools**, and **Settings**. Alt+F, Alt+T, and Alt+S o
 - Enter and `r` replace the current match and insert the replacement as written. While the bar is open, Ctrl+A replaces every match. An empty replacement leaves the text alone. Replace All on a regular expression expands `$` groups such as `$1`, and it matches case exactly even when the case toggle is off.
 - **Tools → Format Document** formats the current file. The status bar names the formatter that ran (`rustfmt`, `black`, `prettier`, `clang-format`, `gofmt`, `zig`, `perltidy`, `stylua`, `xmllint`, or editor preferences). PHP, Ruby, SQL, INI, TOML, shell, and the other languages without one of those tools use the editor-preferences cleanup. When an external formatter runs and fails, the file is left as it was and a message explains why.
 - **Tools → Word Count** (Alt+W) reports words, characters, and lines for the file. A selection adds the same word and character counts for that span.
-- **Settings → Configure** sets tab size, word wrap, line numbers, and whether unmodified files reload on their own.
+- **Settings → Configure** sets tab size, word wrap, line numbers, spellcheck, and whether unmodified files reload on their own.
+- **Tools → Toggle Spellcheck** is the same switch. While it is on, misspelled words keep their syntax color and gain a red underline. In code, that mark is limited to comments and strings. Markdown, plain text, and reStructuredText check the writing and skip fenced code. Put the cursor on a marked word and press F7, or choose **Tools → Spelling (F7)**. Pick a suggestion with the keyboard or a click. **Add word** saves it in `dictionary.txt` next to `config.toml`. **Ignore** hides that spelling until you quit. Spellcheck uses the SCOWL American English word list.
 - **Settings → Themes** applies a built-in theme or edits a custom one. The editor redraws with the new colors immediately.
 - **Settings → Help** is the same window as F1: Shortcuts, Languages, and About.
 
@@ -159,6 +160,7 @@ F1 lists every shortcut. These are the ones you need on the first day.
 | Help                         | F1                                      |
 | Word count                   | Alt+W                                   |
 | Word wrap                    | Alt+Z                                   |
+| Spelling suggestions         | F7                                      |
 | Toggle comment               | Ctrl+/                                  |
 | Switch to tab 1–9            | Alt+1 … Alt+9                           |
 | Open File / Tools / Settings | Alt+F / Alt+T / Alt+S                   |
@@ -196,6 +198,7 @@ rust-edit starts from these defaults. Changing a setting, or opening a file, wri
 | Word wrap       | Off                   | `word_wrap`            |
 | Line numbers    | On                    | `show_line_numbers`    |
 | Auto-reload all | Off                   | `auto_reload_all`      |
+| Spellcheck      | Off                   | `spellcheck`           |
 | Theme           | Dark Red              | `theme` = `"dark-red"` |
 
 Theme names in that file are `dark-red`, `light`, `high-contrast`, `solarized`, `monochrome`, and `terminal-green`, plus the name of any theme you create. The editor also keeps up to 10 recent file paths in the same file. Uninstall leaves this directory alone.

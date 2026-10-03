@@ -829,6 +829,23 @@ impl Buffer {
         self.adjust_scroll();
     }
 
+    /// Replace `[range.start, range.end)` with `text` as one undo step.
+    /// The cursor lands just after the new text.
+    pub fn replace_byte_range(&mut self, range: Range<usize>, text: &str) {
+        let len = self.rope.len_bytes();
+        let start = range.start.min(len);
+        let end = range.end.min(len).max(start);
+        self.push_undo();
+        self.selection = None;
+        self.selection_anchor = None;
+        self.remove_byte_range(start, end);
+        self.insert_at_byte(start, text);
+        self.cursor = start + text.len();
+        self.is_modified = true;
+        self.bump_generation();
+        self.adjust_scroll();
+    }
+
     /// Delete the char after cursor (delete key).
     pub fn delete(&mut self) {
         self.push_undo();
@@ -2314,6 +2331,17 @@ mod tests {
         assert!(b.can_redo());
         b.redo();
         assert_eq!(b.text(), "hello");
+    }
+
+    #[test]
+    fn replace_byte_range_is_one_undo_and_lands_after_the_new_word() {
+        let mut buf = Buffer::from_str("say teh now", None);
+        buf.replace_byte_range(4..7, "the");
+        assert_eq!(buf.text(), "say the now");
+        assert_eq!(buf.cursor, 7);
+        buf.undo();
+        assert_eq!(buf.text(), "say teh now");
+        assert_eq!(buf.cursor, 0);
     }
 
     #[test]

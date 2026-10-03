@@ -1,13 +1,14 @@
 // Batch highlight tokens into ratatui spans (hscroll / selection / wrap clip).
 // Splits only at those edges — never one Span per character unless styles differ.
 
-use ratatui::style::Style;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use std::ops::Range;
 
 /// Turn highlight token spans into batched ratatui spans.
 /// Splits only at hscroll, selection edges, and optional absolute-byte clip
 /// (wrapped sub-rows). Never one Span per character unless styles actually differ.
+#[allow(clippy::too_many_arguments)] // clip, selection, and spell marks share one paint loop
 pub fn paint_line_spans(
     highlight: &[Span<'static>],
     line_start_byte: usize,
@@ -15,6 +16,8 @@ pub fn paint_line_spans(
     selection: Option<&Range<usize>>,
     selection_style: Style,
     byte_clip: Option<Range<usize>>,
+    misspellings: &[Range<usize>],
+    spell_color: Color,
 ) -> Vec<Span<'static>> {
     let mut out: Vec<Span<'static>> = Vec::new();
     let mut run = String::new();
@@ -31,11 +34,15 @@ pub fn paint_line_spans(
                     .is_none_or(|clip| clip.contains(&abs_byte));
             if visible {
                 let selected = selection.is_some_and(|sel| sel.contains(&abs_byte));
-                let style = if selected {
-                    sp.style.patch(selection_style)
-                } else {
-                    sp.style
-                };
+                let mut style = sp.style;
+                if misspellings.iter().any(|range| range.contains(&abs_byte)) {
+                    style = style
+                        .add_modifier(Modifier::UNDERLINED)
+                        .underline_color(spell_color);
+                }
+                if selected {
+                    style = style.patch(selection_style);
+                }
                 match run_style {
                     Some(prev) if prev != style => {
                         out.push(Span::styled(std::mem::take(&mut run), prev));
@@ -77,7 +84,7 @@ pub fn paint_line_spans(
 #[cfg(test)]
 mod tests {
     use super::paint_line_spans;
-    use ratatui::style::{Color, Style};
+    use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::Span;
 
     fn hl(text: &str, color: Color) -> Span<'static> {
@@ -93,6 +100,8 @@ mod tests {
             None,
             Style::default(),
             None,
+            &[],
+            Color::Red,
         );
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].content, "fn ");
@@ -109,6 +118,8 @@ mod tests {
             Some(&sel),
             Style::default().bg(Color::Blue),
             None,
+            &[],
+            Color::Red,
         );
         let joined: String = out.iter().map(|s| s.content.clone().into_owned()).collect();
         assert_eq!(joined, "fn main()");
@@ -125,6 +136,8 @@ mod tests {
             None,
             Style::default(),
             None,
+            &[],
+            Color::Red,
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].content, "efghij");
@@ -140,6 +153,8 @@ mod tests {
             None,
             Style::default(),
             Some(3..7),
+            &[],
+            Color::Red,
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].content, "defg");
@@ -149,7 +164,7 @@ mod tests {
     fn empty_highlight_emits_selection_space() {
         let sel = 0..1;
         let style = Style::default().bg(Color::Blue);
-        let out = paint_line_spans(&[], 0, 0, Some(&sel), style, None);
+        let out = paint_line_spans(&[], 0, 0, Some(&sel), style, None, &[], Color::Red);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].content, " ");
         assert_eq!(out[0].style, style);
@@ -159,7 +174,16 @@ mod tests {
     fn empty_content_span_still_emits_selection_space() {
         let sel = 0..1;
         let style = Style::default().bg(Color::Blue);
-        let out = paint_line_spans(&[Span::raw("")], 0, 0, Some(&sel), style, None);
+        let out = paint_line_spans(
+            &[Span::raw("")],
+            0,
+            0,
+            Some(&sel),
+            style,
+            None,
+            &[],
+            Color::Red,
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].content, " ");
         assert_eq!(out[0].style, style);
@@ -170,7 +194,16 @@ mod tests {
         // Continuation rows: clip does not contain line_start_byte.
         let sel = 0..1;
         let style = Style::default().bg(Color::Blue);
-        let out = paint_line_spans(&[Span::raw("")], 0, 0, Some(&sel), style, Some(1..5));
+        let out = paint_line_spans(
+            &[Span::raw("")],
+            0,
+            0,
+            Some(&sel),
+            style,
+            Some(1..5),
+            &[],
+            Color::Red,
+        );
         assert!(out.is_empty());
     }
 
@@ -178,9 +211,40 @@ mod tests {
     fn empty_content_span_emits_when_clip_contains_line_start() {
         let sel = 0..1;
         let style = Style::default().bg(Color::Blue);
-        let out = paint_line_spans(&[Span::raw("")], 0, 0, Some(&sel), style, Some(0..1));
+        let out = paint_line_spans(
+            &[Span::raw("")],
+            0,
+            0,
+            Some(&sel),
+            style,
+            Some(0..1),
+            &[],
+            Color::Red,
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].content, " ");
         assert_eq!(out[0].style, style);
+    }
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn misspelling_underlines_only_that_word_and_keeps_selection() {
+        let out = paint_line_spans(
+            &[hl("say teh now", Color::White)],
+            0,
+            0,
+            Some(&(0..3)),
+            Style::default().bg(Color::Blue),
+            None,
+            &[4..7],
+            Color::Red,
+        );
+        let teh = out.iter().find(|span| span.content == "teh").unwrap();
+        assert!(teh.style.add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(teh.style.underline_color, Some(Color::Red));
+        assert_eq!(teh.style.fg, Some(Color::White));
+        let say = out.iter().find(|span| span.content == "say").unwrap();
+        assert!(!say.style.add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(say.style.bg, Some(Color::Blue));
     }
 }
