@@ -3,7 +3,7 @@
 **Project:** Rust-Edit — Feature-rich terminal text & code editor (TUI)  
 **Primary Framework:** Ratatui v0.30+  
 **Status:** Phase 1 complete (June 2026). MVP + high-value additions shipped.   
-**Last Updated:** September 30, 2026
+**Last Updated:** October 4, 2026
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
 
@@ -11,12 +11,14 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
 
 - Always check available skills and invoke them when relevant to the user's request.
 - Delete dead or obsolete code, unreachable code, or functions that are never called.
-- For smaller tasks and small changes, you can preform them on the the main git branch instead of using a worktree. Use a code reviewer subagent to review the work afterward and create a commit once work is validated.
-- For large tasks always use the subagent-driven-development skill, if a git worktree is not setup, configure one in a .worktrees folder before handoff to the subagent.
+- Code must look hand-written for this repository. Changes that read like generic AI-generated code will be rejected automatically: unnecessary helper layers, vague names, boilerplate comments, defensive branches without a real failure mode, broad rewrites, or code that ignores the local style.
+- For small changes, they can be preformed on the the main git branch instead of using a worktree. Use a subagent to implement each step of a plan then use a code reviewer subagent to review the work afterward and create a commit once work is validated.
+- For large multi file changes and refactors always use the subagent-driven-development skill, if a git worktree is not setup, configure one in a .worktrees folder before handoff to the subagent.
+- Verify that any changes do not break existing functionality.
 - Keep this AGENTS.md file updated with information about the project that other AI agents would need to know to keep the project consistent from session to session. (Project layout/structure, technology stack, tool chain, coding standards & style, testing, pitfalls and conflicts to avoid, features, etc.)
 - When a bug is fixed or feature is implemented check it off the users `docs/Todo-List.md` and include it in the commit for for the final work.
 
-**Mandatory first step for any task:** Read the full Design Specification (`docs/Rust-Edit-Design-Specification-2026-06-24.md` or the version provided with this task). It contains the prioritized scope, UI rules, tradeoffs, and data model. This document is outdated, changes in the AGENTS.md takes priorty over the original design spec. 
+- AGENTS.md takes priorty over the original design spec (`docs/Rust-Edit-Design-Specification-2026-06-24.md`) as it has become outdated.
 
 ---
 
