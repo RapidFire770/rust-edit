@@ -891,27 +891,27 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             }
                             KeyCode::Up => {
                                 let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                                let vis = app.editor_visible_lines.get().max(1);
-                                app.active_buffer_mut().move_lines_up(1, extend);
                                 if app.config.word_wrap {
                                     if let Some(layout) = active_wrap_layout(app) {
                                         app.active_buffer_mut()
-                                            .ensure_cursor_visible_wrapped(&layout, vis);
+                                            .move_screen_rows(&layout, -1, extend);
                                     }
                                 } else {
+                                    let vis = app.editor_visible_lines.get().max(1);
+                                    app.active_buffer_mut().move_lines_up(1, extend);
                                     app.active_buffer_mut().ensure_cursor_visible(vis);
                                 }
                             }
                             KeyCode::Down => {
                                 let extend = key.modifiers.contains(KeyModifiers::SHIFT);
-                                let vis = app.editor_visible_lines.get().max(1);
-                                app.active_buffer_mut().move_lines_down(1, extend);
                                 if app.config.word_wrap {
                                     if let Some(layout) = active_wrap_layout(app) {
                                         app.active_buffer_mut()
-                                            .ensure_cursor_visible_wrapped(&layout, vis);
+                                            .move_screen_rows(&layout, 1, extend);
                                     }
                                 } else {
+                                    let vis = app.editor_visible_lines.get().max(1);
+                                    app.active_buffer_mut().move_lines_down(1, extend);
                                     app.active_buffer_mut().ensure_cursor_visible(vis);
                                 }
                             }

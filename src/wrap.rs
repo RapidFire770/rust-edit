@@ -220,10 +220,81 @@ pub fn screen_row_of_byte(
     layout.total_screen_rows.saturating_sub(1)
 }
 
+/// Display column of `byte` within its screen row. Newlines add no column.
+/// A tab's column is the column where that tab begins, matching
+/// `byte_of_screen_row` (a column inside a tab maps back to the tab byte).
+pub fn screen_col_of_byte(
+    layout: &WrapLayout,
+    rope: &Rope,
+    start_line: usize,
+    byte: usize,
+) -> usize {
+    if layout.breaks.is_empty() {
+        return 0;
+    }
+    let tab = layout.tab_size.max(1) as usize;
+    for (i, line_breaks) in layout.breaks.iter().enumerate() {
+        let lidx = start_line + i;
+        if lidx >= rope.len_lines() {
+            break;
+        }
+        let line_start = rope.line_to_byte(lidx);
+        let line_end = if lidx + 1 < rope.len_lines() {
+            rope.line_to_byte(lidx + 1)
+        } else {
+            rope.len_bytes()
+        };
+        if byte < line_end {
+            let mut sub_start = line_start;
+            for &brk in line_breaks {
+                if byte < brk {
+                    break;
+                }
+                sub_start = brk;
+            }
+            return display_col_between(rope, sub_start, byte, tab);
+        }
+    }
+    // Past the window: column at the end of the last screen row.
+    let last = layout.breaks.len() - 1;
+    let lidx = start_line + last;
+    if lidx >= rope.len_lines() {
+        return 0;
+    }
+    let line_start = rope.line_to_byte(lidx);
+    let line_end = if lidx + 1 < rope.len_lines() {
+        rope.line_to_byte(lidx + 1)
+    } else {
+        rope.len_bytes()
+    };
+    let sub_start = layout.breaks[last].last().copied().unwrap_or(line_start);
+    display_col_between(rope, sub_start, line_end, tab)
+}
+
+/// Display columns in `[start, end)`, stopping at a newline. Tabs advance to
+/// the next multiple of `tab`, same as `wrap_one_line`.
+fn display_col_between(rope: &Rope, start: usize, end: usize, tab: usize) -> usize {
+    if start >= end || start >= rope.len_bytes() {
+        return 0;
+    }
+    let end = end.min(rope.len_bytes());
+    let mut col = 0usize;
+    for ch in rope.byte_slice(start..end).chars() {
+        if ch == '\n' || ch == '\r' {
+            break;
+        }
+        let advance = if ch == '\t' { tab - (col % tab) } else { 1 };
+        col += advance;
+    }
+    col
+}
+
 /// Byte offset of the cursor placed at (`screen_row`, `col`) within the layout's
 /// window. `screen_row` is relative to window start; `col` is display columns
 /// from the start of that sub-row (already gutter-adjusted; wrap has no hscroll).
-/// Clamps `col` to the sub-row's actual width.
+/// Clamps `col` to the sub-row's actual width. On a non-final row the clamp sits
+/// on the last character of that row: the break byte itself belongs to the next
+/// row, so a caret there would skip the short row.
 pub fn byte_of_screen_row(
     layout: &WrapLayout,
     rope: &Rope,
@@ -260,13 +331,27 @@ pub fn byte_of_screen_row(
         } else {
             line_end
         };
-        return walk_sub_row_to_col(
+        let byte = walk_sub_row_to_col(
             rope,
             sub_row_start_byte,
             sub_row_end_byte,
             col,
             layout.tab_size as usize,
         );
+        // A non-final row ends at the next row's first byte. A caret on that
+        // byte is painted on the next row, so a column past this row sits on
+        // its last character instead. The final row may end on the newline.
+        let non_final = row_remaining < line_breaks.len();
+        if non_final && byte >= sub_row_end_byte && sub_row_start_byte < sub_row_end_byte {
+            let end_char = rope.byte_to_char(sub_row_end_byte.min(rope.len_bytes()));
+            if end_char > 0 {
+                let prev = rope.char_to_byte(end_char - 1);
+                if prev >= sub_row_start_byte {
+                    return prev;
+                }
+            }
+        }
+        return byte;
     }
     rope.len_bytes()
 }
@@ -561,6 +646,53 @@ mod tests {
         // Click past end of row 1 → clamp to line end (byte 16, the position of
         // '\n' — cursor sits before the newline).
         assert_eq!(byte_of_screen_row(&l, &rope, 0, 1, 99), 16);
+    }
+
+    #[test]
+    fn byte_of_screen_row_past_a_short_middle_row_stays_on_that_row() {
+        // width 5. Rows are "xxxx ", "y ", "zzzzz". Column 2 is past "y ".
+        // The break after that space is the first byte of "zzzzz", so the
+        // clamp must sit on the space (byte 6), which still belongs to row 1.
+        let rope = Rope::from_str("xxxx y zzzzz\n");
+        let l = compute_layout(&rope, 0, 1, 5, 4);
+        assert_eq!(l.breaks[0], vec![5, 7]);
+        let byte = byte_of_screen_row(&l, &rope, 0, 1, 2);
+        assert_eq!(byte, 6);
+        assert_eq!(screen_row_of_byte(&l, &rope, 0, byte), 1);
+    }
+
+    #[test]
+    fn screen_col_of_byte_round_trips_with_byte_of_screen_row() {
+        // "abcdefghij\nzzzz\n" width 4. No spaces, so each row is 4 columns
+        // until the short tail: rows "abcd" "efgh" "ij", then "zzzz".
+        let rope = Rope::from_str("abcdefghij\nzzzz\n");
+        let l = compute_layout(&rope, 0, 2, 4, 4);
+        assert_eq!(l.breaks[0], vec![4, 8]);
+        for byte in 0..rope.len_bytes() {
+            let row = screen_row_of_byte(&l, &rope, 0, byte);
+            let col = screen_col_of_byte(&l, &rope, 0, byte);
+            assert_eq!(
+                byte_of_screen_row(&l, &rope, 0, row, col),
+                byte,
+                "byte {byte} on row {row} col {col}"
+            );
+        }
+    }
+
+    #[test]
+    fn screen_col_of_byte_tab_reports_the_tab_start_column() {
+        // "\tab cd\n" width 12, tab 4. The tab occupies cols 0..4.
+        let rope = Rope::from_str("\tab cd\n");
+        let l = compute_layout(&rope, 0, 1, 12, 4);
+        assert_eq!(screen_col_of_byte(&l, &rope, 0, 0), 0);
+        assert_eq!(screen_col_of_byte(&l, &rope, 0, 1), 4); // 'a'
+        assert_eq!(screen_col_of_byte(&l, &rope, 0, 2), 5); // 'b'
+                                                            // A column inside the tab still maps to the tab byte, whose column is 0.
+        assert_eq!(byte_of_screen_row(&l, &rope, 0, 0, 2), 0);
+        assert_eq!(
+            screen_col_of_byte(&l, &rope, 0, byte_of_screen_row(&l, &rope, 0, 0, 2)),
+            0
+        );
     }
 
     /// Regression for Critical-1: under wrap, `ui()` must translate the

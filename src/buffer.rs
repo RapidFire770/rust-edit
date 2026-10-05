@@ -1582,15 +1582,39 @@ impl Buffer {
         }
     }
 
+    /// Move by `delta` screen rows (negative is up). Keeps the display column
+    /// inside the current screen row. A no-op at the first or last screen row
+    /// leaves the selection alone.
+    pub fn move_screen_rows(
+        &mut self,
+        layout: &crate::wrap::WrapLayout,
+        delta: isize,
+        extend_selection: bool,
+    ) {
+        if delta == 0 || layout.total_screen_rows == 0 {
+            return;
+        }
+        let row = crate::wrap::screen_row_of_byte(layout, &self.rope, 0, self.cursor);
+        let col = crate::wrap::screen_col_of_byte(layout, &self.rope, 0, self.cursor);
+        let last = layout.total_screen_rows - 1;
+        let target = if delta < 0 {
+            row.saturating_sub(delta.unsigned_abs())
+        } else {
+            row.saturating_add(delta as usize).min(last)
+        };
+        if target == row {
+            return;
+        }
+        self.place_on_screen_row(layout, target, col, extend_selection);
+        self.ensure_cursor_visible_wrapped(layout, self.visible_lines.max(1));
+    }
+
     /// Page up/down under wrap. `layout` is the buffer's full wrap layout.
     ///
-    /// Places the cursor on the logical line whose first screen row is at or
-    /// before the new top-of-viewport screen row, preserving the preferred
-    /// column. The target byte is computed directly WITHOUT routing through
-    /// `move_to_line` (which ends with `adjust_scroll`, treating
-    /// `scroll_offset.0` as a logical-line index and corrupting the
-    /// screen-row invariant — final-review Important-2). It also resolves the
-    /// discarded-`cursor_row` Minor-4.
+    /// Scrolls by a page of screen rows, then puts the caret on the screen row
+    /// that keeps its distance from the top of the viewport, at the same
+    /// display column. Does not go through `move_to_line`: that seeks a
+    /// logical line and skips wrapped continuations.
     pub fn page_wrapped(
         &mut self,
         layout: &crate::wrap::WrapLayout,
@@ -1598,53 +1622,49 @@ impl Buffer {
         vis: usize,
         extend_selection: bool,
     ) {
+        if layout.total_screen_rows == 0 {
+            return;
+        }
+        let vis = vis.max(1);
         let page = vis.saturating_sub(1).max(1) as isize;
-        let old_scroll = self.scroll_offset.0 as isize;
+        let old_scroll = self.scroll_offset.0;
+        let row = crate::wrap::screen_row_of_byte(layout, &self.rope, 0, self.cursor);
+        let col = crate::wrap::screen_col_of_byte(layout, &self.rope, 0, self.cursor);
+        let rel = row.saturating_sub(old_scroll);
         let total = layout.total_screen_rows as isize;
         let max = total.saturating_sub(1);
         let new_scroll = if down {
-            (old_scroll + page).min(max)
+            (old_scroll as isize + page).min(max)
         } else {
-            (old_scroll - page).max(0)
+            (old_scroll as isize - page).max(0)
         } as usize;
+        let last = layout.total_screen_rows - 1;
+        let place = new_scroll.saturating_add(rel).min(last);
         self.scroll_offset.0 = new_scroll;
+        self.place_on_screen_row(layout, place, col, extend_selection);
+        self.ensure_cursor_visible_wrapped(layout, vis);
+    }
 
-        // Find the logical line whose first screen row is at or before
-        // `new_scroll` (the new top of the viewport).
-        let mut acc = 0usize;
-        let mut target_line = 0usize;
-        for (i, line_breaks) in layout.breaks.iter().enumerate() {
-            let rows = line_breaks.len() + 1;
-            if acc + rows > new_scroll {
-                target_line = i;
-                break;
-            }
-            acc += rows;
-        }
-
-        // Compute the target byte on `target_line` at the preferred column
-        // (clamped to the line's char width) and set cursor + selection
-        // directly, bypassing `move_to_line` → `adjust_scroll`.
-        let preferred_col = self.cursor_position().1;
-        let line_start_byte = self.rope.line_to_byte(target_line);
-        let line_str = self.line(target_line);
-        let line_str = line_str.trim_end_matches(['\n', '\r']);
-        let target_col = preferred_col.min(line_str.chars().count());
-        let mut byte_off = line_start_byte;
-        for (i, c) in line_str.chars().enumerate() {
-            if i >= target_col {
-                break;
-            }
-            byte_off += c.len_utf8();
+    fn place_on_screen_row(
+        &mut self,
+        layout: &crate::wrap::WrapLayout,
+        screen_row: usize,
+        col: usize,
+        extend_selection: bool,
+    ) {
+        let byte = crate::wrap::byte_of_screen_row(layout, &self.rope, 0, screen_row, col);
+        // An empty screen row (a tab wider than the wrap width) has no byte
+        // of its own. Leave the caret and the selection where they are.
+        let landed = crate::wrap::screen_row_of_byte(layout, &self.rope, 0, byte);
+        if landed != screen_row {
+            return;
         }
         if extend_selection {
-            self.extend_selection_to(byte_off);
+            self.extend_selection_to(byte);
         } else {
             self.clear_selection();
         }
-        self.cursor = byte_off;
-        // Correct the scroll if the cursor's screen row now falls outside the view.
-        self.ensure_cursor_visible_wrapped(layout, vis);
+        self.cursor = byte;
     }
 }
 
@@ -2549,6 +2569,146 @@ mod tests {
             b.scroll_offset.0, 5,
             "cursor above wrap top should snap to that screen row"
         );
+    }
+
+    fn layout_width4(b: &Buffer) -> crate::wrap::WrapLayout {
+        crate::wrap::compute_layout(&b.rope, 0, b.line_count(), 4, b.tab_size)
+    }
+
+    #[test]
+    fn move_screen_rows_steps_through_wrapped_line() {
+        let mut b = Buffer::from_str("abcdefghij\nzzzz\n", None);
+        b.tab_size = 4;
+        let layout = layout_width4(&b);
+        assert_eq!(layout.breaks[0], vec![4, 8]);
+
+        b.move_screen_rows(&layout, 1, false);
+        assert_eq!(b.cursor, 4, "down stays on the continuation");
+        b.move_screen_rows(&layout, 1, false);
+        assert_eq!(b.cursor, 8);
+        b.move_screen_rows(&layout, 1, false);
+        assert_eq!(b.cursor, 11, "third down reaches zzzz");
+        b.move_screen_rows(&layout, -1, false);
+        assert_eq!(b.cursor, 8);
+        b.move_screen_rows(&layout, -1, false);
+        assert_eq!(b.cursor, 4);
+        b.move_screen_rows(&layout, -1, false);
+        assert_eq!(b.cursor, 0);
+    }
+
+    #[test]
+    fn move_screen_rows_keeps_display_column() {
+        let mut b = Buffer::from_str("abcdefghij\nzzzz\n", None);
+        b.tab_size = 4;
+        b.cursor = 2;
+        let layout = layout_width4(&b);
+        b.move_screen_rows(&layout, 1, false);
+        assert_eq!(b.cursor, 6);
+    }
+
+    #[test]
+    fn move_screen_rows_clamps_short_row_then_keeps_that_column() {
+        // width 4: "abcd" / "efgh" / "i", then "abcd" / "efgh" / "ij".
+        let mut b = Buffer::from_str("abcdefghi\nabcdefghij\n", None);
+        b.tab_size = 4;
+        b.cursor = 2;
+        let layout = layout_width4(&b);
+        b.move_screen_rows(&layout, 1, false);
+        assert_eq!(b.cursor, 6);
+        b.move_screen_rows(&layout, 1, false);
+        // "i" is one column. Column 2 clamps to the newline (byte 9).
+        assert_eq!(b.cursor, 9);
+        b.move_screen_rows(&layout, 1, false);
+        // Next row keeps the clamped column (1), so this is 'b', not 'c'.
+        assert_eq!(b.cursor, 11);
+    }
+
+    #[test]
+    fn move_screen_rows_clamps_onto_a_short_middle_row() {
+        // width 5. Rows: "xxxx ", "y ", "zzzzz". From the third x (col 2),
+        // Down must land on "y ", not on the z that starts the next row.
+        let mut b = Buffer::from_str("xxxx y zzzzz\n", None);
+        b.tab_size = 4;
+        b.cursor = 2;
+        let layout = crate::wrap::compute_layout(&b.rope, 0, b.line_count(), 5, 4);
+        b.move_screen_rows(&layout, 1, false);
+        assert_eq!(b.cursor, 6);
+        assert_eq!(
+            crate::wrap::screen_row_of_byte(&layout, &b.rope, 0, b.cursor),
+            1
+        );
+    }
+
+    #[test]
+    fn move_screen_rows_at_ends_does_not_touch_selection() {
+        let mut b = Buffer::from_str("abcdefghij\nzzzz\n", None);
+        b.tab_size = 4;
+        b.cursor = 2;
+        b.move_cursor(-1, true);
+        let cursor = b.cursor;
+        let selection = b.selection.clone();
+        let anchor = b.selection_anchor;
+        let layout = layout_width4(&b);
+        b.move_screen_rows(&layout, -1, false);
+        assert_eq!(b.cursor, cursor);
+        assert_eq!(b.selection, selection);
+        assert_eq!(b.selection_anchor, anchor);
+
+        // A trailing newline is its own empty screen row. That row is last.
+        b.clear_selection();
+        let last = layout.total_screen_rows - 1;
+        b.cursor = crate::wrap::byte_of_screen_row(&layout, &b.rope, 0, last, 0);
+        b.move_cursor(0, true);
+        let cursor = b.cursor;
+        let selection = b.selection.clone();
+        let anchor = b.selection_anchor;
+        b.move_screen_rows(&layout, 1, false);
+        assert_eq!(b.cursor, cursor);
+        assert_eq!(b.selection, selection);
+        assert_eq!(b.selection_anchor, anchor);
+    }
+
+    #[test]
+    fn move_screen_rows_shift_down_extends_selection() {
+        let mut b = Buffer::from_str("abcdefghij\n", None);
+        b.tab_size = 4;
+        b.cursor = 1;
+        let layout = layout_width4(&b);
+        b.move_screen_rows(&layout, 1, true);
+        assert_eq!(b.cursor, 5);
+        assert_eq!(b.selection.clone(), Some(1..5));
+        assert_eq!(b.selection_anchor, Some(1));
+    }
+
+    #[test]
+    fn page_wrapped_lands_on_the_screen_row_a_page_down() {
+        // 80 lines of 40 x's. Width 20 → two screen rows per line.
+        let text = (0..80)
+            .map(|_| "x".repeat(40))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut b = Buffer::from_str(&text, None);
+        b.visible_lines = 20;
+        b.visible_width = 20;
+        b.word_wrap = true;
+        b.tab_size = 4;
+        b.cursor = 5;
+        b.scroll_offset = (0, 0);
+        let layout = crate::wrap::compute_layout(&b.rope, 0, b.line_count(), 20, 4);
+        b.page_wrapped(&layout, true, 20, false);
+        // page = 19, rel = 0, place = screen row 19, column 5.
+        // Line 9's second row starts at byte 9*41 + 20.
+        let row = crate::wrap::screen_row_of_byte(&layout, &b.rope, 0, b.cursor);
+        assert_eq!(row, 19);
+        assert_eq!(b.cursor, 9 * 41 + 20 + 5);
+        assert_eq!(b.scroll_offset.0, 19);
+        assert!(b.selection.is_none());
+
+        b.page_wrapped(&layout, false, 20, false);
+        let row = crate::wrap::screen_row_of_byte(&layout, &b.rope, 0, b.cursor);
+        assert_eq!(row, 0);
+        assert_eq!(b.cursor, 5);
+        assert_eq!(b.scroll_offset.0, 0);
     }
 
     #[test]

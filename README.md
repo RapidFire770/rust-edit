@@ -178,7 +178,7 @@ Ctrl+/ comments or uncomments the current line, or the selected lines.
 
 JSON, Diff, reStructuredText, and plain text have no comment syntax. The status bar says so.
 
-Shift with the arrow keys, Home, End, Page Up, or Page Down extends the selection. Page Up and Page Down move by a page. Alt+H and Alt+L scroll sideways.
+Shift with the arrow keys, Home, End, Page Up, or Page Down extends the selection. Page Up and Page Down move by a page. With word wrap on, Up and Down move through each wrapped row of a long line. Alt+H and Alt+L scroll sideways.
 
 ## Mouse
 
