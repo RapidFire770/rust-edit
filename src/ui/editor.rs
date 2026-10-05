@@ -145,6 +145,7 @@ fn render_unwrapped(
             continue;
         };
         let line_start_byte = buf.rope.line_to_byte(line_idx);
+        let spell = app.spell_ranges_for_line(line_idx);
         let mut spans = vec![Span::styled(gutter, theme.line_number_style())];
         spans.extend(paint_line_spans(
             hline,
@@ -153,7 +154,7 @@ fn render_unwrapped(
             buf.selection.as_ref(),
             theme.selection_style(),
             None,
-            app.spell_cache.line_ranges(line_idx),
+            spell.as_ref(),
             Color::from(&theme.spell_error),
         ));
         lines.push(Line::from(spans));
@@ -242,6 +243,7 @@ fn render_wrapped(
                 lines.push(Line::from(vec![gutter]));
                 continue;
             };
+            let spell = app.spell_ranges_for_line(lidx);
             let mut spans = vec![gutter];
             spans.extend(paint_line_spans(
                 hline,
@@ -250,7 +252,7 @@ fn render_wrapped(
                 buf.selection.as_ref(),
                 theme.selection_style(),
                 Some(sub_start_byte..sub_end_byte),
-                app.spell_cache.line_ranges(lidx),
+                spell.as_ref(),
                 Color::from(&theme.spell_error),
             ));
             lines.push(Line::from(spans));

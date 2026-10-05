@@ -7,6 +7,7 @@ use std::io::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxSet};
 
@@ -435,6 +436,47 @@ pub fn misspelling_at(ranges: &[Range<usize>], cursor: usize) -> Option<Range<us
         .iter()
         .find(|range| cursor >= range.start && cursor <= range.end)
         .cloned()
+}
+
+/// Underline delay for the single word the caret is still composing.
+pub const SPELL_SETTLE: Duration = Duration::from_millis(750);
+
+/// That word, as an absolute buffer byte range, and when the pause started.
+pub struct SpellHold {
+    pub buffer_id: u64,
+    pub range: Range<usize>,
+    pub since: Instant,
+}
+
+/// Spellcheck token that contains `cursor_in_line`, or that ends exactly on it.
+///
+/// `cursor_in_line` is a byte offset into `line` (no trailing newline). A caret
+/// sitting just after the last letter matches; a caret after a following space
+/// does not.
+pub fn word_at_cursor(line: &str, cursor_in_line: usize) -> Option<Range<usize>> {
+    word_ranges(line)
+        .into_iter()
+        .find(|range| cursor_in_line >= range.start && cursor_in_line <= range.end)
+}
+
+/// Drop the held word while its pause is still running. Every other range stays.
+///
+/// A range is omitted only when it equals the hold, the buffer id matches, and
+/// `elapsed < SPELL_SETTLE`.
+pub fn omit_held_misspelling(
+    ranges: &[Range<usize>],
+    hold: Option<&SpellHold>,
+    buffer_id: u64,
+    elapsed: Duration,
+) -> Vec<Range<usize>> {
+    match hold {
+        Some(hold) if hold.buffer_id == buffer_id && elapsed < SPELL_SETTLE => ranges
+            .iter()
+            .filter(|range| **range != hold.range)
+            .cloned()
+            .collect(),
+        _ => ranges.to_vec(),
+    }
 }
 
 fn stack_checkable(stack: &ScopeStack, kind: SpellKind) -> bool {
@@ -921,5 +963,61 @@ mod tests {
         assert_eq!(misspelling_at(&ranges, 5), Some(2..5));
         assert_eq!(misspelling_at(&ranges, 6), None);
         assert_eq!(misspelling_at(&ranges, 1), None);
+    }
+
+    #[test]
+    fn word_at_cursor_matches_inside_end_space_apostrophe_and_hyphen() {
+        assert_eq!(word_at_cursor("recieve", 3), Some(0..7));
+        assert_eq!(word_at_cursor("recieve", 7), Some(0..7));
+        assert_eq!(word_at_cursor("recieve", 0), Some(0..7));
+        assert_eq!(word_at_cursor("recieve ", 8), None);
+        assert_eq!(word_at_cursor("don't", 3), Some(0..5));
+        assert_eq!(word_at_cursor("don't", 5), Some(0..5));
+        assert_eq!(word_at_cursor("don't ", 6), None);
+        assert_eq!(word_at_cursor("well-known", 5), Some(0..10));
+        assert_eq!(word_at_cursor("well-known", 10), Some(0..10));
+        assert_eq!(word_at_cursor("well-known ", 11), None);
+        // The token after the space is a different word.
+        assert_eq!(word_at_cursor("don't well-known", 8), Some(6..16));
+    }
+
+    #[test]
+    fn omit_held_misspelling_keeps_the_other_word_until_settle() {
+        let ranges = vec![0..5, 6..16];
+        let hold = SpellHold {
+            buffer_id: 4,
+            range: 0..5,
+            since: Instant::now(),
+        };
+        assert_eq!(
+            omit_held_misspelling(&ranges, Some(&hold), 4, Duration::from_millis(749)),
+            vec![6..16]
+        );
+        assert_eq!(
+            omit_held_misspelling(&ranges, Some(&hold), 4, SPELL_SETTLE),
+            ranges
+        );
+        assert_eq!(
+            omit_held_misspelling(&ranges, Some(&hold), 4, Duration::from_millis(751)),
+            ranges
+        );
+        assert_eq!(
+            omit_held_misspelling(&ranges, Some(&hold), 9, Duration::ZERO),
+            ranges
+        );
+        assert_eq!(
+            omit_held_misspelling(&ranges, None, 4, Duration::ZERO),
+            ranges
+        );
+
+        let hyphen = SpellHold {
+            buffer_id: 4,
+            range: 6..16,
+            since: Instant::now(),
+        };
+        assert_eq!(
+            omit_held_misspelling(&ranges, Some(&hyphen), 4, Duration::from_millis(1)),
+            vec![0..5]
+        );
     }
 }

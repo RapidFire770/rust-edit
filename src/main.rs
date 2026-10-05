@@ -482,6 +482,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             if app.buffers.iter().any(|b| b.path.is_some()) {
                 poll_timeout = poll_timeout.min(DISK_POLL);
             }
+            if let Some(remain) = app.spell_settle_timeout(Instant::now()) {
+                poll_timeout = poll_timeout.min(remain);
+            }
 
             let first = if event::poll(poll_timeout)? {
                 event::read()?
@@ -510,8 +513,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                 let _ = app.check_external_changes();
                 break 'wait;
             } else {
-                // Timed out: blink (if needed) and poll disk stamps.
-                if cursor_should_blink {
+                // Disk poll and the spell-settle wake also land here. Toggle the
+                // caret only when its own interval has elapsed, then redraw so
+                // a held underline can appear without another key.
+                if blink_is_due(last_blink, BLINK_INTERVAL, cursor_should_blink) {
                     cursor_blink_on = !cursor_blink_on;
                     last_blink = Instant::now();
                 }

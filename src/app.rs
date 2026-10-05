@@ -12,6 +12,7 @@ use crate::ui::find::{FindFocus, FindState};
 use crate::utils::clipboard::ClipboardWrapper;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReloadChoice {
@@ -165,6 +166,10 @@ pub struct App {
     pub spell_engine: Option<crate::spellcheck::SpellEngine>,
     /// Misspelling ranges for the highlight window of the active buffer.
     pub spell_cache: crate::spellcheck::SpellCache,
+    /// Word the caret is still composing. Paint hides it; the cache does not.
+    pub spell_hold: Option<crate::spellcheck::SpellHold>,
+    /// Last `(buffer id, generation)` seen by the hold. `None` until the first frame.
+    pub spell_seen: Option<(u64, u64)>,
     /// Open suggestion popup. `None` when it is closed.
     pub spelling: Option<crate::ui::popups::spelling::SpellingState>,
     /// Personal-word list. `None` when it is closed. The word editor, when
@@ -327,6 +332,8 @@ impl App {
             highlight_cache: crate::highlight_cache::HighlightCache::new(),
             spell_engine: None,
             spell_cache: crate::spellcheck::SpellCache::default(),
+            spell_hold: None,
+            spell_seen: None,
             spelling: None,
             dictionary: None,
             #[cfg(test)]
@@ -398,6 +405,7 @@ impl App {
         } else {
             self.refresh_highlight_cache(scroll_row, vis_h);
         }
+        self.sync_spell_hold(Instant::now());
         self.refresh_spell_cache();
     }
 
@@ -1107,6 +1115,116 @@ impl App {
             |index| buf.line(index),
             |index| buf.rope.line_to_byte(index),
         );
+    }
+
+    /// Arm or clear the composing-word hold.
+    ///
+    /// The first sight of a buffer, and a switch to another buffer, only records
+    /// `(id, generation)`. A hold starts on a later generation bump while the
+    /// caret is still in a word. Navigation does not bump generation, so it
+    /// never starts one.
+    fn sync_spell_hold(&mut self, now: Instant) {
+        let id = self.active_buffer().id;
+        let generation = self.active_buffer().generation;
+        if !self.config.spellcheck {
+            // Edits made while spellcheck is off must not look like a fresh edit
+            // when it is turned back on.
+            self.spell_hold = None;
+            self.spell_seen = Some((id, generation));
+            return;
+        }
+        let Some((seen_id, seen_gen)) = self.spell_seen else {
+            self.spell_seen = Some((id, generation));
+            self.spell_hold = None;
+            return;
+        };
+        if seen_id != id {
+            self.spell_hold = None;
+            self.spell_seen = Some((id, generation));
+            return;
+        }
+        if generation != seen_gen {
+            self.spell_seen = Some((id, generation));
+            self.spell_hold =
+                self.composing_word_range()
+                    .map(|range| crate::spellcheck::SpellHold {
+                        buffer_id: id,
+                        range,
+                        since: now,
+                    });
+            return;
+        }
+        let word = self.composing_word_range();
+        let still = self
+            .spell_hold
+            .as_ref()
+            .is_some_and(|hold| hold.buffer_id == id && word.as_ref() == Some(&hold.range));
+        if !still {
+            self.spell_hold = None;
+        }
+    }
+
+    /// Absolute byte range of the token the caret is composing, if any.
+    ///
+    /// `Buffer::line` keeps the trailing break. A caret on that break still
+    /// counts when the word ends at the stripped length.
+    fn composing_word_range(&self) -> Option<std::ops::Range<usize>> {
+        let buf = self.active_buffer();
+        let len = buf.rope.len_bytes();
+        if len == 0 {
+            return None;
+        }
+        let cursor = buf.cursor.min(len);
+        let line = buf.rope.byte_to_line(cursor);
+        let line_start = buf.rope.line_to_byte(line);
+        let raw = buf.line(line);
+        let stripped_len = raw.trim_end_matches(['\n', '\r']).len();
+        let stripped = &raw[..stripped_len];
+        let cursor_in_line = cursor.saturating_sub(line_start).min(stripped_len);
+        let local = crate::spellcheck::word_at_cursor(stripped, cursor_in_line)?;
+        Some((local.start + line_start)..(local.end + line_start))
+    }
+
+    /// Misspellings to paint. The cache stays complete; the composing word is
+    /// omitted until its pause ends.
+    pub fn spell_ranges_for_line(
+        &self,
+        line: usize,
+    ) -> std::borrow::Cow<'_, [std::ops::Range<usize>]> {
+        let ranges = self.spell_cache.line_ranges(line);
+        let Some(hold) = self.spell_hold.as_ref() else {
+            return std::borrow::Cow::Borrowed(ranges);
+        };
+        let buffer_id = self.active_buffer().id;
+        let elapsed = Instant::now().saturating_duration_since(hold.since);
+        if hold.buffer_id != buffer_id
+            || elapsed >= crate::spellcheck::SPELL_SETTLE
+            || !ranges.iter().any(|range| range == &hold.range)
+        {
+            return std::borrow::Cow::Borrowed(ranges);
+        }
+        std::borrow::Cow::Owned(crate::spellcheck::omit_held_misspelling(
+            ranges,
+            Some(hold),
+            buffer_id,
+            elapsed,
+        ))
+    }
+
+    /// Remaining pause for the active buffer's hold. `None` so the poll does
+    /// not wake early, including when the remaining time is already zero.
+    pub fn spell_settle_timeout(&self, now: Instant) -> Option<Duration> {
+        let hold = self.spell_hold.as_ref()?;
+        if hold.buffer_id != self.active_buffer().id {
+            return None;
+        }
+        let remain = crate::spellcheck::SPELL_SETTLE
+            .saturating_sub(now.saturating_duration_since(hold.since));
+        if remain.is_zero() {
+            None
+        } else {
+            Some(remain)
+        }
     }
 
     pub fn open_spelling(&mut self) {
@@ -2706,6 +2824,7 @@ mod tests {
     use crate::format::CommandRunner;
     use std::fs;
     use std::path::Path;
+    use std::time::Instant;
 
     fn unique_temp_file(contents: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -4431,6 +4550,108 @@ mod tests {
         assert_eq!(app.format_status.as_deref(), Some("Spellcheck is off"));
     }
 
+    #[test]
+    fn opened_file_shows_a_misspelling_without_holding_it() {
+        let app = plain_spell_app("zzzxnotaword\n");
+        assert!(app.spell_hold.is_none(), "first viewport must not arm");
+        assert!(app.spell_seen.is_some());
+        let painted = app.spell_ranges_for_line(0);
+        assert!(!painted.is_empty());
+        assert_eq!(painted.as_ref(), app.spell_cache.line_ranges(0));
+    }
+
+    #[test]
+    fn typed_word_stays_hidden_until_pause_or_space_and_f7_still_sees_it() {
+        let mut app = plain_spell_app("zzzxnotaword\n");
+        app.active_buffer_mut().cursor = "zzzxnotaword".len();
+        app.active_buffer_mut().insert("x");
+        app.apply_editor_viewport(24, 80);
+
+        let cached = app.spell_cache.line_ranges(0).to_vec();
+        assert_eq!(cached.len(), 1, "cache keeps the composing misspelling");
+        assert_eq!(
+            app.spell_hold.as_ref().map(|hold| hold.range.clone()),
+            Some(cached[0].clone())
+        );
+        assert!(
+            app.spell_ranges_for_line(0).is_empty(),
+            "paint omits the word being typed"
+        );
+        assert_eq!(app.misspelling_ranges_on_line(0), cached);
+        app.spell_hold.as_mut().unwrap().since = Instant::now();
+        assert!(app.spell_settle_timeout(Instant::now()).is_some());
+        app.open_spelling();
+        assert!(
+            app.spelling.is_some(),
+            "F7 reads the unfiltered cache during the hold"
+        );
+        app.close_spelling();
+
+        app.spell_hold.as_mut().unwrap().since = Instant::now() - crate::spellcheck::SPELL_SETTLE;
+        assert!(
+            !app.spell_ranges_for_line(0).is_empty(),
+            "the pause reveals the held word without another edit"
+        );
+        assert!(app.spell_settle_timeout(Instant::now()).is_none());
+        assert!(app.spell_hold.is_some());
+
+        app.active_buffer_mut().insert("y");
+        app.apply_editor_viewport(24, 80);
+        assert!(app.spell_ranges_for_line(0).is_empty());
+        app.active_buffer_mut().insert(" ");
+        app.apply_editor_viewport(24, 80);
+        assert!(app.spell_hold.is_none(), "a space leaves the word");
+        assert_eq!(app.spell_ranges_for_line(0).len(), 1);
+    }
+
+    #[test]
+    fn finished_typo_stays_marked_while_the_caret_composes_another() {
+        let mut app = plain_spell_app("zzzxnotaword qqqnotaword\n");
+        assert!(app.spell_hold.is_none());
+        assert_eq!(app.spell_cache.line_ranges(0).len(), 2);
+        let finished = app.spell_cache.line_ranges(0)[0].clone();
+        app.active_buffer_mut().cursor = "zzzxnotaword qqqnotaword".len();
+        app.active_buffer_mut().insert("z");
+        app.apply_editor_viewport(24, 80);
+        assert!(app.spell_hold.is_some());
+        assert_eq!(app.spell_cache.line_ranges(0).len(), 2);
+        assert_eq!(app.spell_ranges_for_line(0).as_ref(), &[finished]);
+    }
+
+    #[test]
+    fn moving_the_caret_off_the_word_clears_the_hold() {
+        let mut app = plain_spell_app("zzzxnotaword qqqnotaword\n");
+        app.active_buffer_mut().cursor = "zzzxnotaword qqqnotaword".len();
+        app.active_buffer_mut().insert("z");
+        app.apply_editor_viewport(24, 80);
+        assert!(app.spell_hold.is_some());
+        app.active_buffer_mut().cursor = 0;
+        app.apply_editor_viewport(24, 80);
+        assert!(app.spell_hold.is_none());
+        assert_eq!(app.spell_ranges_for_line(0).len(), 2);
+        app.apply_editor_viewport(24, 80);
+        assert!(
+            app.spell_hold.is_none(),
+            "landing on a word without an edit does not arm"
+        );
+    }
+
+    #[test]
+    fn a_different_buffer_clears_the_previous_hold() {
+        let mut app = plain_spell_app("zzzxnotaword\n");
+        app.active_buffer_mut().cursor = "zzzxnotaword".len();
+        app.active_buffer_mut().insert("x");
+        app.apply_editor_viewport(24, 80);
+        assert!(app.spell_hold.is_some());
+        let generation = app.active_buffer().generation;
+        app.spell_seen = Some((app.active_buffer().id.wrapping_add(1), generation));
+        app.apply_editor_viewport(24, 80);
+        assert!(app.spell_hold.is_none());
+        assert!(!app.spell_ranges_for_line(0).is_empty());
+        app.apply_editor_viewport(24, 80);
+        assert!(app.spell_hold.is_none());
+    }
+
     fn dictionary_fixture(text: &str) -> (App, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "rust-edit-dict-app-{}-{}",
@@ -4456,6 +4677,8 @@ mod tests {
         app.open_dictionary();
         assert!(app.dictionary.is_none(), "another popup owns input");
         app.close_help();
+        // App::new reads the real config, which may already have spellcheck on.
+        app.config.set_spellcheck(false);
         assert!(!app.config.spellcheck);
         app.open_dictionary();
         let words = app.dictionary.as_ref().unwrap().words.clone();
