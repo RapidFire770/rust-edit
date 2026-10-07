@@ -2,13 +2,7 @@
 
 ### Minor:
 
-- [x] Find and Find and replace in the tools menu does not need to be shown as separate items since they both open the same function/tool.
-- [x] Tab button should also cycle through the open/save, browse, cancel options in the open and save as popups like you can with the arrow keys.
-- [x] When a file, tool, or settings drop down is open you should be able to use the left and right arrow keys to move between the drop down menus or cycle through them with the tab button.
-- [x] In the themes menus edit theme section we need a small scroll bar or other indicator for the list of items/roles that the user can select and modify the colours of to show that the list is scrollable. Also the preview of the color edits on the right is missing a lot of items, the user can only see what a change may look like after they hit save and leave the edit screen. This makes editing a theme a bit annoying since you have to go in and out of the edit theme popup many times to get the look your trying to achieve, if we can find a solution to display more of the ui elements in the edit preview it would be extremely helpful.
-- [x] The user needs a way to view the custom words they have added to the spell checker dictionary and be able to remove them if they no longer want them.
-- [x] Spellcheck keeps highlighting words as being incorrect while the user is still typing out the word. This highlighting needs to be delayed so words are not constantly being highlighted as incorrect while a user in still trying to type it.
-- [x] On lines that are wrapped the cursor can not be positioned on the wrapped section of the line with the keyboard by just hitting the up or down arrow. The cursor jumps over the wrapped section of the line. Using the mouse or scrolling left or right until you get to the section of the wrapped line works but not with the up and down arrow, this makes navigating long wrapped lines much more difficult using just the keyboard.
+- [ ] When a whole line of text gets pasted at one time by the user and they do ctrl+z it should erase the whole pasted line instead of one letter at a time. 
 
 ### Major:
 
@@ -18,7 +12,6 @@
 
 # Features:
 
-- [x] See if more config file types (e.g. ini, json, jsonc, xml, etc.) and language support (e.g. zig, java, HTML, CSS, C#, SQL, PHP, Perl, Go, Ruby) can be added to the syntect crate we are using. It uses sublime text syntax definitions according to the crate documentation. Make sure format document function works for supported languages and the comment types are supported with our comment shortcut key and menu toggle.
-- [x] Spellchecking: Should be able to toggle it on and off. Some way to highlight the misspelled words like a red underline or similar. Function to replace the word with the correct spelling from a dictionary, (e.g. when the cursor is on a misspelled word you can open a popup with a list of the possible correct spellings to choose to replace the word with). 
-- [ ] Tools for code files: Function List and Variables List - when in a code file you can open these side panels on the left or right side of the window to show defined functions or variables in that file and select them to quickly jump to that function in the editor window. A project file browser sidebar that can be opened on left or right side for the user to quickly open more files that are within the projects directory. This will require a new option in the file menu to open a project folder. 
+- [ ] Tools for code files: Function List and Variables List - when in a code file you can open these side panels on the left or right side of the window to show defined functions or variables in that file and select them to quickly jump to that function in the editor window. A project file browser sidebar that can be opened on left or right side for the user to quickly open more files that are within the projects directory. This will require a new option in the file menu to open a project folder.
+- [ ] Add an edit menu option to the top bar between file and tools. It should have options for undo, redo, cut, copy, paste, select all.
 - [ ] Possibly have it work on Mac and Windows as well.

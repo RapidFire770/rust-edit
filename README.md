@@ -207,68 +207,68 @@ Theme names in that file are `dark-red`, `light`, `high-contrast`, `solarized`, 
 
 Highlighting follows the file extension. A few names are recognized with no extension: `Makefile`, `GNUmakefile`, `Gemfile`, `Rakefile`, `Vagrantfile`, `config.ru`, and the shell startup files `.bashrc`, `.bash_profile`, `.bash_login`, `.bash_logout`, `.profile`, `.zshrc`, and `.zprofile`.
 
-| Language         | Extensions                                              |
-|------------------|---------------------------------------------------------|
-| Bash / shell     | `.sh`, `.bash`, `.zsh`, `.fish`                         |
-| Batch            | `.bat`, `.cmd`                                          |
-| C                | `.c`, `.h`                                              |
-| C#               | `.cs`, `.csx`                                           |
-| C++              | `.cpp`, `.cc`, `.cxx`, `.cp`, `.hpp`, `.hh`, `.hxx`, `.inl`, `.ipp` |
-| Clojure          | `.clj`, `.cljs`, `.cljc`                                |
-| CSS              | `.css`                                                  |
-| D                | `.d`, `.di`                                             |
-| Diff             | `.diff`, `.patch`                                       |
-| Erlang           | `.erl`, `.hrl`                                          |
-| Go               | `.go`                                                   |
-| Groovy           | `.groovy`, `.gvy`, `.gradle`                            |
-| Haskell          | `.hs`                                                   |
-| HTML             | `.html`, `.htm`, `.shtml`, `.xhtml`                     |
-| INI              | `.ini`, `.cfg`                                          |
-| Java             | `.java`                                                 |
-| Java Properties  | `.properties`                                           |
-| JavaScript       | `.js`, `.mjs`, `.jsx`                                   |
-| JSON             | `.json`                                                 |
-| JSONC            | `.jsonc`                                                |
-| LaTeX            | `.tex`, `.ltx`                                          |
-| Lisp             | `.lisp`, `.cl`, `.el`, `.scm`, `.ss`                    |
-| Lua              | `.lua`                                                  |
-| Makefile         | `.mk`, `.mak`, and the filename `Makefile`              |
-| Markdown         | `.md`, `.markdown`                                      |
-| Objective-C      | `.m`                                                    |
-| Objective-C++    | `.mm`                                                   |
-| OCaml            | `.ml`, `.mli`                                           |
-| Perl             | `.pl`, `.pm`, `.pod`                                    |
+| Language         | Extensions                                                             |
+|------------------|------------------------------------------------------------------------|
+| Bash / shell     | `.sh`, `.bash`, `.zsh`, `.fish`                                        |
+| Batch            | `.bat`, `.cmd`                                                         |
+| C                | `.c`, `.h`                                                             |
+| C#               | `.cs`, `.csx`                                                          |
+| C++              | `.cpp`, `.cc`, `.cxx`, `.cp`, `.hpp`, `.hh`, `.hxx`, `.inl`, `.ipp`    |
+| Clojure          | `.clj`, `.cljs`, `.cljc`                                               |
+| CSS              | `.css`                                                                 |
+| D                | `.d`, `.di`                                                            |
+| Diff             | `.diff`, `.patch`                                                      |
+| Erlang           | `.erl`, `.hrl`                                                         |
+| Go               | `.go`                                                                  |
+| Groovy           | `.groovy`, `.gvy`, `.gradle`                                           |
+| Haskell          | `.hs`                                                                  |
+| HTML             | `.html`, `.htm`, `.shtml`, `.xhtml`                                    |
+| INI              | `.ini`, `.cfg`                                                         |
+| Java             | `.java`                                                                |
+| Java Properties  | `.properties`                                                          |
+| JavaScript       | `.js`, `.mjs`, `.jsx`                                                  |
+| JSON             | `.json`                                                                |
+| JSONC            | `.jsonc`                                                               |
+| LaTeX            | `.tex`, `.ltx`                                                         |
+| Lisp             | `.lisp`, `.cl`, `.el`, `.scm`, `.ss`                                   |
+| Lua              | `.lua`                                                                 |
+| Makefile         | `.mk`, `.mak`, and the filename `Makefile`                             |
+| Markdown         | `.md`, `.markdown`                                                     |
+| Objective-C      | `.m`                                                                   |
+| Objective-C++    | `.mm`                                                                  |
+| OCaml            | `.ml`, `.mli`                                                          |
+| Perl             | `.pl`, `.pm`, `.pod`                                                   |
 | PHP              | `.php`, `.phtml`, `.php3`, `.php4`, `.php5`, `.php7`, `.phps`, `.phpt` |
-| Python           | `.py`, `.pyw`, `.pyi`, `.py3`                           |
-| R                | `.r`                                                    |
-| reStructuredText | `.rst`, `.rest`                                         |
-| Ruby             | `.rb`, `.rake`, `.gemspec`, plus `Gemfile` and `Rakefile` |
-| Rust             | `.rs`                                                   |
-| Scala            | `.scala`, `.sbt`                                        |
-| SQL              | `.sql`, `.ddl`, `.dml`                                  |
-| Tcl              | `.tcl`                                                  |
-| TeX              | `.sty`, `.cls`                                          |
-| TOML             | `.toml`                                                 |
-| TypeScript       | `.ts`, `.tsx`                                           |
-| XML              | `.xml`, `.xsd`, `.xslt`, `.svg`, `.rss`, `.opml`        |
-| YAML             | `.yaml`, `.yml`                                         |
-| Zig              | `.zig`                                                  |
+| Python           | `.py`, `.pyw`, `.pyi`, `.py3`                                          |
+| R                | `.r`                                                                   |
+| reStructuredText | `.rst`, `.rest`                                                        |
+| Ruby             | `.rb`, `.rake`, `.gemspec`, plus `Gemfile` and `Rakefile`              |
+| Rust             | `.rs`                                                                  |
+| Scala            | `.scala`, `.sbt`                                                       |
+| SQL              | `.sql`, `.ddl`, `.dml`                                                 |
+| Tcl              | `.tcl`                                                                 |
+| TeX              | `.sty`, `.cls`                                                         |
+| TOML             | `.toml`                                                                |
+| TypeScript       | `.ts`, `.tsx`                                                          |
+| XML              | `.xml`, `.xsd`, `.xslt`, `.svg`, `.rss`, `.opml`                       |
+| YAML             | `.yaml`, `.yml`                                                        |
+| Zig              | `.zig`                                                                 |
 
 Markdown is highlighted as Markdown source. `.h` is C. `.conf`, `.t`, and `.pyx` stay plain text.
 
 **Format Document** calls a formatter only when it is installed:
 
-| Files                                                         | Program                                                              |
-|---------------------------------------------------------------|----------------------------------------------------------------------|
-| Rust                                                          | `rustfmt`                                                            |
-| Python                                                        | `black`                                                              |
-| JavaScript, TypeScript, JSON, JSONC, YAML, Markdown, HTML, CSS | `prettier`                                                         |
-| C, C++, Java, C#, Objective-C, Objective-C++                  | `clang-format`                                                       |
-| Go                                                            | `gofmt`                                                              |
-| Zig                                                           | `zig fmt --stdin`                                                    |
-| Perl                                                          | `perltidy`                                                           |
-| Lua                                                           | `stylua`                                                             |
-| XML                                                           | `xmllint`                                                            |
+| Files                                                                   | Program                                                              |
+|-------------------------------------------------------------------------|----------------------------------------------------------------------|
+| Rust                                                                    | `rustfmt`                                                            |
+| Python                                                                  | `black`                                                              |
+| JavaScript, TypeScript, JSON, JSONC, YAML, Markdown, HTML, CSS          | `prettier`                                                           |
+| C, C++, Java, C#, Objective-C, Objective-C++                            | `clang-format`                                                       |
+| Go                                                                      | `gofmt`                                                              |
+| Zig                                                                     | `zig fmt --stdin`                                                    |
+| Perl                                                                    | `perltidy`                                                           |
+| Lua                                                                     | `stylua`                                                             |
+| XML                                                                     | `xmllint`                                                            |
 | Other highlighted files, including PHP, Ruby, SQL, INI, TOML, and shell | editor-preferences cleanup: tabs, trailing whitespace, final newline |
 
 ## Prerequisites
