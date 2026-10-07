@@ -40,7 +40,7 @@ pub struct App {
     /// Scroll offset (row, col) for the help popup content. Used to scroll the
     /// shortcuts page when content exceeds the popup's inner height.
     pub help_content_scroll: (u16, u16),
-    /// Currently open menu for dropdown ("File", "Tools", "Settings")
+    /// Currently open menu for dropdown ("File", "Edit", "Tools", "Settings")
     pub active_menu: Option<String>,
     // ----- Configure popup (tab size, toggles) -----
     pub show_configure: bool,
@@ -628,6 +628,13 @@ impl App {
         self.clipboard.copy(&text)
     }
 
+    pub fn cut(&mut self) {
+        self.copy_selection_or_line();
+        if self.active_buffer().selection.is_some() {
+            self.active_buffer_mut().delete();
+        }
+    }
+
     pub fn paste(&mut self) {
         if let Some(text) = self.clipboard.paste() {
             self.active_buffer_mut().insert(&text);
@@ -992,7 +999,7 @@ impl App {
 
     /// Move the open dropdown to the next or previous header menu.
     /// No-op when no menu is open. Resets `menu_selected` because File,
-    /// Tools, and Settings have different lengths.
+    /// Edit, Tools, and Settings have different lengths.
     pub fn cycle_open_menu(&mut self, forward: bool) {
         let Some(current) = self.active_menu.as_deref() else {
             return;
@@ -3564,9 +3571,11 @@ mod tests {
         app.open_menu("File");
         app.menu_selected = 3;
         app.cycle_open_menu(true);
-        assert_eq!(app.active_menu.as_deref(), Some("Tools"));
+        assert_eq!(app.active_menu.as_deref(), Some("Edit"));
         assert_eq!(app.menu_selected, 0);
 
+        app.cycle_open_menu(true);
+        assert_eq!(app.active_menu.as_deref(), Some("Tools"));
         app.cycle_open_menu(true);
         assert_eq!(app.active_menu.as_deref(), Some("Settings"));
         app.cycle_open_menu(true);
@@ -3576,6 +3585,8 @@ mod tests {
         assert_eq!(app.active_menu.as_deref(), Some("Settings"));
         app.cycle_open_menu(false);
         assert_eq!(app.active_menu.as_deref(), Some("Tools"));
+        app.cycle_open_menu(false);
+        assert_eq!(app.active_menu.as_deref(), Some("Edit"));
         app.cycle_open_menu(false);
         assert_eq!(app.active_menu.as_deref(), Some("File"));
     }

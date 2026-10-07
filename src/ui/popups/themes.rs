@@ -1063,6 +1063,8 @@ fn preview_chrome_lines(theme: &Theme, selected_role: usize, width: u16) -> Vec<
             vec![
                 Span::styled(" File ", accent_on_header),
                 Span::styled("│", header_mark),
+                Span::styled(" Edit ", header_mark),
+                Span::styled("│", header_mark),
                 Span::styled(" Tools ", header_mark),
                 Span::styled("│", header_mark),
                 Span::styled(" Settings ", header_mark),

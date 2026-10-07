@@ -620,10 +620,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                     app.paste();
                                 }
                                 KeyCode::Char('x') => {
-                                    app.copy_selection_or_line();
-                                    if app.active_buffer().selection.is_some() {
-                                        app.active_buffer_mut().delete();
-                                    }
+                                    app.cut();
                                 }
                                 KeyCode::Char('f')
                                     if !key.modifiers.contains(KeyModifiers::SHIFT) =>
@@ -715,6 +712,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
                                 app.open_menu("File");
                             }
+                            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::ALT) => {
+                                app.open_menu("Edit");
+                            }
                             KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::ALT) => {
                                 app.open_menu("Tools");
                             }
@@ -740,11 +740,13 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                     app.ensure_active_tab_visible();
                                 }
                             }
-                            KeyCode::Tab if app.is_find_active() => {
+                            KeyCode::Tab if app.is_find_active() && app.active_menu.is_none() => {
                                 // Tab cycles focus: Query → Replace → Command → Query.
                                 // This is how the user leaves the text boxes so the
                                 // navigation/replace keys (n/N/r/Enter/c/x/w) become live
-                                // and n/N can be typed into the boxes again.
+                                // and n/N can be typed into the boxes again. An open
+                                // menu owns Tab instead, so Left/Right/Tab still cycle
+                                // File, Edit, Tools, and Settings.
                                 if let Some(fs) = &mut app.find_state {
                                     fs.focus = fs.focus.next();
                                 }
@@ -795,7 +797,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             {
                                 app.replace_current();
                             }
-                            KeyCode::Enter if app.is_find_active() => {
+                            KeyCode::Enter if app.is_find_active() && app.active_menu.is_none() => {
                                 app.replace_current();
                             }
                             KeyCode::Char('c')
@@ -3086,6 +3088,14 @@ fn handle_menu_action(app: &mut App) {
         ("File", 3) => app.show_file_dialog(true), // Save As
         ("File", 4) => app.close_current_tab(),
         ("File", 5) => app.request_quit(), // Quit
+        ("Edit", 0) => app.undo(),
+        ("Edit", 1) => app.redo(),
+        ("Edit", 2) => app.cut(),
+        ("Edit", 3) => {
+            app.copy_selection_or_line();
+        }
+        ("Edit", 4) => app.paste(),
+        ("Edit", 5) => app.active_buffer_mut().select_all(),
         ("Tools", 0) => {
             if app.find_state.is_none() {
                 app.toggle_find();
@@ -4208,6 +4218,81 @@ mod popup_mouse_focus_tests {
         handle_menu_action(&mut app);
         assert!(app.dictionary.is_some());
         assert_eq!(app.popup_focus(), Some(PopupFocus::Dictionary));
+    }
+
+    /// System clipboard is shared. Edit-menu tests that copy must not run at once.
+    fn clipboard_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|err| err.into_inner())
+    }
+
+    #[test]
+    fn edit_menu_undo_then_redo_restores_typed_text() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("ab");
+        app.active_menu = Some("Edit".into());
+        app.menu_selected = 0;
+        handle_menu_action(&mut app);
+        assert_eq!(app.active_buffer().text(), "");
+        app.active_menu = Some("Edit".into());
+        app.menu_selected = 1;
+        handle_menu_action(&mut app);
+        assert_eq!(app.active_buffer().text(), "ab");
+    }
+
+    #[test]
+    fn edit_menu_cut_selection_then_paste_restores_it() {
+        let _guard = clipboard_lock();
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("abcdef");
+        app.active_buffer_mut().selection = Some(2..4);
+        app.active_menu = Some("Edit".into());
+        app.menu_selected = 2;
+        handle_menu_action(&mut app);
+        assert_eq!(app.active_buffer().text(), "abef");
+        assert_eq!(app.active_buffer().cursor, 2);
+        app.active_menu = Some("Edit".into());
+        app.menu_selected = 4;
+        handle_menu_action(&mut app);
+        assert_eq!(app.active_buffer().text(), "abcdef");
+    }
+
+    #[test]
+    fn edit_menu_select_all_copy_paste_duplicates() {
+        let _guard = clipboard_lock();
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("hi");
+        app.active_menu = Some("Edit".into());
+        app.menu_selected = 5;
+        handle_menu_action(&mut app);
+        assert_eq!(app.active_buffer().selection, Some(0..2));
+        assert_eq!(app.active_buffer().selection_anchor, Some(0));
+        assert_eq!(app.active_buffer().cursor, 2);
+        app.menu_selected = 3;
+        handle_menu_action(&mut app);
+        // select_all already left the caret at the end. End clears the
+        // selection so paste inserts instead of replacing the span.
+        app.active_buffer_mut().move_end(false);
+        app.menu_selected = 4;
+        handle_menu_action(&mut app);
+        assert_eq!(app.active_buffer().text(), "hihi");
+    }
+
+    #[test]
+    fn edit_menu_cut_without_selection_copies_the_line() {
+        let _guard = clipboard_lock();
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("ab\n");
+        // insert lands on the empty line after the newline. The line Ropey
+        // returns with that newline is the previous one.
+        app.active_buffer_mut().cursor = 0;
+        app.active_menu = Some("Edit".into());
+        app.menu_selected = 2;
+        handle_menu_action(&mut app);
+        assert_eq!(app.active_buffer().text(), "ab\n");
+        app.menu_selected = 4;
+        handle_menu_action(&mut app);
+        assert_eq!(app.active_buffer().text(), "ab\nab\n");
     }
 
     #[test]

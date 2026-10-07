@@ -27,21 +27,16 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         .fg(Color::from(&theme.header_fg));
 
     let mut header_spans: Vec<Span> = Vec::new();
-    let menus = [
-        ("File", " File "),
-        ("Tools", " Tools "),
-        ("Settings", " Settings "),
-    ];
-    for (i, (name, label)) in menus.iter().enumerate() {
+    for (i, button) in MENU_BUTTONS.iter().enumerate() {
         if i > 0 {
             header_spans.push(Span::styled("│", sep_style));
         }
-        let style = if active_menu == Some(*name) {
+        let style = if active_menu == Some(button.name) {
             menu_highlight
         } else {
             menu_base_style
         };
-        header_spans.push(Span::styled(*label, style));
+        header_spans.push(Span::styled(button.label, style));
     }
     // A slightly wider gap between the menu block and the file tabs.
     header_spans.push(Span::styled("  ", menu_base_style));
@@ -198,12 +193,37 @@ fn split_tab_label(name: &str, geom: &TabGeom) -> (String, String) {
     (label_part, " ".to_string())
 }
 
-/// Simple text for menus (can be expanded for dropdown anchors later).
-pub fn menu_labels() -> &'static str {
-    " File  Tools  Settings  "
+pub struct MenuButton {
+    pub name: &'static str,
+    pub label: &'static str,
+    pub x: u16,
 }
 
-pub const MENU_ORDER: [&str; 3] = ["File", "Tools", "Settings"];
+pub const MENU_BUTTONS: &[MenuButton] = &[
+    MenuButton {
+        name: "File",
+        label: " File ",
+        x: 0,
+    },
+    MenuButton {
+        name: "Edit",
+        label: " Edit ",
+        x: 7,
+    },
+    MenuButton {
+        name: "Tools",
+        label: " Tools ",
+        x: 14,
+    },
+    MenuButton {
+        name: "Settings",
+        label: " Settings ",
+        x: 22,
+    },
+];
+
+pub const MENU_ORDER: [&str; 4] = ["File", "Edit", "Tools", "Settings"];
+pub const MENU_BLOCK_COLS: usize = 34;
 
 pub fn file_menu_items() -> &'static [&'static str] {
     &[
@@ -213,6 +233,17 @@ pub fn file_menu_items() -> &'static [&'static str] {
         "Save As (Ctrl+Alt+S)",
         "Close Tab (Ctrl+W)",
         "Quit (Ctrl+Q)",
+    ]
+}
+
+pub fn edit_menu_items() -> &'static [&'static str] {
+    &[
+        "Undo (Ctrl+Z)",
+        "Redo (Ctrl+Y)",
+        "Cut (Ctrl+X)",
+        "Copy (Ctrl+C)",
+        "Paste (Ctrl+V)",
+        "Select All (Ctrl+A)",
     ]
 }
 
@@ -240,6 +271,7 @@ pub fn settings_menu_items() -> &'static [&'static str] {
 pub fn menu_items(name: &str) -> &'static [&'static str] {
     match name {
         "File" => file_menu_items(),
+        "Edit" => edit_menu_items(),
         "Tools" => tools_menu_items(),
         "Settings" => settings_menu_items(),
         _ => &[],
@@ -251,12 +283,11 @@ pub fn menu_len(name: &str) -> usize {
 }
 
 pub fn menu_x(name: &str) -> u16 {
-    match name {
-        "File" => 0,
-        "Tools" => 7,
-        "Settings" => 15,
-        _ => 0,
-    }
+    MENU_BUTTONS
+        .iter()
+        .find(|button| button.name == name)
+        .map(|button| button.x)
+        .unwrap_or(0)
 }
 
 /// Render a dropdown popup for a menu.
@@ -327,13 +358,12 @@ pub fn dropdown_rect(area: Rect, menu_name: &str) -> Rect {
     Rect::new(x, y, w, h.min(area.height.saturating_sub(y)))
 }
 
-pub const MENU_BLOCK_COLS: usize = 27;
 pub const PLUS_COLS: usize = 3;
 pub const ARROW_COLS: usize = 3; // "[<]" / "[>]"
 pub const ARROW_PAD: usize = 1; // trailing space after an arrow
 /// Inner filename columns. `TAB_COLS = TAB_INNER_COLS + 5` (`[ ` + inner + ` ] `).
-/// Chosen so 3 tabs + `[+]` fit on 80 columns: 27 + 3*16 + 3 = 78.
-pub const TAB_INNER_COLS: usize = 11;
+/// Chosen so 3 tabs + `[+]` fit on 80 columns: 34 + 3*14 + 3 = 79.
+pub const TAB_INNER_COLS: usize = 9;
 pub const TAB_COLS: usize = TAB_INNER_COLS + 5;
 
 pub struct TabGeom {
@@ -527,14 +557,13 @@ fn can_scroll_right(tabs: &[TabGeom], names: &[String], first_visible: usize) ->
 
 pub fn hit_test_header(x: usize, layout: &TabStripLayout) -> HeaderHit {
     // Menu ranges are independent of the tab-strip layout and are checked first.
-    if x < 6 {
-        return HeaderHit::Menu("File");
-    }
-    if (7..14).contains(&x) {
-        return HeaderHit::Menu("Tools");
-    }
-    if (15..25).contains(&x) {
-        return HeaderHit::Menu("Settings");
+    // Separator columns between labels stay misses.
+    for button in MENU_BUTTONS {
+        let start = button.x as usize;
+        let end = start + button.label.chars().count();
+        if x >= start && x < end {
+            return HeaderHit::Menu(button.name);
+        }
     }
 
     if let Some(ax) = layout.left_arrow_x {
@@ -606,10 +635,42 @@ mod tests {
     #[test]
     fn menu_len_matches_item_slices() {
         assert_eq!(menu_len("File"), file_menu_items().len());
+        assert_eq!(menu_len("Edit"), edit_menu_items().len());
         assert_eq!(menu_len("Tools"), tools_menu_items().len());
         assert_eq!(menu_len("Settings"), settings_menu_items().len());
+        assert_eq!(menu_len("Edit"), 6);
         assert_eq!(menu_len("Tools"), 8);
-        assert_eq!(MENU_ORDER, ["File", "Tools", "Settings"]);
+        assert_eq!(MENU_ORDER, ["File", "Edit", "Tools", "Settings"]);
+    }
+
+    #[test]
+    fn edit_menu_labels_match_chords() {
+        assert_eq!(
+            edit_menu_items(),
+            &[
+                "Undo (Ctrl+Z)",
+                "Redo (Ctrl+Y)",
+                "Cut (Ctrl+X)",
+                "Copy (Ctrl+C)",
+                "Paste (Ctrl+V)",
+                "Select All (Ctrl+A)",
+            ]
+        );
+        assert_eq!(menu_len("Edit"), 6);
+        assert_eq!(MENU_ORDER, ["File", "Edit", "Tools", "Settings"]);
+    }
+
+    #[test]
+    fn menu_buttons_are_separated_by_one_column() {
+        assert!(!MENU_BUTTONS.is_empty());
+        assert_eq!(MENU_BUTTONS[0].x, 0);
+        for pair in MENU_BUTTONS.windows(2) {
+            let prev_end = pair[0].x as usize + pair[0].label.chars().count();
+            assert_eq!(pair[1].x as usize, prev_end + 1);
+        }
+        let settings = MENU_BUTTONS.last().unwrap();
+        let settings_end = settings.x as usize + settings.label.chars().count();
+        assert_eq!(MENU_BLOCK_COLS, settings_end + 2);
     }
 
     #[test]
@@ -623,10 +684,20 @@ mod tests {
     }
 
     #[test]
+    fn test_dropdown_rect_edit() {
+        let area = Rect::new(0, 0, 100, 50);
+        let rect = dropdown_rect(area, "Edit");
+        assert_eq!(rect.x, 7);
+        assert_eq!(rect.y, crate::ui::layout::HEADER_ROWS);
+        assert_eq!(rect.width, 26);
+        assert_eq!(rect.height, 8);
+    }
+
+    #[test]
     fn test_dropdown_rect_tools() {
         let area = Rect::new(0, 0, 100, 50);
         let rect = dropdown_rect(area, "Tools");
-        assert_eq!(rect.x, 7);
+        assert_eq!(rect.x, 14);
         assert_eq!(rect.y, crate::ui::layout::HEADER_ROWS);
         assert_eq!(rect.width, 26);
         assert_eq!(rect.height, 10);
@@ -636,7 +707,7 @@ mod tests {
     fn test_dropdown_rect_settings() {
         let area = Rect::new(0, 0, 100, 50);
         let rect = dropdown_rect(area, "Settings");
-        assert_eq!(rect.x, 15);
+        assert_eq!(rect.x, 22);
         assert_eq!(rect.y, crate::ui::layout::HEADER_ROWS);
         assert_eq!(rect.width, 26);
         assert_eq!(rect.height, 5);
@@ -644,7 +715,7 @@ mod tests {
 
     #[test]
     fn tabs_that_fit_have_no_arrows_and_plus_after_last() {
-        // 1 untitled: tabs start at 27, width TAB_COLS (16), plus at 43
+        // 1 untitled: tabs start at MENU_BLOCK_COLS, width TAB_COLS, plus after it.
         let l = layout_tab_strip(&untitled_names(1), 80, 0);
         assert!(!l.overflowing);
         assert_eq!(l.left_arrow_x, None);
@@ -656,15 +727,15 @@ mod tests {
 
     #[test]
     fn four_untitled_tabs_overflow_80_cols() {
-        // 27 + 4*16 + 3 = 94 > 80
+        // 34 + 4*14 + 3 = 93 > 80
         let l = layout_tab_strip(&untitled_names(4), 80, 0);
         assert!(l.overflowing);
-        assert_eq!(l.left_arrow_x, Some(27));
+        assert_eq!(l.left_arrow_x, Some(MENU_BLOCK_COLS));
         assert!(l.can_scroll_right);
         assert!(!l.can_scroll_left);
         assert!(l.plus_x + PLUS_COLS <= 80);
         assert_eq!(hit_test_header(l.plus_x, &l), HeaderHit::Plus);
-        assert_eq!(hit_test_header(27, &l), HeaderHit::ScrollLeft);
+        assert_eq!(hit_test_header(MENU_BLOCK_COLS, &l), HeaderHit::ScrollLeft);
         assert_eq!(
             hit_test_header(l.right_arrow_x.unwrap(), &l),
             HeaderHit::ScrollRight
@@ -693,8 +764,9 @@ mod tests {
     fn menus_still_win_hit_test() {
         let l = layout_tab_strip(&untitled_names(1), 80, 0);
         assert_eq!(hit_test_header(1, &l), HeaderHit::Menu("File"));
-        assert_eq!(hit_test_header(8, &l), HeaderHit::Menu("Tools"));
-        assert_eq!(hit_test_header(16, &l), HeaderHit::Menu("Settings"));
+        assert_eq!(hit_test_header(8, &l), HeaderHit::Menu("Edit"));
+        assert_eq!(hit_test_header(15, &l), HeaderHit::Menu("Tools"));
+        assert_eq!(hit_test_header(23, &l), HeaderHit::Menu("Settings"));
     }
 
     #[test]
@@ -719,8 +791,8 @@ mod tests {
             clipped: false,
         };
         let s = tab_label("untitled", &full);
-        // Inner pad 3 (1 left, 2 right) plus chrome spaces: `[  untitled   ] `.
-        assert_eq!(s, "[  untitled   ] ");
+        // "untitled" (8) in 9 columns: pad 1, all of it on the right.
+        assert_eq!(s, "[ untitled  ] ");
         assert_eq!(s.chars().count(), TAB_COLS);
 
         // geom.width is still honored when it is not TAB_COLS.
@@ -754,7 +826,7 @@ mod tests {
             clipped: false,
         };
         let (label, sep) = split_tab_label("untitled", &full);
-        assert_eq!(label, "[  untitled   ]");
+        assert_eq!(label, "[ untitled  ]");
         assert_eq!(sep, " ");
         assert_eq!(label.chars().count(), TAB_COLS - 1);
     }
@@ -791,10 +863,15 @@ mod tests {
         assert_eq!(l.tabs.len(), 2);
         assert_eq!(l.first_visible, 0);
         assert_eq!(l.tabs[0].index, 0);
-        assert_eq!(l.tabs[0].x, MENU_BLOCK_COLS + ARROW_COLS + ARROW_PAD); // 31
+        let tab_start = MENU_BLOCK_COLS + ARROW_COLS + ARROW_PAD;
+        assert_eq!(l.tabs[0].x, tab_start);
         assert_eq!(l.tabs[0].width, TAB_COLS);
         assert!(!l.tabs.iter().any(|t| t.clipped));
-        assert_eq!(l.right_arrow_x, Some(31 + 42)); // 73
+        let viewport = 80 - MENU_BLOCK_COLS - (ARROW_COLS + ARROW_PAD) * 2 - PLUS_COLS;
+        assert!((TAB_COLS * 2..TAB_COLS * 3).contains(&viewport));
+        assert_eq!(l.right_arrow_x, Some(tab_start + viewport));
+        assert_eq!(l.plus_x, tab_start + viewport + ARROW_COLS + ARROW_PAD);
+        assert_eq!(l.right_arrow_x, Some(73));
         assert_eq!(l.plus_x, 77);
         assert_on_screen_widgets_disjoint(&l, 80);
     }
@@ -823,9 +900,9 @@ mod tests {
             tab_inner_text("untitled", TAB_INNER_COLS).chars().count(),
             TAB_INNER_COLS
         );
-        // 8-char name in 11: center with leftover pad on the right.
-        assert_eq!(tab_inner_text("untitled", TAB_INNER_COLS), " untitled  ");
-        assert_eq!(tab_inner_text("a", TAB_INNER_COLS), "     a     ");
+        // 8-char name in 9: leftover pad of 1 sits on the right.
+        assert_eq!(tab_inner_text("untitled", TAB_INNER_COLS), "untitled ");
+        assert_eq!(tab_inner_text("a", TAB_INNER_COLS), "    a    ");
         let long = tab_inner_text("highlight_cache.rs", TAB_INNER_COLS);
         assert_eq!(long.chars().count(), TAB_INNER_COLS);
         assert!(long.ends_with('…'), "got {long:?}");
@@ -846,7 +923,7 @@ mod tests {
         assert!(!l.overflowing);
         assert_eq!(l.tabs.len(), 3);
         assert_eq!(l.plus_x, MENU_BLOCK_COLS + TAB_COLS * 3);
-        assert_eq!(l.plus_x + PLUS_COLS, 78);
+        assert_eq!(l.plus_x + PLUS_COLS, 79);
     }
 
     #[test]
@@ -885,9 +962,11 @@ mod tests {
     /// overlaps, so this inspects the layout rects directly.
     fn assert_on_screen_widgets_disjoint(layout: &TabStripLayout, header_width: usize) {
         let mut owner = vec![None; header_width];
-        occupy(&mut owner, 0, 6, "Menu");
-        occupy(&mut owner, 7, 14, "Menu");
-        occupy(&mut owner, 15, 25, "Menu");
+        for button in MENU_BUTTONS {
+            let start = button.x as usize;
+            let end = start + button.label.chars().count();
+            occupy(&mut owner, start, end, "Menu");
+        }
         if let Some(ax) = layout.left_arrow_x {
             occupy(&mut owner, ax, ax + ARROW_COLS, "ScrollLeft");
         }
@@ -913,45 +992,57 @@ mod tests {
     }
 
     #[test]
-    fn four_untitled_at_width_38_arrows_with_empty_viewport() {
-        // remaining = 11 == chrome, viewport = 0. Arrows stay; plus at 35.
-        let l = layout_tab_strip(&untitled_names(4), 38, 0);
+    fn four_untitled_when_remaining_equals_chrome() {
+        // Width MENU_BLOCK_COLS + 11. remaining == chrome, viewport = 0.
+        // Arrows stay, [+] stays on screen, and no tab is painted.
+        let width = MENU_BLOCK_COLS + 11;
+        let l = layout_tab_strip(&untitled_names(4), width, 0);
         assert!(l.overflowing);
-        assert_eq!(l.left_arrow_x, Some(27));
-        assert_eq!(l.right_arrow_x, Some(31));
-        assert_eq!(l.plus_x, 35);
+        let tab_start = MENU_BLOCK_COLS + ARROW_COLS + ARROW_PAD;
+        assert_eq!(l.left_arrow_x, Some(MENU_BLOCK_COLS));
+        assert_eq!(l.right_arrow_x, Some(tab_start));
+        assert_eq!(l.plus_x, tab_start + ARROW_COLS + ARROW_PAD);
+        assert!(l.plus_x + PLUS_COLS <= width);
         assert!(l.tabs.is_empty());
-        assert_eq!(hit_test_header(27, &l), HeaderHit::ScrollLeft);
-        assert_eq!(hit_test_header(31, &l), HeaderHit::ScrollRight);
-        assert_eq!(hit_test_header(35, &l), HeaderHit::Plus);
-        assert_on_screen_widgets_disjoint(&l, 38);
+        assert_eq!(hit_test_header(MENU_BLOCK_COLS, &l), HeaderHit::ScrollLeft);
+        assert_eq!(hit_test_header(tab_start, &l), HeaderHit::ScrollRight);
+        assert_eq!(hit_test_header(l.plus_x, &l), HeaderHit::Plus);
+        assert_on_screen_widgets_disjoint(&l, width);
     }
 
     #[test]
     fn width_30_drops_arrows_and_keeps_plus_off_menus() {
-        // remaining = 3 < chrome: no arrows, leftover tab span is 0, plus at 27.
+        // remaining < chrome: no arrows. plus_x is MENU_BLOCK_COLS, off screen.
         let l = layout_tab_strip(&untitled_names(4), 30, 0);
         assert!(l.overflowing);
         assert_eq!(l.left_arrow_x, None);
         assert_eq!(l.right_arrow_x, None);
         assert_eq!(l.plus_x, MENU_BLOCK_COLS);
+        assert!(l.plus_x >= 30);
         assert!(l.tabs.is_empty());
-        assert_eq!(hit_test_header(16, &l), HeaderHit::Menu("Settings"));
-        assert_eq!(hit_test_header(27, &l), HeaderHit::Plus);
+        assert_eq!(hit_test_header(22, &l), HeaderHit::Menu("Settings"));
+        assert_ne!(hit_test_header(22, &l), HeaderHit::Plus);
         assert_on_screen_widgets_disjoint(&l, 30);
     }
 
     #[test]
     fn width_20_plus_stays_off_menus() {
-        // remaining = 0: not a fit. plus sits at 27 (off-screen), never on Settings.
+        // plus sits at MENU_BLOCK_COLS (off screen) and is not a menu column.
         let l = layout_tab_strip(&untitled_names(4), 20, 0);
         assert!(l.overflowing);
         assert_eq!(l.left_arrow_x, None);
         assert_eq!(l.right_arrow_x, None);
         assert_eq!(l.plus_x, MENU_BLOCK_COLS);
+        assert!(l.plus_x >= 20);
         assert!(l.tabs.is_empty());
-        assert_eq!(hit_test_header(16, &l), HeaderHit::Menu("Settings"));
-        assert_ne!(hit_test_header(19, &l), HeaderHit::Plus);
+        assert_eq!(hit_test_header(8, &l), HeaderHit::Menu("Edit"));
+        assert_eq!(hit_test_header(16, &l), HeaderHit::Menu("Tools"));
+        let plus_on_menu = MENU_BUTTONS.iter().any(|button| {
+            let start = button.x as usize;
+            let end = start + button.label.chars().count();
+            (start..end).contains(&l.plus_x)
+        });
+        assert!(!plus_on_menu);
         assert_on_screen_widgets_disjoint(&l, 20);
     }
 }

@@ -112,9 +112,12 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Shift+PgUp / PgDn", "Extend selection by a page"),
                 ("PgUp / PgDn", "Page up / down"),
                 ("Alt+H / Alt+L", "Scroll view left / right"),
-                ("Alt+F / T / S", "Open File / Tools / Settings menu"),
+                ("Alt+F / E / T / S", "Open File / Edit / Tools / Settings"),
                 ("j / k, Up / Down", "Move selection in an open menu"),
-                ("Left / Right / Tab", "Switch File / Tools / Settings menus"),
+                (
+                    "Left / Right / Tab",
+                    "Switch File / Edit / Tools / Settings",
+                ),
                 ("Enter / Esc", "Run the menu item / close the menu"),
                 ("Alt+1..9", "Switch to tab N"),
                 ("[<] / [>]", "Scroll overflow file tabs"),
@@ -569,7 +572,7 @@ mod tests {
         assert!(text.contains("Toggle comment"), "{text}");
         assert!(text.contains("Left / Right / Tab"), "{text}");
         assert!(
-            text.contains("Switch File / Tools / Settings menus"),
+            text.contains("Switch File / Edit / Tools / Settings"),
             "{text}"
         );
         assert!(text.contains("Alt+W"), "{text}");

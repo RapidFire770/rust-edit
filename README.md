@@ -121,9 +121,10 @@ The notice prints that command with the path of the binary you are running.
 
 ### Menus
 
-The menu bar is **File**, **Tools**, and **Settings**. Alt+F, Alt+T, and Alt+S open them. A click opens them too. Left, Right, and Tab move between those three menus while one is open.
+The menu bar is **File**, **Edit**, **Tools**, and **Settings**. Alt+F, Alt+E, Alt+T, and Alt+S open them. A click opens them too. Left, Right, and Tab move between those four menus while one is open.
 
 - **File** creates a tab, opens and saves, closes a tab, and quits. Closing or quitting with unsaved edits asks you to confirm.
+- **Edit** is Undo, Redo, Cut, Copy, Paste, and Select All. They are the same actions as Ctrl+Z, Ctrl+Y, Ctrl+X, Ctrl+C, Ctrl+V, and Ctrl+A. Cut with no selection copies the current line and leaves it in place. Select All selects the whole buffer even while Find is open. Ctrl+A in that bar still replaces every match.
 - **Open** and **Save As** start as a path dialog. **Browse…** opens the folder listing. On Open, that listing can switch to recent files; each recent row shows `name @ directory`, and a long directory is truncated from the left. Click `[x]`, or press Delete or Backspace, to drop one recent; **Clear** empties the list. Paths that no longer exist are removed when you open the list. On Save As, type a file name and choose **Use folder** to save into the folder you are viewing.
 - **Tools → Find & Replace** opens the find bar. Tab moves from the query, to the replacement, to the command keys. On the command keys, `n` and `N` move between matches, and `c`, `x`, and `w` toggle case, regular expression, and whole word. Whole word applies to a plain search. A regular expression is the pattern you type.
 - Enter and `r` replace the current match and insert the replacement as written. While the bar is open, Ctrl+A replaces every match. An empty replacement leaves the text alone. Replace All on a regular expression expands `$` groups such as `$1`, and it matches case exactly even when the case toggle is off.
@@ -144,26 +145,26 @@ When another program writes a file you have open, rust-edit offers **Reload**, *
 
 F1 lists every shortcut. These are the ones you need on the first day.
 
-| Action                       | Key                                     |
-|------------------------------|-----------------------------------------|
-| New tab                      | Ctrl+N                                  |
-| Open                         | Ctrl+O                                  |
-| Save                         | Ctrl+S                                  |
-| Save As                      | Ctrl+Alt+S                              |
-| Close tab                    | Ctrl+W                                  |
-| Quit                         | Ctrl+Q                                  |
-| Undo / redo                  | Ctrl+Z / Ctrl+Y                         |
-| Cut / copy / paste           | Ctrl+X / Ctrl+C / Ctrl+V                |
-| Select all                   | Ctrl+A (while Find is closed)           |
-| Clear the selection          | Esc                                     |
-| Find                         | Ctrl+F, then Tab to move between fields |
-| Help                         | F1                                      |
-| Word count                   | Alt+W                                   |
-| Word wrap                    | Alt+Z                                   |
-| Spelling suggestions         | F7                                      |
-| Toggle comment               | Ctrl+/                                  |
-| Switch to tab 1–9            | Alt+1 … Alt+9                           |
-| Open File / Tools / Settings | Alt+F / Alt+T / Alt+S                   |
+| Action                              | Key                                     |
+|-------------------------------------|-----------------------------------------|
+| New tab                             | Ctrl+N                                  |
+| Open                                | Ctrl+O                                  |
+| Save                                | Ctrl+S                                  |
+| Save As                             | Ctrl+Alt+S                              |
+| Close tab                           | Ctrl+W                                  |
+| Quit                                | Ctrl+Q                                  |
+| Undo / redo                         | Ctrl+Z / Ctrl+Y                         |
+| Cut / copy / paste                  | Ctrl+X / Ctrl+C / Ctrl+V                |
+| Select all                          | Ctrl+A (while Find is closed)           |
+| Clear the selection                 | Esc                                     |
+| Find                                | Ctrl+F, then Tab to move between fields |
+| Help                                | F1                                      |
+| Word count                          | Alt+W                                   |
+| Word wrap                           | Alt+Z                                   |
+| Spelling suggestions                | F7                                      |
+| Toggle comment                      | Ctrl+/                                  |
+| Switch to tab 1–9                   | Alt+1 … Alt+9                           |
+| Open File / Edit / Tools / Settings | Alt+F / Alt+E / Alt+T / Alt+S           |
 
 Ctrl+/ comments or uncomments the current line, or the selected lines.
 
