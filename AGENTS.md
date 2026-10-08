@@ -2,7 +2,7 @@
 
 **Project:** Rust-Edit — Feature-rich terminal text & code editor (TUI)  
 **Primary Framework:** Ratatui v0.30+  
-**Status:** Phase 1 complete (June 2026). MVP + high-value additions shipped.   
+**Status:** v0.1.1 released - v0.1.2 in development
 **Last Updated:** October 7, 2026
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
