@@ -20,8 +20,9 @@ mod wrap;
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
-        Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+        EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -89,7 +90,8 @@ fn main() -> Result<()> {
         stdout,
         EnterAlternateScreen,
         EnableMouseCapture,
-        EnableFocusChange
+        EnableFocusChange,
+        EnableBracketedPaste
     )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -102,7 +104,8 @@ fn main() -> Result<()> {
         terminal.backend_mut(),
         LeaveAlternateScreen,
         DisableMouseCapture,
-        DisableFocusChange
+        DisableFocusChange,
+        DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
 
@@ -582,6 +585,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
 
             for event in events.clone() {
                 match event {
+                    Event::Paste(text) => apply_bracketed_paste(app, &text),
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         app.format_status = None;
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1014,6 +1018,106 @@ fn wheel_lines(event: &Event) -> Option<isize> {
     } else {
         None
     }
+}
+
+/// One terminal paste is one editor undo step. `\r\n` and a lone `\r` become `\n`.
+/// A focused single-line field receives the text with control characters removed.
+/// Find text focus still receives it when a menu is also open, matching typed
+/// characters. Find command mode, a menu with no text field, and a non-text
+/// popup swallow the paste.
+fn apply_bracketed_paste(app: &mut App, text: &str) {
+    app.format_status = None;
+    let text = normalize_paste_newlines(text);
+    if text.is_empty() {
+        return;
+    }
+
+    if let Some(focus) = app.popup_focus() {
+        paste_into_popup(app, focus, &text);
+        return;
+    }
+    if app.find_state.as_ref().is_some_and(|fs| fs.editing_text()) {
+        app.paste_into_find(&text);
+        return;
+    }
+    if app.active_menu.is_some() || app.is_find_active() {
+        return;
+    }
+    app.active_buffer_mut().insert(&text);
+}
+
+fn paste_into_popup(app: &mut App, focus: PopupFocus, text: &str) {
+    match focus {
+        PopupFocus::FileDialog => {
+            for ch in text.chars().filter(|ch| !ch.is_control()) {
+                app.file_dialog_input_char(ch);
+            }
+        }
+        PopupFocus::FileBrowser => {
+            let name_focused = app.browser_origin_is_save
+                && app.browser_button_selected == crate::ui::popups::file_browser::FOCUS_FILENAME;
+            if name_focused {
+                for ch in text.chars() {
+                    app.browser_filename_push(ch);
+                }
+            }
+        }
+        PopupFocus::Dictionary => {
+            let on_field = app.dictionary.as_ref().is_some_and(|state| {
+                state.editor.as_ref().is_some_and(|editor| {
+                    editor.focus == crate::ui::popups::dictionary::EditorFocus::Field
+                })
+            });
+            if !on_field {
+                return;
+            }
+            if let Some(editor) = app
+                .dictionary
+                .as_mut()
+                .and_then(|state| state.editor.as_mut())
+            {
+                for ch in text.chars() {
+                    editor.insert_char(ch);
+                }
+            }
+        }
+        PopupFocus::Themes => {
+            if app.themes_mode != popups::themes::ThemesMode::Edit {
+                return;
+            }
+            let Some(edit) = app.themes_edit.as_mut() else {
+                return;
+            };
+            if !edit.focus.is_text() {
+                return;
+            }
+            for ch in text.chars().filter(|ch| !ch.is_control()) {
+                edit.type_char(ch);
+            }
+        }
+        PopupFocus::Confirm
+        | PopupFocus::Reload
+        | PopupFocus::Help
+        | PopupFocus::Configure
+        | PopupFocus::WordCount
+        | PopupFocus::Spelling => {}
+    }
+}
+
+fn normalize_paste_newlines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            out.push('\n');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn wheel_pos(event: &Event) -> Option<(u16, u16)> {
@@ -4877,5 +4981,143 @@ mod startup_tests {
             startup_from_args(["src/main.rs", "-notes.txt"]),
             Startup::Run(vec!["src/main.rs".to_string(), "-notes.txt".to_string()])
         );
+    }
+}
+
+#[cfg(test)]
+mod bracketed_paste_tests {
+    use super::*;
+
+    #[test]
+    fn bracketed_paste_is_one_undo() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("keep");
+        apply_bracketed_paste(&mut app, "one\r\ntwo");
+        assert_eq!(app.active_buffer().text(), "keepone\ntwo");
+        app.undo();
+        assert_eq!(app.active_buffer().text(), "keep");
+        app.undo();
+        assert_eq!(app.active_buffer().text(), "");
+    }
+
+    #[test]
+    fn bracketed_paste_replaces_a_selection_in_one_undo() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("abcdef");
+        app.active_buffer_mut().selection = Some(2..4);
+        apply_bracketed_paste(&mut app, "XY");
+        assert_eq!(app.active_buffer().text(), "abXYef");
+        assert!(app.active_buffer().selection.is_none());
+        app.undo();
+        assert_eq!(app.active_buffer().text(), "abcdef");
+    }
+
+    #[test]
+    fn bracketed_paste_into_find_replace_leaves_the_query() {
+        let mut app = App::new(&[]);
+        app.toggle_find();
+        let fs = app.find_state.as_mut().unwrap();
+        fs.focus = crate::ui::find::FindFocus::Replace;
+        fs.query = "old".into();
+        apply_bracketed_paste(&mut app, "new\n");
+        let fs = app.find_state.as_ref().unwrap();
+        assert_eq!(fs.query, "old");
+        assert_eq!(fs.replace, "new");
+    }
+
+    #[test]
+    fn bracketed_paste_into_find_query_leaves_the_buffer() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("keep");
+        app.toggle_find();
+        apply_bracketed_paste(&mut app, "hello\nworld");
+        assert_eq!(app.find_state.as_ref().unwrap().query, "helloworld");
+        assert_eq!(app.active_buffer().text(), "keep");
+    }
+
+    #[test]
+    fn bracketed_paste_in_find_command_mode_is_ignored() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("keep");
+        app.toggle_find();
+        app.find_state.as_mut().unwrap().focus = crate::ui::find::FindFocus::Command;
+        apply_bracketed_paste(&mut app, "nope");
+        assert_eq!(app.find_state.as_ref().unwrap().query, "");
+        assert_eq!(app.active_buffer().text(), "keep");
+    }
+
+    #[test]
+    fn bracketed_paste_while_a_menu_is_open_leaves_the_buffer() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("keep");
+        app.active_menu = Some("Edit".into());
+        apply_bracketed_paste(&mut app, "nope");
+        assert_eq!(app.active_buffer().text(), "keep");
+    }
+
+    #[test]
+    fn bracketed_paste_while_confirm_is_open_leaves_the_buffer() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("keep");
+        app.show_confirm_dialog("Quit with unsaved changes?", "quit");
+        apply_bracketed_paste(&mut app, "yes");
+        assert!(!app.should_quit);
+        assert_eq!(app.active_buffer().text(), "keep");
+    }
+
+    #[test]
+    fn bracketed_paste_into_the_file_dialog_keeps_a_path() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("keep");
+        app.show_file_dialog(false);
+        apply_bracketed_paste(&mut app, "/tmp/a.txt\n");
+        assert_eq!(app.file_path_input, "/tmp/a.txt");
+        assert_eq!(app.active_buffer().text(), "keep");
+    }
+
+    #[test]
+    fn bracketed_paste_into_the_save_name_field() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("keep");
+        app.show_file_dialog(true);
+        app.open_file_browser();
+        app.browser_button_selected = crate::ui::popups::file_browser::FOCUS_FILENAME;
+        app.browser_filename.clear();
+        apply_bracketed_paste(&mut app, "notes.txt\n");
+        assert_eq!(app.browser_filename, "notes.txt");
+        assert_eq!(app.active_buffer().text(), "keep");
+    }
+
+    #[test]
+    fn bracketed_paste_into_the_dictionary_field() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("keep");
+        app.open_dictionary();
+        app.dictionary_begin_add();
+        apply_bracketed_paste(&mut app, "well-known\n");
+        let draft = app
+            .dictionary
+            .as_ref()
+            .and_then(|state| state.editor.as_ref())
+            .map(|editor| editor.draft.clone())
+            .unwrap_or_default();
+        assert_eq!(draft, "well-known");
+        assert_eq!(app.active_buffer().text(), "keep");
+    }
+
+    #[test]
+    fn bracketed_paste_into_the_theme_name() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("keep");
+        app.open_themes();
+        themes_popup_start_edit(&mut app, true);
+        apply_bracketed_paste(&mut app, "Night\n");
+        let name = app
+            .themes_edit
+            .as_ref()
+            .map(|edit| edit.name.clone())
+            .unwrap_or_default();
+        assert_eq!(name, "Night");
+        assert_eq!(app.active_buffer().text(), "keep");
     }
 }

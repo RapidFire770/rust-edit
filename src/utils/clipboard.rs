@@ -1,4 +1,6 @@
-// arboard thin wrapper. Sprint 1.
+// arboard thin wrapper. Cargo enables `wayland-data-control`; arboard uses X11
+// when that protocol is missing. Keep this value alive for the session: on
+// Linux the copying process is what serves the clipboard data.
 #![allow(dead_code)]
 
 use arboard::Clipboard;

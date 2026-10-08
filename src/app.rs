@@ -719,6 +719,33 @@ impl App {
         }
     }
 
+    /// Terminal paste into the focused find field. Newlines are dropped so a
+    /// multi-line clipboard stays one search string, and matches refresh once.
+    pub fn paste_into_find(&mut self, text: &str) {
+        let editing_replace = self
+            .find_state
+            .as_ref()
+            .is_some_and(|fs| fs.editing_text() && fs.focus == FindFocus::Replace);
+        let editing = self.find_state.as_ref().is_some_and(|fs| fs.editing_text());
+        if !editing {
+            return;
+        }
+        let extra: String = text.chars().filter(|ch| !ch.is_control()).collect();
+        if extra.is_empty() {
+            return;
+        }
+        if let Some(fs) = &mut self.find_state {
+            if editing_replace {
+                fs.replace.push_str(&extra);
+            } else {
+                fs.query.push_str(&extra);
+            }
+        }
+        if !editing_replace {
+            self.update_find_matches();
+        }
+    }
+
     pub fn update_find_matches(&mut self) {
         let text = if let Some(_fs) = &self.find_state {
             self.active_buffer().text()
