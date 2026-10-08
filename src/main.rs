@@ -4534,6 +4534,21 @@ mod popup_mouse_focus_tests {
     }
 
     #[test]
+    fn a_rust_file_lists_main_from_the_scanner() {
+        use crate::ui::side_panel::PanelKind;
+        let mut app = App::new(&[]);
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(
+            "fn main() {}\n",
+            Some(std::path::PathBuf::from("main.rs")),
+        );
+        app.toggle_symbol_list(PanelKind::Functions);
+        let rows = app.list_rows(PanelKind::Functions);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "main");
+        assert_eq!(rows[0].line_no, 1);
+    }
+
+    #[test]
     fn function_list_opens_on_the_left_and_variables_take_the_right() {
         use crate::ui::side_panel::{PanelKind, Side};
         let mut app = App::new(&[]);
