@@ -10,6 +10,7 @@ mod format;
 mod fs_access;
 mod highlight_cache;
 mod spellcheck;
+mod symbols;
 mod syntax;
 mod theme;
 mod themes;
@@ -200,6 +201,7 @@ enum WheelTarget {
     TabStrip,
     Themes,
     Dictionary,
+    SidePanel(crate::ui::side_panel::Side),
 }
 
 fn wheel_target(app: &App, wheel_col: u16, wheel_row: u16) -> WheelTarget {
@@ -230,10 +232,11 @@ fn wheel_target(app: &App, wheel_col: u16, wheel_row: u16) -> WheelTarget {
                     return WheelTarget::TabStrip;
                 }
             }
-            if crate::ui::side_panel::point_in(app.left_panel_area.get(), wheel_col, wheel_row)
-                || crate::ui::side_panel::point_in(app.right_panel_area.get(), wheel_col, wheel_row)
-            {
-                return WheelTarget::Swallow;
+            if crate::ui::side_panel::point_in(app.left_panel_area.get(), wheel_col, wheel_row) {
+                return WheelTarget::SidePanel(crate::ui::side_panel::Side::Left);
+            }
+            if crate::ui::side_panel::point_in(app.right_panel_area.get(), wheel_col, wheel_row) {
+                return WheelTarget::SidePanel(crate::ui::side_panel::Side::Right);
             }
             WheelTarget::Editor
         }
@@ -570,6 +573,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                     WheelTarget::TabStrip => {
                         app.scroll_tab_strip(wheel_delta.signum() * (wheel_delta.abs() / 3).max(1));
                     }
+                    WheelTarget::SidePanel(side) => app.scroll_panel(side, wheel_delta),
                     WheelTarget::Editor => {
                         if app.config.word_wrap {
                             let buf = app.active_buffer();
@@ -703,6 +707,14 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 PopupFocus::Spelling => handle_spelling_key(key.code, app),
                                 PopupFocus::Dictionary => handle_dictionary_key(key.code, app),
                             }
+                            continue;
+                        }
+
+                        if app.panel_focus.is_some()
+                            && app.active_menu.is_none()
+                            && !panel_key_reaches_global(&key)
+                        {
+                            handle_panel_key(&key, app);
                             continue;
                         }
 
@@ -1047,7 +1059,7 @@ fn apply_bracketed_paste(app: &mut App, text: &str) {
         app.paste_into_find(&text);
         return;
     }
-    if app.active_menu.is_some() || app.is_find_active() {
+    if app.active_menu.is_some() || app.is_find_active() || app.panel_focus.is_some() {
         return;
     }
     app.active_buffer_mut().insert(&text);
@@ -1612,16 +1624,11 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             // popup_is_open is false until after handle_menu_action.
             if !app.popup_is_open() {
                 if let Some(ref menu_name) = app.active_menu {
-                    let (menu_x, num_items) = (
-                        crate::ui::header::menu_x(menu_name.as_str()) as usize,
-                        crate::ui::header::menu_len(menu_name.as_str()),
-                    );
-                    let dy = crate::ui::layout::HEADER_ROWS as usize; // below header + rule
-                    let dropdown_h = num_items + 2;
-                    let in_dropdown_y = y >= dy && y < dy + dropdown_h;
-                    let in_dropdown_x = x >= menu_x && x < menu_x + 30;
-                    if in_dropdown_y && in_dropdown_x {
-                        let item_row = y.saturating_sub(dy).saturating_sub(1);
+                    let dropdown = crate::ui::header::dropdown_rect(term_area(), menu_name);
+                    let num_items = crate::ui::header::menu_len(menu_name);
+                    let in_dropdown = crate::ui::side_panel::point_in(dropdown, x as u16, y as u16);
+                    if in_dropdown {
+                        let item_row = y.saturating_sub(dropdown.y as usize).saturating_sub(1);
                         if item_row < num_items {
                             app.menu_selected = item_row;
                             handle_menu_action(app);
@@ -1677,6 +1684,10 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                         }
                     }
                 }
+            }
+
+            if !skip_editor && panel_click(app, x as u16, y as u16) {
+                skip_editor = true;
             }
 
             if !skip_editor {
@@ -1761,6 +1772,10 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             update_hover_states(x, y, app);
         }
         MouseEventKind::Drag(MouseButton::Left) => {
+            if let Some(side) = app.panel_scrollbar_drag {
+                app.scroll_panel_to_row(side, y);
+                return;
+            }
             // Popup overflow-bar scrub is independent of the editor scrollbar
             // flag (that flag is cleared while a modal is open).
             match app.popup_scrollbar_drag {
@@ -1848,6 +1863,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             app.scrollbar_drag_active = false;
             app.hscrollbar_drag_active = false;
             app.popup_scrollbar_drag = None;
+            app.panel_scrollbar_drag = None;
         }
         // Horizontal mouse-wheel (Shift+wheel on most terminals) scrolls the
         // view sideways. Vertical wheel is coalesced in run_app, but horizontal
@@ -3271,11 +3287,95 @@ fn handle_menu_action(app: &mut App) {
         ("Tools", 5) => app.toggle_spellcheck(),
         ("Tools", 6) => app.open_spelling(),
         ("Tools", 7) => app.open_dictionary(),
+        ("Tools", 8) => app.toggle_symbol_list(crate::ui::side_panel::PanelKind::Functions),
+        ("Tools", 9) => app.toggle_symbol_list(crate::ui::side_panel::PanelKind::Variables),
         ("Settings", 0) => app.open_configure(),
         ("Settings", 1) => app.open_themes(),
         ("Settings", 2) => app.open_help(), // Help (F1)
         _ => {}
     }
+}
+
+fn panel_key_reaches_global(key: &crossterm::event::KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::ALT) || matches!(key.code, KeyCode::F(1) | KeyCode::F(7))
+}
+
+/// Keys while a symbol list is focused. Other typing is swallowed.
+fn handle_panel_key(key: &crossterm::event::KeyEvent, app: &mut App) {
+    use crate::ui::side_panel::Side;
+    let Some(side) = app.panel_focus else {
+        return;
+    };
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.nudge_focused_list(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.nudge_focused_list(1),
+        KeyCode::Enter => app.activate_focused_list(),
+        KeyCode::Esc => app.panel_focus = None,
+        KeyCode::Char('x') => app.close_side(side),
+        KeyCode::Left => app.move_panel(side, Side::Left),
+        KeyCode::Right => app.move_panel(side, Side::Right),
+        _ => {}
+    }
+}
+
+fn panel_click(app: &mut App, x: u16, y: u16) -> bool {
+    use crate::ui::side_panel::{hit_test, panel_geom, point_in, PanelHit, Side};
+    for side in [Side::Left, Side::Right] {
+        let rect = match side {
+            Side::Left => app.left_panel_area.get(),
+            Side::Right => app.right_panel_area.get(),
+        };
+        if !point_in(rect, x, y) {
+            continue;
+        }
+        let geom = panel_geom(rect, side);
+        match hit_test(geom, x, y) {
+            PanelHit::Move => app.move_panel(side, side.other()),
+            PanelHit::Close => app.close_side(side),
+            PanelHit::Header => app.panel_focus = Some(side),
+            PanelHit::Row(row) => app.activate_visible_row(side, row),
+            PanelHit::Scrollbar => {
+                app.panel_scrollbar_drag = Some(side);
+                app.mouse_drag_active = false;
+                app.scrollbar_drag_active = false;
+                app.hscrollbar_drag_active = false;
+                app.scroll_panel_to_row(side, y);
+            }
+            PanelHit::Miss => {}
+        }
+        return true;
+    }
+    false
+}
+
+fn render_side_panel(
+    f: &mut Frame,
+    app: &mut App,
+    rect: Rect,
+    side: crate::ui::side_panel::Side,
+    kind: crate::ui::side_panel::PanelKind,
+) {
+    let viewport = crate::ui::side_panel::panel_geom(rect, side).list.height as usize;
+    app.sync_open_list(kind, viewport);
+    let rows = app.list_rows(kind);
+    let nav = match kind {
+        crate::ui::side_panel::PanelKind::Functions => app.function_nav,
+        crate::ui::side_panel::PanelKind::Variables => app.variable_nav,
+    };
+    let message = app.list_message(kind);
+    let theme = app.current_theme().clone();
+    crate::ui::side_panel::render(
+        f,
+        rect,
+        crate::ui::side_panel::PanelView {
+            side,
+            kind,
+            rows: &rows,
+            nav,
+            message,
+        },
+        &theme,
+    );
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
@@ -3290,6 +3390,14 @@ fn ui(f: &mut Frame, app: &mut App) {
         }
         app.left_panel = fitted.left;
         app.right_panel = fitted.right;
+        let focus_closed = match app.panel_focus {
+            Some(crate::ui::side_panel::Side::Left) => app.left_panel.is_none(),
+            Some(crate::ui::side_panel::Side::Right) => app.right_panel.is_none(),
+            None => false,
+        };
+        if focus_closed {
+            app.panel_focus = None;
+        }
     }
     let sides = crate::ui::side_panel::split_editor_band(
         chunks[1],
@@ -3330,23 +3438,11 @@ fn ui(f: &mut Frame, app: &mut App) {
     crate::ui::header::render(f, chunks[0], app);
 
     if let (Some(rect), Some(kind)) = (sides.left, app.left_panel) {
-        crate::ui::side_panel::render(
-            f,
-            rect,
-            crate::ui::side_panel::Side::Left,
-            kind,
-            app.current_theme(),
-        );
+        render_side_panel(f, app, rect, crate::ui::side_panel::Side::Left, kind);
     }
     crate::ui::editor::render(f, sides.editor, app);
     if let (Some(rect), Some(kind)) = (sides.right, app.right_panel) {
-        crate::ui::side_panel::render(
-            f,
-            rect,
-            crate::ui::side_panel::Side::Right,
-            kind,
-            app.current_theme(),
-        );
+        render_side_panel(f, app, rect, crate::ui::side_panel::Side::Right, kind);
     }
     if let Some(find_area) = sides.find {
         if let Some(fs) = &app.find_state {
@@ -4270,7 +4366,10 @@ mod wheel_target_tests {
         let app = App::new(&[]);
         app.left_panel_area
             .set(ratatui::layout::Rect::new(0, 1, 24, 10));
-        assert_eq!(wheel_target(&app, 2, 4), WheelTarget::Swallow);
+        assert_eq!(
+            wheel_target(&app, 2, 4),
+            WheelTarget::SidePanel(crate::ui::side_panel::Side::Left)
+        );
         assert_eq!(wheel_target(&app, 30, 4), WheelTarget::Editor);
     }
 }
@@ -4414,6 +4513,120 @@ mod popup_mouse_focus_tests {
         handle_menu_action(&mut app);
         assert!(app.dictionary.is_some());
         assert_eq!(app.popup_focus(), Some(PopupFocus::Dictionary));
+    }
+
+    fn sample_symbols() -> Vec<crate::symbols::Symbol> {
+        use crate::symbols::{Symbol, SymbolKind};
+        vec![
+            Symbol {
+                name: "main".into(),
+                kind: SymbolKind::Function,
+                line: 0,
+                byte: 3,
+            },
+            Symbol {
+                name: "count".into(),
+                kind: SymbolKind::Variable,
+                line: 1,
+                byte: 14,
+            },
+        ]
+    }
+
+    #[test]
+    fn function_list_opens_on_the_left_and_variables_take_the_right() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(sample_symbols());
+        app.active_menu = Some("Tools".into());
+        app.menu_selected = 8;
+        handle_menu_action(&mut app);
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+        assert_eq!(app.panel_focus, Some(Side::Left));
+        assert!(app.right_panel.is_none());
+
+        app.active_menu = Some("Tools".into());
+        app.menu_selected = 9;
+        handle_menu_action(&mut app);
+        assert_eq!(app.right_panel, Some(PanelKind::Variables));
+        assert_eq!(app.panel_focus, Some(Side::Right));
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+    }
+
+    #[test]
+    fn plain_file_does_not_open_a_symbol_list() {
+        let mut app = App::new(&[]);
+        app.active_menu = Some("Tools".into());
+        app.menu_selected = 8;
+        handle_menu_action(&mut app);
+        assert!(app.left_panel.is_none());
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("No symbols for this file")
+        );
+    }
+
+    #[test]
+    fn enter_jumps_to_the_name_and_esc_leaves_the_list_open() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let mut app = App::new(&[]);
+        *app.active_buffer_mut() =
+            crate::buffer::Buffer::from_str("fn main() {}\nlet count = 1;\n", None);
+        app.symbol_override = Some(sample_symbols());
+        app.active_menu = Some("Tools".into());
+        app.menu_selected = 8;
+        handle_menu_action(&mut app);
+        let key = crossterm::event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        handle_panel_key(&key, &mut app);
+        assert_eq!(app.active_buffer().cursor, 3);
+        assert_eq!(app.panel_focus, None);
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+
+        app.active_menu = Some("Tools".into());
+        app.menu_selected = 8;
+        handle_menu_action(&mut app);
+        assert_eq!(app.panel_focus, Some(Side::Left));
+        let key = crossterm::event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_panel_key(&key, &mut app);
+        assert_eq!(app.panel_focus, None);
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+
+        app.panel_focus = Some(Side::Left);
+        let key = crossterm::event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        handle_panel_key(&key, &mut app);
+        assert!(app.left_panel.is_none());
+    }
+
+    #[test]
+    fn right_arrow_swaps_the_two_lists() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(sample_symbols());
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.toggle_symbol_list(PanelKind::Variables);
+        assert_eq!(app.panel_focus, Some(Side::Right));
+        app.panel_focus = Some(Side::Left);
+        let key = crossterm::event::KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        handle_panel_key(&key, &mut app);
+        assert_eq!(app.right_panel, Some(PanelKind::Functions));
+        assert_eq!(app.left_panel, Some(PanelKind::Variables));
+        assert_eq!(app.panel_focus, Some(Side::Right));
+    }
+
+    #[test]
+    fn a_narrow_window_refuses_the_second_list() {
+        use crate::ui::side_panel::PanelKind;
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(sample_symbols());
+        app.header_width.set(60);
+        app.toggle_symbol_list(PanelKind::Functions);
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+        app.toggle_symbol_list(PanelKind::Variables);
+        assert!(app.right_panel.is_none());
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Window is too narrow for both lists")
+        );
     }
 
     /// System clipboard is shared. Edit-menu tests that copy must not run at once.

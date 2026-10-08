@@ -261,6 +261,8 @@ pub fn tools_menu_items() -> &'static [&'static str] {
         "Toggle Spellcheck",
         "Spelling (F7)",
         "Dictionary",
+        "Function List",
+        "Variables List",
     ]
 }
 
@@ -302,12 +304,7 @@ pub fn render_dropdown(
     use ratatui::widgets::{Block, Borders, List, ListItem};
 
     let item_strs = menu_items(menu);
-    let menu_x = menu_x(menu);
-
-    // Compute width to fit longest item + padding + borders
-    let max_item_len = item_strs.iter().map(|s| s.len()).max().unwrap_or(20);
-    let width = (max_item_len as u16 + 4).max(26);
-    let height = (item_strs.len() as u16 + 2).min(10);
+    let dropdown_area = dropdown_rect(area, menu);
 
     let items: Vec<ListItem> = item_strs
         .iter()
@@ -326,13 +323,6 @@ pub fn render_dropdown(
         })
         .collect();
 
-    let dropdown_area = Rect::new(
-        menu_x,
-        crate::ui::layout::HEADER_ROWS, // below header (menu row + separator rule)
-        width.min(area.width),
-        height.min(area.height.saturating_sub(crate::ui::layout::HEADER_ROWS)),
-    );
-
     let block = Block::default()
         .borders(Borders::ALL)
         .style(theme.editor_bg_style()); // or header-ish
@@ -348,14 +338,20 @@ pub fn render_dropdown(
     f.render_widget(list, dropdown_area);
 }
 
-/// Get the dropdown popup rect for hit-testing
+/// Dropdown rect shared by paint and hit-testing.
+///
+/// Height is the items plus the border, and it stops above the status row.
+/// Width fits the longest label (`> ` plus the text, inside the border).
 pub fn dropdown_rect(area: Rect, menu_name: &str) -> Rect {
-    let header_height = crate::ui::layout::HEADER_ROWS;
-    let h = (menu_len(menu_name) as u16).saturating_add(2);
-    let w = 26;
-    let y = header_height;
+    let items = menu_items(menu_name);
+    let max_item_len = items.iter().map(|s| s.len()).max().unwrap_or(20);
+    let width = (max_item_len as u16 + 4).max(26);
+    let height = (items.len() as u16).saturating_add(2);
+    let y = crate::ui::layout::HEADER_ROWS;
     let x = menu_x(menu_name);
-    Rect::new(x, y, w, h.min(area.height.saturating_sub(y)))
+    let max_h = area.height.saturating_sub(y).saturating_sub(1).max(1);
+    let max_w = area.width.saturating_sub(x).max(1);
+    Rect::new(x, y, width.min(max_w), height.min(max_h))
 }
 
 pub const PLUS_COLS: usize = 3;
@@ -624,6 +620,8 @@ mod tests {
                 "Toggle Spellcheck",
                 "Spelling (F7)",
                 "Dictionary",
+                "Function List",
+                "Variables List",
             ]
         );
         let joined = items.join("\n");
@@ -639,7 +637,7 @@ mod tests {
         assert_eq!(menu_len("Tools"), tools_menu_items().len());
         assert_eq!(menu_len("Settings"), settings_menu_items().len());
         assert_eq!(menu_len("Edit"), 6);
-        assert_eq!(menu_len("Tools"), 8);
+        assert_eq!(menu_len("Tools"), 10);
         assert_eq!(MENU_ORDER, ["File", "Edit", "Tools", "Settings"]);
     }
 
@@ -699,8 +697,8 @@ mod tests {
         let rect = dropdown_rect(area, "Tools");
         assert_eq!(rect.x, 14);
         assert_eq!(rect.y, crate::ui::layout::HEADER_ROWS);
-        assert_eq!(rect.width, 26);
-        assert_eq!(rect.height, 10);
+        assert_eq!(rect.width, 28);
+        assert_eq!(rect.height, 12);
     }
 
     #[test]

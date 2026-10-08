@@ -162,6 +162,16 @@ pub struct App {
     pub left_panel: Option<crate::ui::side_panel::PanelKind>,
     /// Symbol list docked on the right. The two lists never share a side.
     pub right_panel: Option<crate::ui::side_panel::PanelKind>,
+    /// Which open list owns Up/Down, Enter, and Esc. `None` means the editor.
+    pub panel_focus: Option<crate::ui::side_panel::Side>,
+    pub function_nav: crate::ui::side_panel::PanelNav,
+    pub variable_nav: crate::ui::side_panel::PanelNav,
+    /// Scroll drag for a list's own bar. Separate from the editor bars.
+    pub panel_scrollbar_drag: Option<crate::ui::side_panel::Side>,
+    pub symbol_cache: Option<crate::symbols::SymbolCache>,
+    /// Tests inject definitions so the lists can jump before a scanner exists.
+    #[cfg(test)]
+    pub symbol_override: Option<Vec<crate::symbols::Symbol>>,
     /// Whether `ui()` reserved a row for the editor horizontal scrollbar this
     /// frame. `editor::render` reads this instead of recomputing from
     /// `buf.visible_lines` (already post-subtract).
@@ -343,6 +353,13 @@ impl App {
             right_panel_area: std::cell::Cell::new(Rect::default()),
             left_panel: None,
             right_panel: None,
+            panel_focus: None,
+            function_nav: crate::ui::side_panel::PanelNav::default(),
+            variable_nav: crate::ui::side_panel::PanelNav::default(),
+            panel_scrollbar_drag: None,
+            symbol_cache: None,
+            #[cfg(test)]
+            symbol_override: None,
             editor_hscrollbar_visible: std::cell::Cell::new(false),
             tab_scroll: 0,
             header_width: std::cell::Cell::new(0),
@@ -375,6 +392,342 @@ impl App {
         } else {
             0
         }
+    }
+
+    fn buffer_supports_symbols(&self) -> bool {
+        #[cfg(test)]
+        if self.symbol_override.is_some() {
+            return true;
+        }
+        crate::symbols::supports(self.active_buffer().language)
+    }
+
+    fn current_symbols(&mut self) -> Vec<crate::symbols::Symbol> {
+        #[cfg(test)]
+        if let Some(list) = &self.symbol_override {
+            return list.clone();
+        }
+        let (id, generation, language, rope) = {
+            let buf = self.active_buffer();
+            (buf.id, buf.generation, buf.language, buf.rope.clone())
+        };
+        if let Some(cache) = &self.symbol_cache {
+            if cache.id == id && cache.generation == generation && cache.language == language {
+                return cache.symbols.clone();
+            }
+        }
+        let symbols = crate::symbols::collect(language, &rope);
+        self.symbol_cache = Some(crate::symbols::SymbolCache {
+            id,
+            generation,
+            language,
+            symbols: symbols.clone(),
+        });
+        symbols
+    }
+
+    fn symbols_of(
+        &mut self,
+        kind: crate::ui::side_panel::PanelKind,
+    ) -> Vec<crate::symbols::Symbol> {
+        use crate::symbols::SymbolKind;
+        use crate::ui::side_panel::PanelKind;
+        let want = match kind {
+            PanelKind::Functions => SymbolKind::Function,
+            PanelKind::Variables => SymbolKind::Variable,
+        };
+        self.current_symbols()
+            .into_iter()
+            .filter(|symbol| symbol.kind == want)
+            .collect()
+    }
+
+    fn nav_mut(
+        &mut self,
+        kind: crate::ui::side_panel::PanelKind,
+    ) -> &mut crate::ui::side_panel::PanelNav {
+        use crate::ui::side_panel::PanelKind;
+        match kind {
+            PanelKind::Functions => &mut self.function_nav,
+            PanelKind::Variables => &mut self.variable_nav,
+        }
+    }
+
+    pub fn kind_on(
+        &self,
+        side: crate::ui::side_panel::Side,
+    ) -> Option<crate::ui::side_panel::PanelKind> {
+        use crate::ui::side_panel::Side;
+        match side {
+            Side::Left => self.left_panel,
+            Side::Right => self.right_panel,
+        }
+    }
+
+    fn side_of(
+        &self,
+        kind: crate::ui::side_panel::PanelKind,
+    ) -> Option<crate::ui::side_panel::Side> {
+        use crate::ui::side_panel::Side;
+        if self.left_panel == Some(kind) {
+            Some(Side::Left)
+        } else if self.right_panel == Some(kind) {
+            Some(Side::Right)
+        } else {
+            None
+        }
+    }
+
+    fn set_side(
+        &mut self,
+        side: crate::ui::side_panel::Side,
+        kind: Option<crate::ui::side_panel::PanelKind>,
+    ) {
+        use crate::ui::side_panel::Side;
+        match side {
+            Side::Left => self.left_panel = kind,
+            Side::Right => self.right_panel = kind,
+        }
+    }
+
+    pub fn list_message(&self, kind: crate::ui::side_panel::PanelKind) -> &'static str {
+        use crate::ui::side_panel::PanelKind;
+        if !self.buffer_supports_symbols() {
+            "Not a code file"
+        } else {
+            match kind {
+                PanelKind::Functions => "No functions",
+                PanelKind::Variables => "No variables",
+            }
+        }
+    }
+
+    /// Open, focus, or close `kind`. A closed list prefers its own side and
+    /// takes the other side when that one is free. Both lists never share a side.
+    pub fn toggle_symbol_list(&mut self, kind: crate::ui::side_panel::PanelKind) {
+        use crate::ui::side_panel::{fit_panels, Side};
+        let width = self.header_width.get() as u16;
+        let width = if width == 0 { 80 } else { width };
+
+        if let Some(side) = self.side_of(kind) {
+            if self.panel_focus == Some(side) {
+                self.close_side(side);
+            } else {
+                self.panel_focus = Some(side);
+                self.snap_list_to_caret(kind);
+            }
+            return;
+        }
+        if !self.buffer_supports_symbols() {
+            self.format_status = Some("No symbols for this file".to_string());
+            return;
+        }
+
+        let preferred = kind.preferred_side();
+        let other = preferred.other();
+        let side = if self.kind_on(preferred).is_none() {
+            preferred
+        } else if self.kind_on(other).is_none() {
+            other
+        } else {
+            self.format_status = Some("Both sides are in use".to_string());
+            return;
+        };
+
+        let mut left = self.left_panel;
+        let mut right = self.right_panel;
+        match side {
+            Side::Left => left = Some(kind),
+            Side::Right => right = Some(kind),
+        }
+        let fitted = fit_panels(left, right, width);
+        if fitted.left != left || fitted.right != right {
+            self.format_status = Some(fitted.notice.unwrap_or("Window is too narrow").to_string());
+            return;
+        }
+        self.left_panel = fitted.left;
+        self.right_panel = fitted.right;
+        self.panel_focus = Some(side);
+        self.snap_list_to_caret(kind);
+    }
+
+    pub fn close_side(&mut self, side: crate::ui::side_panel::Side) {
+        self.set_side(side, None);
+        if self.panel_focus == Some(side) {
+            self.panel_focus = None;
+        }
+        if self.panel_scrollbar_drag == Some(side) {
+            self.panel_scrollbar_drag = None;
+        }
+    }
+
+    /// Move the panel on `from` to `to`, swapping when `to` is occupied.
+    pub fn move_panel(
+        &mut self,
+        from: crate::ui::side_panel::Side,
+        to: crate::ui::side_panel::Side,
+    ) {
+        if from == to {
+            return;
+        }
+        let moving = self.kind_on(from);
+        let occupant = self.kind_on(to);
+        self.set_side(to, moving);
+        self.set_side(from, occupant);
+        self.panel_focus = moving.map(|_| to);
+    }
+
+    fn snap_list_to_caret(&mut self, kind: crate::ui::side_panel::PanelKind) {
+        let line = self.active_buffer().cursor_position().0;
+        let symbols = self.symbols_of(kind);
+        let selected = symbols
+            .iter()
+            .rposition(|symbol| symbol.line <= line)
+            .unwrap_or(0);
+        let nav = self.nav_mut(kind);
+        nav.selected = selected;
+        nav.scroll = 0;
+    }
+
+    pub fn sync_open_list(&mut self, kind: crate::ui::side_panel::PanelKind, viewport: usize) {
+        let focused = self
+            .side_of(kind)
+            .is_some_and(|side| self.panel_focus == Some(side));
+        let line = self.active_buffer().cursor_position().0;
+        let symbols = self.symbols_of(kind);
+        let len = symbols.len();
+        let selected = if focused {
+            self.nav_mut(kind).selected
+        } else {
+            symbols
+                .iter()
+                .rposition(|symbol| symbol.line <= line)
+                .unwrap_or(0)
+        };
+        let selected = if len == 0 { 0 } else { selected.min(len - 1) };
+        let nav = self.nav_mut(kind);
+        nav.selected = selected;
+        crate::ui::side_panel::reveal(selected, &mut nav.scroll, viewport);
+    }
+
+    pub fn list_rows(
+        &mut self,
+        kind: crate::ui::side_panel::PanelKind,
+    ) -> Vec<crate::ui::side_panel::ListRow> {
+        self.symbols_of(kind)
+            .into_iter()
+            .map(|symbol| crate::ui::side_panel::ListRow {
+                label: symbol.name,
+                line_no: symbol.line + 1,
+            })
+            .collect()
+    }
+
+    pub fn nudge_focused_list(&mut self, delta: isize) {
+        let Some(side) = self.panel_focus else {
+            return;
+        };
+        let Some(kind) = self.kind_on(side) else {
+            return;
+        };
+        let len = self.symbols_of(kind).len();
+        if len == 0 {
+            return;
+        }
+        let viewport = self.list_viewport(side);
+        let nav = self.nav_mut(kind);
+        let next = (nav.selected as isize + delta).clamp(0, len as isize - 1) as usize;
+        nav.selected = next;
+        crate::ui::side_panel::reveal(next, &mut nav.scroll, viewport);
+    }
+
+    pub fn activate_focused_list(&mut self) {
+        let Some(side) = self.panel_focus else {
+            return;
+        };
+        let Some(kind) = self.kind_on(side) else {
+            return;
+        };
+        let selected = self.nav_mut(kind).selected;
+        self.activate_list_index(kind, selected);
+    }
+
+    pub fn activate_visible_row(&mut self, side: crate::ui::side_panel::Side, row: usize) {
+        let Some(kind) = self.kind_on(side) else {
+            return;
+        };
+        let index = self.nav_mut(kind).scroll + row;
+        self.activate_list_index(kind, index);
+    }
+
+    fn activate_list_index(&mut self, kind: crate::ui::side_panel::PanelKind, index: usize) {
+        let symbols = self.symbols_of(kind);
+        let Some(symbol) = symbols.get(index) else {
+            self.panel_focus = self.side_of(kind);
+            return;
+        };
+        let byte = symbol.byte;
+        self.nav_mut(kind).selected = index;
+        self.jump_to_byte(byte);
+        self.panel_focus = None;
+    }
+
+    pub fn jump_to_byte(&mut self, byte: usize) {
+        let vis = self.editor_visible_lines.get().max(1);
+        let wrap = self.config.word_wrap;
+        let tab = self.config.tab_size;
+        let buf = self.active_buffer_mut();
+        buf.cursor = byte.min(buf.rope.len_bytes());
+        buf.clear_selection();
+        if wrap {
+            let width = buf.visible_width.max(1);
+            let layout = crate::wrap::compute_layout(&buf.rope, 0, buf.line_count(), width, tab);
+            buf.ensure_cursor_visible_wrapped(&layout, vis);
+        } else {
+            buf.ensure_cursor_visible(vis);
+        }
+    }
+
+    pub fn scroll_panel(&mut self, side: crate::ui::side_panel::Side, delta: isize) {
+        let Some(kind) = self.kind_on(side) else {
+            return;
+        };
+        let len = self.symbols_of(kind).len();
+        let viewport = self.list_viewport(side).max(1);
+        let max_scroll = len.saturating_sub(viewport);
+        let nav = self.nav_mut(kind);
+        let next = (nav.scroll as isize + delta).clamp(0, max_scroll as isize) as usize;
+        nav.scroll = next;
+    }
+
+    pub fn scroll_panel_to_row(&mut self, side: crate::ui::side_panel::Side, y: u16) {
+        let Some(kind) = self.kind_on(side) else {
+            return;
+        };
+        let rect = match side {
+            crate::ui::side_panel::Side::Left => self.left_panel_area.get(),
+            crate::ui::side_panel::Side::Right => self.right_panel_area.get(),
+        };
+        let geom = crate::ui::side_panel::panel_geom(rect, side);
+        let len = self.symbols_of(kind).len();
+        let viewport = geom.list.height as usize;
+        let bar = crate::ui::scrollbar::OverflowBar {
+            total: len,
+            position: 0,
+            viewport: viewport.max(1),
+        };
+        if let Some(pos) = bar.target_for_row(y, geom.scrollbar) {
+            let max_scroll = len.saturating_sub(viewport.max(1));
+            self.nav_mut(kind).scroll = pos.min(max_scroll);
+        }
+    }
+
+    fn list_viewport(&self, side: crate::ui::side_panel::Side) -> usize {
+        let rect = match side {
+            crate::ui::side_panel::Side::Left => self.left_panel_area.get(),
+            crate::ui::side_panel::Side::Right => self.right_panel_area.get(),
+        };
+        crate::ui::side_panel::panel_geom(rect, side).list.height as usize
     }
 
     /// Apply the current editor viewport to every buffer, clamp scroll, and

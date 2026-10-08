@@ -3,7 +3,7 @@
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
@@ -26,15 +26,21 @@ pub enum Side {
     Right,
 }
 
-/// The Tools menu constructs these. Until that lands, only geometry tests do.
-#[allow(dead_code)]
+impl Side {
+    pub fn other(self) -> Self {
+        match self {
+            Side::Left => Side::Right,
+            Side::Right => Side::Left,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelKind {
     Functions,
     Variables,
 }
 
-#[allow(dead_code)]
 impl PanelKind {
     pub fn title(self) -> &'static str {
         match self {
@@ -230,8 +236,6 @@ pub fn header_label(kind: PanelKind, side: Side, width: usize) -> String {
     title
 }
 
-/// Row and button hits. The mouse handler uses this once the lists open.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelHit {
     Move,
@@ -243,7 +247,6 @@ pub enum PanelHit {
     Miss,
 }
 
-#[allow(dead_code)]
 pub fn hit_test(geom: PanelGeom, x: u16, y: u16) -> PanelHit {
     if !point_in(geom.outer, x, y) {
         return PanelHit::Miss;
@@ -276,12 +279,83 @@ pub fn point_in(area: Rect, x: u16, y: u16) -> bool {
         && y < area.y.saturating_add(area.height)
 }
 
-pub fn render(f: &mut Frame, area: Rect, side: Side, kind: PanelKind, theme: &Theme) {
+/// One visible list entry. `line_no` is 1-based, matching the gutter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListRow {
+    pub label: String,
+    pub line_no: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PanelNav {
+    pub selected: usize,
+    pub scroll: usize,
+}
+
+/// Keep `selected` inside the visible rows.
+pub fn reveal(selected: usize, scroll: &mut usize, viewport: usize) {
+    if viewport == 0 {
+        return;
+    }
+    if selected < *scroll {
+        *scroll = selected;
+    } else if selected >= scroll.saturating_add(viewport) {
+        *scroll = selected + 1 - viewport;
+    }
+}
+
+/// Name on the left, line number on the right, ellipsis when the name does not fit.
+pub fn row_line(label: &str, line_no: usize, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let num = line_no.to_string();
+    if num.len() + 1 < width {
+        let name_w = width - num.len() - 1;
+        let name = ellipsize(label, name_w);
+        let gap = width - name.chars().count() - num.len();
+        format!("{name}{}{num}", " ".repeat(gap))
+    } else {
+        ellipsize(label, width)
+    }
+}
+
+fn ellipsize(text: &str, width: usize) -> String {
+    let count = text.chars().count();
+    if count <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let keep = width.saturating_sub(1);
+    let mut out: String = text.chars().take(keep).collect();
+    out.push('…');
+    out
+}
+
+pub struct PanelView<'a> {
+    pub side: Side,
+    pub kind: PanelKind,
+    pub rows: &'a [ListRow],
+    pub nav: PanelNav,
+    pub message: &'a str,
+}
+
+pub fn render(f: &mut Frame, area: Rect, view: PanelView<'_>, theme: &Theme) {
+    let PanelView {
+        side,
+        kind,
+        rows,
+        nav,
+        message,
+    } = view;
     if area.width == 0 || area.height == 0 {
         return;
     }
     let geom = panel_geom(area, side);
-    f.render_widget(Paragraph::new("").style(theme.editor_bg_style()), area);
+    let body = theme.editor_bg_style();
+    f.render_widget(Paragraph::new("").style(body), area);
 
     if geom.header.width > 0 && geom.header.height > 0 {
         let label = header_label(kind, side, geom.header.width as usize);
@@ -291,12 +365,56 @@ pub fn render(f: &mut Frame, area: Rect, side: Side, kind: PanelKind, theme: &Th
         );
     }
 
-    let lines: Vec<Line> = (0..area.height).map(|_| Line::from("│")).collect();
+    let width = geom.list.width as usize;
+    let viewport = geom.list.height as usize;
+    let selected_style = Style::default()
+        .fg(Color::from(&theme.editor_fg))
+        .bg(Color::from(&theme.selection_bg));
+    let plain = Style::default()
+        .fg(Color::from(&theme.editor_fg))
+        .bg(Color::from(&theme.editor_bg));
+    let dim = Style::default()
+        .fg(Color::from(&theme.line_number_fg))
+        .bg(Color::from(&theme.editor_bg));
+
+    let mut lines: Vec<Line> = Vec::new();
+    if rows.is_empty() {
+        if viewport > 0 {
+            lines.push(Line::from(Span::styled(ellipsize(message, width), dim)));
+        }
+    } else {
+        let start = nav.scroll.min(rows.len().saturating_sub(1));
+        for (offset, row) in rows.iter().skip(start).take(viewport).enumerate() {
+            let style = if start + offset == nav.selected {
+                selected_style
+            } else {
+                plain
+            };
+            lines.push(Line::from(Span::styled(
+                row_line(&row.label, row.line_no, width),
+                style,
+            )));
+        }
+    }
+    if geom.list.width > 0 && geom.list.height > 0 {
+        f.render_widget(Paragraph::new(lines).style(body), geom.list);
+    }
+
+    if !rows.is_empty() {
+        let bar = crate::ui::scrollbar::OverflowBar {
+            total: rows.len(),
+            position: nav.scroll,
+            viewport: viewport.max(1),
+        };
+        crate::ui::scrollbar::render(f, geom.scrollbar, bar, theme);
+    }
+
+    let sep_lines: Vec<Line> = (0..area.height).map(|_| Line::from("│")).collect();
     let sep_style = Style::default()
         .fg(Color::from(&theme.line_number_fg))
         .bg(Color::from(&theme.editor_bg));
     f.render_widget(
-        Paragraph::new(lines).style(sep_style),
+        Paragraph::new(sep_lines).style(sep_style),
         Rect::new(geom.separator_x, area.y, 1, area.height),
     );
 }
@@ -307,6 +425,15 @@ mod tests {
 
     fn band(width: u16, height: u16) -> Rect {
         Rect::new(0, 0, width, height)
+    }
+
+    #[test]
+    fn row_line_keeps_the_line_number_and_ellipsizes_the_name() {
+        assert_eq!(row_line("main", 12, 10), "main    12");
+        let long = row_line("parse_symbols", 140, 12);
+        assert!(long.ends_with("140"), "{long}");
+        assert!(long.contains('…'), "{long}");
+        assert_eq!(long.chars().count(), 12);
     }
 
     #[test]
