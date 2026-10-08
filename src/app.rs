@@ -10,6 +10,7 @@ use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use crate::ui::find::{FindFocus, FindState};
 use crate::utils::clipboard::ClipboardWrapper;
+use ratatui::layout::Rect;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -150,6 +151,17 @@ pub struct App {
     /// Last known width (in columns) of the editor text area (excludes gutter +
     /// scrollbar). Used by horizontal auto-scroll to follow the cursor.
     pub editor_visible_width: std::cell::Cell<usize>,
+    /// Screen column where the editor rect starts (gutter, text, vertical bar).
+    /// `ui()` sets this every frame. The hardware cursor and mouse clicks add it
+    /// so a left panel does not shift the caret into the list.
+    pub editor_origin_x: std::cell::Cell<u16>,
+    /// Painted panel rects. A zero rect means that side is closed.
+    pub left_panel_area: std::cell::Cell<Rect>,
+    pub right_panel_area: std::cell::Cell<Rect>,
+    /// Symbol list docked on the left. Session-only; not written to config.
+    pub left_panel: Option<crate::ui::side_panel::PanelKind>,
+    /// Symbol list docked on the right. The two lists never share a side.
+    pub right_panel: Option<crate::ui::side_panel::PanelKind>,
     /// Whether `ui()` reserved a row for the editor horizontal scrollbar this
     /// frame. `editor::render` reads this instead of recomputing from
     /// `buf.visible_lines` (already post-subtract).
@@ -326,6 +338,11 @@ impl App {
             should_quit: false,
             editor_visible_lines: std::cell::Cell::new(20),
             editor_visible_width: std::cell::Cell::new(80),
+            editor_origin_x: std::cell::Cell::new(0),
+            left_panel_area: std::cell::Cell::new(Rect::default()),
+            right_panel_area: std::cell::Cell::new(Rect::default()),
+            left_panel: None,
+            right_panel: None,
             editor_hscrollbar_visible: std::cell::Cell::new(false),
             tab_scroll: 0,
             header_width: std::cell::Cell::new(0),

@@ -230,6 +230,11 @@ fn wheel_target(app: &App, wheel_col: u16, wheel_row: u16) -> WheelTarget {
                     return WheelTarget::TabStrip;
                 }
             }
+            if crate::ui::side_panel::point_in(app.left_panel_area.get(), wheel_col, wheel_row)
+                || crate::ui::side_panel::point_in(app.right_panel_area.get(), wheel_col, wheel_row)
+            {
+                return WheelTarget::Swallow;
+            }
             WheelTarget::Editor
         }
     }
@@ -382,7 +387,8 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
                 .to_string()
                 .chars()
                 .count();
-            let screen_x = app.gutter_width() as u16 + col_offset as u16;
+            let screen_x =
+                app.editor_origin_x.get() + app.gutter_width() as u16 + col_offset as u16;
             Some((screen_x, screen_y))
         } else {
             None
@@ -406,7 +412,8 @@ fn compute_cursor_position(app: &App) -> Option<(u16, u16)> {
             if content_col >= vis_width {
                 return None;
             }
-            let screen_x = app.gutter_width() as u16 + content_col as u16;
+            let screen_x =
+                app.editor_origin_x.get() + app.gutter_width() as u16 + content_col as u16;
             Some((screen_x, screen_y))
         } else {
             None
@@ -1679,8 +1686,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                 // header/editor handling, so a scrollbar press never places the
                 // cursor or starts a text selection. (find-bar row is excluded
                 // by `scrollbar_target_for_row`'s vis-bounded y range.)
-                let (tw, _th) = crossterm::terminal::size().unwrap_or((80, 24));
-                if is_editor_vscrollbar_col(x, y, tw as usize) {
+                if is_editor_vscrollbar_col(app, x, y) {
                     if let Some(target) = scrollbar_target_for_row(app, y) {
                         let vis = app.editor_visible_lines.get().max(1);
                         let word_wrap = app.config.word_wrap;
@@ -1712,8 +1718,9 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                         let vis = app.editor_visible_lines.get().max(1);
                         if editor_y < vis {
                             let gutter = app.gutter_width();
-                            if x >= gutter {
-                                let col_in_row = x - gutter;
+                            if let Some(local) = editor_local_x(app, x).filter(|col| *col >= gutter)
+                            {
+                                let col_in_row = local - gutter;
                                 let layout = active_wrap_layout(app);
                                 let buf = app.active_buffer_mut();
                                 if let Some(layout) = layout {
@@ -1873,8 +1880,9 @@ fn editor_hscrollbar_rect(app: &App) -> Option<Rect> {
     let content_w = app.editor_visible_width.get().max(1);
     let bar_y = crate::ui::layout::HEADER_ROWS + vis as u16;
     // Gutter + text + the 1-col vertical bar, so `┘` is clickable too.
+    // Origin shifts the bar when a left panel is open.
     let width = (app.gutter_width() + content_w + 1) as u16;
-    Some(Rect::new(0, bar_y, width, 1))
+    Some(Rect::new(app.editor_origin_x.get(), bar_y, width, 1))
 }
 
 fn hscrollbar_target_for_col(app: &App, x: u16) -> Option<usize> {
@@ -1939,10 +1947,11 @@ fn extend_drag_to_mouse(app: &mut App) {
     }
     let editor_y = y - header_rows;
     let gutter = app.gutter_width();
-    if x < gutter {
+    let local = drag_local_x(app, x);
+    if local < gutter {
         return;
     }
-    let col_in_row = x - gutter;
+    let col_in_row = local - gutter;
     let layout = active_wrap_layout(app);
     let buf = app.active_buffer_mut();
     let target_byte = if let Some(layout) = layout {
@@ -1971,6 +1980,7 @@ fn drag_edge_delta(app: &App) -> Option<(isize, isize)> {
     let editor_y = y - header_rows;
     let vis = app.editor_visible_lines.get().max(1);
     let gutter = app.gutter_width();
+    let local = drag_local_x(app, x);
 
     let mut drow: isize = 0;
     let mut dcol: isize = 0;
@@ -1981,9 +1991,9 @@ fn drag_edge_delta(app: &App) -> Option<(isize, isize)> {
     }
     if !app.config.word_wrap {
         let visible_width = app.editor_visible_width.get().max(1);
-        if x <= gutter {
+        if local <= gutter {
             dcol = -1;
-        } else if x >= gutter + visible_width.saturating_sub(1) {
+        } else if local >= gutter + visible_width.saturating_sub(1) {
             dcol = 1;
         }
     }
@@ -3110,9 +3120,53 @@ fn handle_dictionary_click(x: usize, y: usize, app: &mut App) {
 }
 
 /// True when `(x, y)` is the editor vertical scrollbar column. Header row
-/// last cells (`[+]`, `[>]`) must not be treated as the scrollbar.
-fn is_editor_vscrollbar_col(x: usize, y: usize, term_width: usize) -> bool {
-    y >= crate::ui::layout::HEADER_ROWS as usize && x + 1 == term_width
+/// last cells (`[+]`, `[>]`) must not be treated as the scrollbar. The bar
+/// is the last column of the editor rect, not the terminal, once a right
+/// panel is open.
+fn is_editor_vscrollbar_col(app: &App, x: usize, y: usize) -> bool {
+    if y < crate::ui::layout::HEADER_ROWS as usize {
+        return false;
+    }
+    let origin = app.editor_origin_x.get() as usize;
+    if x < origin {
+        return false;
+    }
+    let gutter = app.gutter_width();
+    let content = app.editor_visible_width.get().max(1);
+    x - origin == gutter + content
+}
+
+/// Editor-local column, or `None` when `x` is over a side panel.
+///
+/// With no right panel, columns past the bar still count as editor columns
+/// so a stale viewport width cannot drop a click.
+fn editor_local_x(app: &App, x: usize) -> Option<usize> {
+    let origin = app.editor_origin_x.get() as usize;
+    if x < origin {
+        return None;
+    }
+    let local = x - origin;
+    if app.right_panel.is_some() {
+        let span = app.gutter_width() + app.editor_visible_width.get().max(1) + 1;
+        if local >= span {
+            return None;
+        }
+    }
+    Some(local)
+}
+
+/// Screen `x` shifted into the editor, clamped to the text edge when a right
+/// panel is open so a drag into that panel extends the selection instead of
+/// reading the list's columns as text.
+fn drag_local_x(app: &App, x: usize) -> usize {
+    let origin = app.editor_origin_x.get() as usize;
+    let shifted = x.saturating_sub(origin);
+    if app.right_panel.is_some() {
+        let max = app.gutter_width() + app.editor_visible_width.get().max(1);
+        shifted.min(max)
+    } else {
+        shifted
+    }
 }
 
 /// True when any modal/popup is open and the editor (and its drag selection)
@@ -3228,16 +3282,26 @@ fn ui(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let chunks = crate::ui::layout::main_layout(area);
 
-    // Update editor viewport height for PgUp/PgDn (subtract find bar when present).
-    let base_h = chunks[1].height as usize;
-    let vis_h = if app.is_find_active() {
-        base_h.saturating_sub(1)
-    } else {
-        base_h
-    };
-    let vis_h = vis_h.max(1);
-    // Text-area width = editor area minus live gutter minus scrollbar (1).
-    let content_w = (chunks[1].width as usize)
+    let fitted =
+        crate::ui::side_panel::fit_panels(app.left_panel, app.right_panel, chunks[1].width);
+    if fitted.left != app.left_panel || fitted.right != app.right_panel {
+        if let Some(notice) = fitted.notice {
+            app.format_status = Some(notice.to_string());
+        }
+        app.left_panel = fitted.left;
+        app.right_panel = fitted.right;
+    }
+    let sides = crate::ui::side_panel::split_editor_band(
+        chunks[1],
+        app.left_panel.is_some(),
+        app.right_panel.is_some(),
+        app.is_find_active(),
+    );
+
+    // Find is already excluded from `sides.editor`. Text width then drops the
+    // gutter and the vertical bar. Panel columns are not part of that rect.
+    let vis_h = (sides.editor.height as usize).max(1);
+    let content_w = (sides.editor.width as usize)
         .saturating_sub(app.gutter_width() + 1)
         .max(1);
     // `vis_h` here is the full editor content+vbar height (find bar already
@@ -3257,23 +3321,39 @@ fn ui(f: &mut Frame, app: &mut App) {
     } else {
         vis_h
     };
+    app.editor_origin_x.set(sides.editor.x);
+    app.left_panel_area.set(sides.left.unwrap_or_default());
+    app.right_panel_area.set(sides.right.unwrap_or_default());
     app.apply_editor_viewport(vis_h, content_w);
 
     app.clamp_tab_strip(chunks[0].width as usize);
     crate::ui::header::render(f, chunks[0], app);
 
-    let edit_chunk = chunks[1];
-    if app.is_find_active() {
-        let (edit_area, find_area) = crate::ui::layout::editor_with_find_layout(edit_chunk);
-        crate::ui::editor::render(f, edit_area, app);
+    if let (Some(rect), Some(kind)) = (sides.left, app.left_panel) {
+        crate::ui::side_panel::render(
+            f,
+            rect,
+            crate::ui::side_panel::Side::Left,
+            kind,
+            app.current_theme(),
+        );
+    }
+    crate::ui::editor::render(f, sides.editor, app);
+    if let (Some(rect), Some(kind)) = (sides.right, app.right_panel) {
+        crate::ui::side_panel::render(
+            f,
+            rect,
+            crate::ui::side_panel::Side::Right,
+            kind,
+            app.current_theme(),
+        );
+    }
+    if let Some(find_area) = sides.find {
         if let Some(fs) = &app.find_state {
             crate::ui::find::render_bar(f, find_area, fs);
         }
-        crate::ui::status::render(f, chunks[2], app);
-    } else {
-        crate::ui::editor::render(f, edit_chunk, app);
-        crate::ui::status::render(f, chunks[2], app);
     }
+    crate::ui::status::render(f, chunks[2], app);
 
     if app.show_help {
         popups::help::render(
@@ -3537,8 +3617,11 @@ mod plus_button_hit_test_tests {
 
     #[test]
     fn header_last_col_is_not_the_editor_scrollbar() {
-        assert!(!is_editor_vscrollbar_col(79, 0, 80));
-        assert!(is_editor_vscrollbar_col(79, 1, 80));
+        let app = App::new(&[]);
+        // 80 columns, line numbers on: text is 73 wide and the bar is column 79.
+        app.editor_visible_width.set(73);
+        assert!(!is_editor_vscrollbar_col(&app, 79, 0));
+        assert!(is_editor_vscrollbar_col(&app, 79, 1));
     }
 
     #[test]
@@ -4180,6 +4263,15 @@ mod wheel_target_tests {
         assert!(layout.overflowing);
         assert_eq!(wheel_target(&app, 40, 0), WheelTarget::TabStrip);
         assert_eq!(wheel_target(&app, 40, 10), WheelTarget::Editor);
+    }
+
+    #[test]
+    fn wheel_over_a_side_panel_does_not_scroll_the_editor() {
+        let app = App::new(&[]);
+        app.left_panel_area
+            .set(ratatui::layout::Rect::new(0, 1, 24, 10));
+        assert_eq!(wheel_target(&app, 2, 4), WheelTarget::Swallow);
+        assert_eq!(wheel_target(&app, 30, 4), WheelTarget::Editor);
     }
 }
 
@@ -4945,6 +5037,129 @@ mod editor_mouse_click_scroll_tests {
             app.active_buffer().cursor_position(),
             (0, 0),
             "first text column (x=gutter) must place the caret"
+        );
+    }
+
+    #[test]
+    fn both_panels_on_80_shift_the_editor_and_keep_the_bar_off_the_edge() {
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&[]);
+        app.config.word_wrap = false;
+        app.left_panel = Some(crate::ui::side_panel::PanelKind::Functions);
+        app.right_panel = Some(crate::ui::side_panel::PanelKind::Variables);
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&"H".repeat(200), None);
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let y = crate::ui::layout::HEADER_ROWS;
+        assert_eq!(editor_cell(buf, 0, y), "F");
+        assert_eq!(editor_cell(buf, 23, y), "│");
+        assert_eq!(
+            editor_cell(buf, 30, y),
+            "H",
+            "text starts after the left panel and gutter"
+        );
+        assert_eq!(editor_cell(buf, 57, y), "V");
+        assert_eq!(app.editor_origin_x.get(), 24);
+        assert_eq!(app.editor_visible_width.get(), 25); // 32 editor cols - gutter 6 - vbar
+        assert_eq!(
+            app.left_panel,
+            Some(crate::ui::side_panel::PanelKind::Functions)
+        );
+        assert_eq!(
+            app.right_panel,
+            Some(crate::ui::side_panel::PanelKind::Variables)
+        );
+
+        let hbar_y = 10u16;
+        assert_eq!(
+            buf[(55, hbar_y)].symbol(),
+            "┘",
+            "vertical bar meets the h-bar at the editor edge, not the terminal edge"
+        );
+        assert_ne!(buf[(79, hbar_y)].symbol(), "┘");
+    }
+
+    #[test]
+    fn narrow_window_closes_the_right_panel_then_both() {
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&[]);
+        app.left_panel = Some(crate::ui::side_panel::PanelKind::Functions);
+        app.right_panel = Some(crate::ui::side_panel::PanelKind::Variables);
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        assert_eq!(
+            app.left_panel,
+            Some(crate::ui::side_panel::PanelKind::Functions)
+        );
+        assert_eq!(app.right_panel, None);
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Window is too narrow for both lists")
+        );
+        assert_eq!(app.editor_origin_x.get(), 24);
+
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&[]);
+        app.left_panel = Some(crate::ui::side_panel::PanelKind::Functions);
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        assert_eq!(app.left_panel, None);
+        assert_eq!(app.format_status.as_deref(), Some("Window is too narrow"));
+        assert_eq!(app.editor_origin_x.get(), 0);
+    }
+
+    #[test]
+    fn click_in_the_left_panel_does_not_move_the_caret() {
+        let mut app = App::new(&[]);
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str("HELLO", None);
+        app.active_buffer_mut().cursor = 5;
+        app.left_panel = Some(crate::ui::side_panel::PanelKind::Functions);
+        app.editor_origin_x.set(24);
+        app.editor_visible_width.set(25);
+        app.editor_visible_lines.set(20);
+        let y = crate::ui::layout::HEADER_ROWS;
+        handle_mouse(left_down(0, y), &mut app);
+        assert_eq!(app.active_buffer().cursor_position(), (0, 5));
+        handle_mouse(left_down(24 + Buffer::GUTTER_WIDTH as u16, y), &mut app);
+        assert_eq!(
+            app.active_buffer().cursor_position(),
+            (0, 0),
+            "the first text column is origin + gutter"
+        );
+    }
+
+    #[test]
+    fn hardware_cursor_x_includes_the_left_panel() {
+        let mut app = App::new(&[]);
+        app.config.word_wrap = false;
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str("HELLO", None);
+        app.editor_visible_lines.set(20);
+        app.editor_visible_width.set(25);
+        app.editor_origin_x.set(24);
+        let (x, _) = compute_cursor_position(&app).expect("caret in view");
+        assert_eq!(x, 24 + Buffer::GUTTER_WIDTH as u16);
+    }
+
+    #[test]
+    fn right_panel_click_is_not_the_vertical_bar() {
+        let mut app = App::new(&[]);
+        app.right_panel = Some(crate::ui::side_panel::PanelKind::Variables);
+        app.editor_origin_x.set(0);
+        // 56 editor columns on an 80-wide terminal: text 49, bar at column 55.
+        app.editor_visible_width.set(49);
+        app.editor_visible_lines.set(20);
+        assert!(is_editor_vscrollbar_col(&app, 55, 1));
+        assert!(!is_editor_vscrollbar_col(&app, 79, 1));
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str("HELLO", None);
+        app.active_buffer_mut().cursor = 5;
+        let y = crate::ui::layout::HEADER_ROWS;
+        handle_mouse(left_down(79, y), &mut app);
+        assert!(!app.scrollbar_drag_active);
+        assert_eq!(
+            app.active_buffer().cursor_position(),
+            (0, 5),
+            "a click in the right panel must not place the caret"
         );
     }
 }
