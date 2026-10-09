@@ -36,6 +36,10 @@ pub fn supports(language: Language) -> bool {
             | Language::Go
             | Language::Javascript
             | Language::Typescript
+            | Language::Java
+            | Language::CSharp
+            | Language::C
+            | Language::Cpp
     )
 }
 
@@ -46,6 +50,8 @@ pub fn collect(language: Language, rope: &Rope) -> Vec<Symbol> {
         Language::Python => crate::symbol_families::collect_python(rope),
         Language::Go => crate::symbol_families::collect_go(rope),
         Language::Javascript | Language::Typescript => crate::symbol_families::collect_js(rope),
+        Language::Java | Language::CSharp => crate::symbol_c_family::collect_java(rope),
+        Language::C | Language::Cpp => crate::symbol_c_family::collect_c(rope),
         _ => Vec::new(),
     }
 }
