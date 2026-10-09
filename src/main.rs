@@ -10,6 +10,7 @@ mod format;
 mod fs_access;
 mod highlight_cache;
 mod spellcheck;
+mod symbol_families;
 mod symbols;
 mod syntax;
 mod theme;

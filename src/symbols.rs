@@ -29,13 +29,23 @@ pub struct SymbolCache {
 
 /// Languages with a scanner. Others get "No symbols for this file".
 pub fn supports(language: Language) -> bool {
-    matches!(language, Language::Rust)
+    matches!(
+        language,
+        Language::Rust
+            | Language::Python
+            | Language::Go
+            | Language::Javascript
+            | Language::Typescript
+    )
 }
 
 /// Definitions in source order. `byte` is the first byte of the name.
 pub fn collect(language: Language, rope: &Rope) -> Vec<Symbol> {
     match language {
         Language::Rust => collect_rust(rope),
+        Language::Python => crate::symbol_families::collect_python(rope),
+        Language::Go => crate::symbol_families::collect_go(rope),
+        Language::Javascript | Language::Typescript => crate::symbol_families::collect_js(rope),
         _ => Vec::new(),
     }
 }
