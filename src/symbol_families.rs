@@ -26,6 +26,7 @@ enum GoState {
 struct JsCarry {
     state: JsLex,
     depth: usize,
+    paren: usize,
     /// Class body depth and name. The depth is the depth inside the `{`.
     classes: Vec<(usize, String)>,
     pending_class: Option<String>,
@@ -76,6 +77,7 @@ pub fn collect_js(rope: &Rope) -> Vec<Symbol> {
     let mut carry = JsCarry {
         state: JsLex::Code,
         depth: 0,
+        paren: 0,
         classes: Vec::new(),
         pending_class: None,
     };
@@ -112,17 +114,42 @@ fn python_feed(
     {
         carry.classes.pop();
     }
+    let mut start = 0;
+    for (end, _) in masked.match_indices(';').chain([(masked.len(), "")]) {
+        python_stmt(
+            &masked[start..end],
+            line_byte + start,
+            line_idx,
+            indent,
+            carry,
+            out,
+        );
+        start = end + 1;
+    }
+}
+
+fn python_stmt(
+    masked: &str,
+    line_byte: usize,
+    line_idx: usize,
+    indent: usize,
+    carry: &mut PyCarry,
+    out: &mut Vec<Symbol>,
+) {
+    if masked.trim().is_empty() {
+        return;
+    }
+    let code_off = masked.len() - masked.trim_start().len();
     let code = masked.trim_start();
-    let code_off = indent;
     if let Some(name_rel) = after_keyword(code, "class") {
         let name_off = code_off + name_rel;
-        if let Some(name) = ident_at(&masked, name_off) {
+        if let Some(name) = ident_at(masked, name_off) {
             carry.classes.push((indent, name.to_string()));
         }
         return;
     }
-    if let Some(name_off) = def_name_off(&masked, code_off) {
-        if let Some(name) = ident_at(&masked, name_off) {
+    if let Some(name_off) = def_name_off(masked, code_off) {
+        if let Some(name) = ident_at(masked, name_off) {
             let owner = carry
                 .classes
                 .last()
@@ -132,14 +159,14 @@ fn python_feed(
         }
         return;
     }
-    if let Some(name_off) = for_name_off(&masked, code_off) {
-        if let Some(name) = ident_at(&masked, name_off) {
+    if let Some(name_off) = for_name_off(masked, code_off) {
+        if let Some(name) = ident_at(masked, name_off) {
             push_var(out, name, line_idx, line_byte + name_off);
         }
         return;
     }
-    if let Some(name_off) = assign_name_off(&masked, code_off) {
-        if let Some(name) = ident_at(&masked, name_off) {
+    if let Some(name_off) = assign_name_off(masked, code_off) {
+        if let Some(name) = ident_at(masked, name_off) {
             push_var(out, name, line_idx, line_byte + name_off);
         }
     }
@@ -178,7 +205,31 @@ fn assign_name_off(masked: &str, code_off: usize) -> Option<usize> {
     let name = ident_at(masked, code_off)?;
     if matches!(
         name,
-        "def" | "class" | "for" | "if" | "elif" | "while" | "with" | "return" | "async"
+        "def"
+            | "class"
+            | "for"
+            | "if"
+            | "elif"
+            | "else"
+            | "while"
+            | "with"
+            | "return"
+            | "async"
+            | "try"
+            | "except"
+            | "finally"
+            | "raise"
+            | "pass"
+            | "break"
+            | "continue"
+            | "yield"
+            | "lambda"
+            | "assert"
+            | "import"
+            | "from"
+            | "global"
+            | "nonlocal"
+            | "del"
     ) {
         return None;
     }
@@ -323,6 +374,10 @@ fn go_recv_type(masked: &str) -> Option<&str> {
     let recv = rest.strip_prefix('(')?;
     let close = recv.find(')')?;
     let inside = &recv[..close];
+    if let Some(bracket) = inside.find('[') {
+        let head = inside[..bracket].trim_end();
+        return head.rsplit(|c: char| !is_ident_char(c)).next();
+    }
     let mut last = None;
     let mut i = 0;
     let bytes = inside.as_bytes();
@@ -421,6 +476,15 @@ fn mask_go(line: &str, state: &mut GoState) -> String {
             }
             continue;
         }
+        if buf[i] == b'\'' {
+            if let Some(end) = find_single(&buf, i + 1, b'\'') {
+                blank(&mut buf, i, end);
+                i = end;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
         if buf[i] == b'"' {
             if let Some(end) = find_single(&buf, i + 1, b'"') {
                 blank(&mut buf, i, end);
@@ -448,6 +512,18 @@ fn js_feed(
     let bytes = masked.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
+        if bytes[i] == b'(' {
+            carry.paren += 1;
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b')' {
+            if carry.paren > 0 {
+                carry.paren -= 1;
+            }
+            i += 1;
+            continue;
+        }
         if bytes[i] == b'{' {
             carry.depth += 1;
             if let Some(name) = carry.pending_class.take() {
@@ -522,7 +598,8 @@ fn js_feed(
             );
             continue;
         }
-        if class_owner(carry).is_some()
+        if carry.paren == 0
+            && class_owner(carry).is_some()
             && !is_js_keyword(word)
             && (next_code(&masked[i..]).starts_with('=')
                 || next_code(&masked[i..]).starts_with(';'))
@@ -557,15 +634,34 @@ fn class_owner(carry: &JsCarry) -> Option<&str> {
 
 fn is_js_function_value(after: &str) -> bool {
     let after = after.trim_start();
-    if after.starts_with("async") && !ident_continues(after.trim_start_matches("async")) {
-        return is_js_function_value(after.trim_start_matches("async"));
+    if let Some(rest) = after.strip_prefix("async") {
+        if !ident_continues(rest) {
+            return is_js_function_value(rest);
+        }
     }
-    if after.starts_with("function") && !ident_continues(after.trim_start_matches("function")) {
-        return true;
+    if let Some(rest) = after.strip_prefix("function") {
+        if !ident_continues(rest) {
+            return true;
+        }
     }
-    if after.starts_with('(') || after.starts_with(|c: char| is_ident_start(c as u8) || c == '_') {
-        // `name =>` or `(...) =>`
-        return after.contains("=>");
+    if after.starts_with('(') {
+        let bytes = after.as_bytes();
+        let mut depth = 0i32;
+        for (idx, byte) in bytes.iter().enumerate() {
+            if *byte == b'(' {
+                depth += 1;
+            } else if *byte == b')' {
+                depth -= 1;
+                if depth == 0 {
+                    return after[idx + 1..].trim_start().starts_with("=>");
+                }
+            }
+        }
+        return false;
+    }
+    if after.starts_with(|c: char| is_ident_start_char(c)) {
+        let end = skip_ident(after, 0);
+        return after[end..].trim_start().starts_with("=>");
     }
     false
 }
@@ -589,6 +685,35 @@ fn is_js_keyword(word: &str) -> bool {
             | "set"
             | "static"
     )
+}
+
+fn regex_before(buf: &[u8], slash: usize) -> bool {
+    let mut j = slash;
+    while j > 0 && matches!(buf[j - 1], b' ' | b'\t') {
+        j -= 1;
+    }
+    if j == 0 {
+        return true;
+    }
+    !is_ident_char(buf[j - 1] as char) && buf[j - 1] != b')'
+}
+
+fn find_regex_end(buf: &[u8], start: usize) -> Option<usize> {
+    let mut i = start;
+    while i < buf.len() {
+        if buf[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if buf[i] == b'/' {
+            return Some(i + 1);
+        }
+        if buf[i] == b'\n' {
+            return None;
+        }
+        i += 1;
+    }
+    None
 }
 
 fn next_code(src: &str) -> &str {
@@ -635,6 +760,13 @@ fn mask_js(line: &str, state: &mut JsLex) -> String {
         if buf[i] == b'/' && buf.get(i + 1) == Some(&b'/') {
             blank_rest(&mut buf, i);
             break;
+        }
+        if buf[i] == b'/' && buf.get(i + 1) != Some(&b'*') && regex_before(&buf, i) {
+            if let Some(end) = find_regex_end(&buf, i + 1) {
+                blank(&mut buf, i, end);
+                i = end;
+                continue;
+            }
         }
         if buf[i] == b'/' && buf.get(i + 1) == Some(&b'*') {
             if let Some(rel) = find_bytes(&buf[i + 2..], b"*/") {
@@ -843,6 +975,15 @@ mod tests {
             vec!["s", "text", "count", "name"]
         );
         byte_is_name(src, "Box.open", collect_python);
+        let stmts = "x = 1; def later():\n    pass\nelse:\n    try:\n        pass\n";
+        assert_eq!(
+            of_kind(stmts, SymbolKind::Function, collect_python),
+            vec!["later"]
+        );
+        assert_eq!(
+            of_kind(stmts, SymbolKind::Variable, collect_python),
+            vec!["x"]
+        );
     }
 
     #[test]
@@ -865,6 +1006,11 @@ mod tests {
             vec!["label", "count", "name"]
         );
         byte_is_name(src, "Server.Start", collect_go);
+        let generic = "func (s *Server[T]) Start() {}\nvar q = '\"'\nfunc after() {}\n";
+        assert_eq!(
+            of_kind(generic, SymbolKind::Function, collect_go),
+            vec!["Server.Start", "after"]
+        );
     }
 
     #[test]
@@ -892,5 +1038,20 @@ mod tests {
         );
         byte_is_name(src, "Box.open", collect_js);
         byte_is_name(src, "make", collect_js);
+        let tricky = concat!(
+            "const n = foo(x => x);\n",
+            "class Box {\n",
+            "  open(count = 1) {}\n",
+            "}\n",
+            "const s = /function hidden()/;\n",
+        );
+        assert_eq!(
+            of_kind(tricky, SymbolKind::Function, collect_js),
+            vec!["Box.open"]
+        );
+        assert_eq!(
+            of_kind(tricky, SymbolKind::Variable, collect_js),
+            vec!["n", "s"]
+        );
     }
 }

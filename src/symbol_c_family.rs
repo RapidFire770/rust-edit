@@ -185,7 +185,19 @@ fn push(
 fn is_control(word: &str) -> bool {
     matches!(
         word,
-        "if" | "for" | "while" | "switch" | "catch" | "return" | "else" | "do" | "new" | "sizeof"
+        "if" | "for"
+            | "while"
+            | "switch"
+            | "catch"
+            | "return"
+            | "else"
+            | "do"
+            | "new"
+            | "sizeof"
+            | "package"
+            | "import"
+            | "using"
+            | "namespace"
     )
 }
 
@@ -396,5 +408,7 @@ mod tests {
         assert!(!names(src, SymbolKind::Function)
             .iter()
             .any(|n| n == "split"));
+        let imports = "package foo;\nimport Bar;\nusing System;\nint real;\n";
+        assert_eq!(names(imports, SymbolKind::Variable), vec!["real"]);
     }
 }
