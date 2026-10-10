@@ -37,17 +37,24 @@ pub fn project_row_text(row: &FlatRow, width: usize) -> String {
     format!("{prefix}{}", side_panel::ellipsize(&name, room))
 }
 
-pub fn render_project(
-    f: &mut Frame,
-    area: Rect,
-    side: Side,
-    title: &str,
-    rows: &[FlatRow],
-    nav: PanelNav,
-    message: &str,
-    focused: bool,
-    theme: &Theme,
-) {
+pub struct ProjectView<'a> {
+    pub side: Side,
+    pub title: &'a str,
+    pub rows: &'a [FlatRow],
+    pub nav: PanelNav,
+    pub message: &'a str,
+    pub focused: bool,
+}
+
+pub fn render_project(f: &mut Frame, area: Rect, view: ProjectView<'_>, theme: &Theme) {
+    let ProjectView {
+        side,
+        title,
+        rows,
+        nav,
+        message,
+        focused,
+    } = view;
     if area.width == 0 || area.height == 0 {
         return;
     }

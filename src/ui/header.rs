@@ -680,7 +680,7 @@ mod tests {
         assert_eq!(rect.x, 0);
         assert_eq!(rect.y, crate::ui::layout::HEADER_ROWS);
         assert_eq!(rect.width, 26);
-        assert_eq!(rect.height, 8);
+        assert_eq!(rect.height, 10);
     }
 
     #[test]

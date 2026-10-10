@@ -713,10 +713,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 KeyCode::Char('7') | KeyCode::Char('/') => {
                                     app.toggle_line_comment();
                                 }
-                                KeyCode::Char('h') => {
-                                    if app.project_panel_focused() {
-                                        app.toggle_project_hidden();
-                                    }
+                                KeyCode::Char('h') if app.project_panel_focused() => {
+                                    app.toggle_project_hidden();
                                 }
                                 _ => {}
                             }
@@ -3465,12 +3463,14 @@ fn render_side_panel(
         crate::ui::project_panel::render_project(
             f,
             rect,
-            side,
-            &title,
-            &rows,
-            nav,
-            message,
-            app.panel_focus == Some(side),
+            crate::ui::project_panel::ProjectView {
+                side,
+                title: &title,
+                rows: &rows,
+                nav,
+                message,
+                focused: app.panel_focus == Some(side),
+            },
             &theme,
         );
         return;
