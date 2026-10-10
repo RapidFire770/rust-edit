@@ -499,10 +499,13 @@ mod tests {
         let sh = SyntaxHighlighter::new();
         assert!(distinct_fg_count(&sh, "10 PRINT \"HI\"\nREM note\n", Language::Basic) > 1);
 
-        let quoted = sh.highlight("10 PRINT \"REM {CLR}\"\n", Language::Basic);
+        let quoted = sh.highlight("10 PRINT \"REM HI\"\n", Language::Basic);
         let inside = fg_containing(&quoted[0], "REM");
+        let hi = fg_containing(&quoted[0], "HI");
         let keyword = fg_containing(&quoted[0], "PRINT");
+        assert_eq!(inside, hi, "quoted REM and HI stay one string color");
         assert_ne!(inside, keyword, "REM inside quotes stays a string");
+        assert_ne!(hi, keyword, "HI inside quotes stays a string");
 
         let comment = sh.highlight("POKE 1,2: REM note\n", Language::Basic);
         let poke = fg_containing(&comment[0], "POKE");
@@ -519,6 +522,46 @@ mod tests {
             fg_containing(&remote[0], "OTE"),
             note,
             "REMOTE is not a REM comment"
+        );
+
+        let contents = |spans: &[Span]| {
+            spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<Vec<_>>()
+        };
+
+        let channel = sh.highlight("PRINT#1\n", Language::Basic);
+        assert!(
+            channel[0]
+                .iter()
+                .any(|span| span.content.contains("PRINT#")),
+            "PRINT# must be one span, got {:?}",
+            contents(&channel[0])
+        );
+
+        let rem_colon = sh.highlight("10 REM: teh\n", Language::Basic);
+        assert_eq!(
+            fg_containing(&rem_colon[0], "teh"),
+            fg_containing(&rem_colon[0], "REM"),
+            "10 REM: is a comment, spans {:?}",
+            contents(&rem_colon[0])
+        );
+
+        let print_colon = sh.highlight("10 PRINT:\n", Language::Basic);
+        assert_eq!(
+            fg_containing(&print_colon[0], "PRINT"),
+            poke,
+            "10 PRINT: is a keyword, spans {:?}",
+            contents(&print_colon[0])
+        );
+
+        let label = sh.highlight("labelSetup:\n", Language::Basic);
+        assert_ne!(
+            fg_containing(&label[0], "labelSetup"),
+            poke,
+            "labelSetup: is not a keyword, spans {:?}",
+            contents(&label[0])
         );
     }
 }

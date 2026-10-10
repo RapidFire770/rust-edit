@@ -19,16 +19,16 @@ contexts:
         - meta_scope: comment.line.rem.basic
         - match: '$'
           pop: true
-    - match: '^[ \t]*([0-9]+)([ \t]+)([A-Za-z_][A-Za-z0-9_]*)[ \t]*(:)'
+    - match: '(?i)^[ \t]*([0-9]+)([ \t]+)(?!(?:RESTORE|RETURN|GOSUB|VERIFY|PRINT|INPUT|CLOSE|OPEN|THEN|NEXT|READ|DATA|STEP|STOP|WAIT|LOAD|SAVE|POKE|GOTO|CONT|LIST|DEF|DIM|FOR|GET|LET|NEW|NOT|RUN|SYS|TAB|SPC|AND|END|CLR|CMD|VAL|ABS|ASC|ATN|COS|EXP|FRE|INT|LEN|LOG|PEEK|POS|RND|SGN|SIN|SQR|TAN|USR|OR|FN|IF|ON|TO|REM)(?![A-Za-z0-9_]))([A-Za-z_][A-Za-z0-9_]*)[ \t]*(:)'
       captures:
         1: constant.numeric.basic
         3: entity.name.label.basic
         4: punctuation.separator.basic
-    - match: '^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*(:)'
+    - match: '(?i)^[ \t]*(?!(?:RESTORE|RETURN|GOSUB|VERIFY|PRINT|INPUT|CLOSE|OPEN|THEN|NEXT|READ|DATA|STEP|STOP|WAIT|LOAD|SAVE|POKE|GOTO|CONT|LIST|DEF|DIM|FOR|GET|LET|NEW|NOT|RUN|SYS|TAB|SPC|AND|END|CLR|CMD|VAL|ABS|ASC|ATN|COS|EXP|FRE|INT|LEN|LOG|PEEK|POS|RND|SGN|SIN|SQR|TAN|USR|OR|FN|IF|ON|TO|REM)(?![A-Za-z0-9_]))([A-Za-z_][A-Za-z0-9_]*)[ \t]*(:)'
       captures:
         1: entity.name.label.basic
         2: punctuation.separator.basic
-    - match: '(?i)(?<![A-Za-z0-9_])(?:INPUT#|PRINT#|CHR\$|LEFT\$|RIGHT\$|MID\$|STR\$|RESTORE|RETURN|GOSUB|VERIFY|PRINT|INPUT|CLOSE|OPEN|THEN|NEXT|READ|DATA|STEP|STOP|WAIT|LOAD|SAVE|POKE|GOTO|CONT|LIST|DEF|DIM|FOR|GET|LET|NEW|NOT|RUN|SYS|TAB|SPC|AND|END|CLR|CMD|VAL|ABS|ASC|ATN|COS|EXP|FRE|INT|LEN|LOG|PEEK|POS|RND|SGN|SIN|SQR|TAN|USR|OR|FN|IF|ON|TO)(?![A-Za-z0-9_])'
+    - match: '(?i)(?<![A-Za-z0-9_])(?:(?:INPUT#|PRINT#|CHR\$|LEFT\$|RIGHT\$|MID\$|STR\$)(?![A-Za-z_])|(?:RESTORE|RETURN|GOSUB|VERIFY|PRINT|INPUT|CLOSE|OPEN|THEN|NEXT|READ|DATA|STEP|STOP|WAIT|LOAD|SAVE|POKE|GOTO|CONT|LIST|DEF|DIM|FOR|GET|LET|NEW|NOT|RUN|SYS|TAB|SPC|AND|END|CLR|CMD|VAL|ABS|ASC|ATN|COS|EXP|FRE|INT|LEN|LOG|PEEK|POS|RND|SGN|SIN|SQR|TAN|USR|OR|FN|IF|ON|TO)(?![A-Za-z0-9_]))'
       scope: keyword.control.basic
     - match: '(?<![A-Za-z0-9_])\?(?![A-Za-z0-9_])'
       scope: keyword.control.basic
