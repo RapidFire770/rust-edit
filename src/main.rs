@@ -9,6 +9,7 @@ mod file_watch;
 mod format;
 mod fs_access;
 mod highlight_cache;
+mod project_tree;
 mod spellcheck;
 mod symbol_c_family;
 mod symbol_families;
