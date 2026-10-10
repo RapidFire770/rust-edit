@@ -73,6 +73,20 @@ fn comment_prefix_len(after: &str, prefix: &str) -> Option<usize> {
     Some(matched + extra)
 }
 
+/// Where a BASIC `REM` starts. After ASCII indent, skip a leading line
+/// number and one space that is already there. Otherwise the first
+/// non-whitespace byte, matching `toggle_line_comment`.
+fn basic_comment_at(body: &str) -> usize {
+    let ws_len = leading_ascii_ws_len(body);
+    let rest = &body[ws_len..];
+    let digits = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if digits == 0 {
+        return ws_len;
+    }
+    let gap = usize::from(rest[digits..].starts_with(' '));
+    ws_len + digits + gap
+}
+
 fn line_body(raw: &str) -> &str {
     raw.trim_end_matches(['\n', '\r'])
 }
@@ -1313,6 +1327,49 @@ impl Buffer {
         true
     }
 
+    /// BASIC `REM` toggle. Same span, undo, and word-boundary rules as
+    /// `toggle_line_comment`, but a leading line number stays in front of `REM`.
+    pub fn toggle_basic_line_comment(&mut self) -> bool {
+        const PREFIX: &str = "REM";
+        let (start_line, end_line) = self.comment_line_span();
+        let uncomment = self.span_is_basic_commented(start_line, end_line);
+        self.push_undo();
+        for line_idx in (start_line..=end_line).rev() {
+            let line_start = self.rope.line_to_byte(line_idx);
+            let raw = self.line(line_idx);
+            let body = raw.trim_end_matches(['\n', '\r']);
+            let at = basic_comment_at(body);
+            if uncomment {
+                if body[at..].trim().is_empty() {
+                    continue;
+                }
+                let Some(n) = comment_prefix_len(&body[at..], PREFIX) else {
+                    continue;
+                };
+                let remove_at = line_start + at;
+                self.remove_byte_range(remove_at, remove_at + n);
+                self.shift_positions_after_edit(remove_at, n, false);
+            } else {
+                let insert_at = line_start + at;
+                // `10PRINT` has no space after the digits. Insert one with the
+                // token so the result is `10 REM PRINT`. A spaced line already
+                // sits past that space, so it still gets `REM ` only. A bare
+                // `10` gets `REM ` with no extra leading space, and uncomment
+                // returns `10`.
+                let glued = at > leading_ascii_ws_len(body)
+                    && !body[..at].ends_with(' ')
+                    && !body[at..].is_empty();
+                let text = if glued { " REM " } else { "REM " };
+                self.insert_at_byte(insert_at, text);
+                self.shift_positions_after_edit(insert_at, text.len(), true);
+            }
+        }
+        self.is_modified = true;
+        self.bump_generation();
+        self.adjust_scroll();
+        true
+    }
+
     /// Toggle a block comment. A one-line span wraps that line as
     /// `{open} text {close}`. A multi-line span puts `open` on its own line
     /// before the first line and `close` on its own line after the last.
@@ -1448,6 +1505,23 @@ impl Buffer {
             }
             saw_code = true;
             if comment_prefix_len(&body[ws_len..], prefix).is_none() {
+                return false;
+            }
+        }
+        saw_code
+    }
+
+    fn span_is_basic_commented(&self, start: usize, end: usize) -> bool {
+        let mut saw_code = false;
+        for line_idx in start..=end {
+            let raw = self.line(line_idx);
+            let body = raw.trim_end_matches(['\n', '\r']);
+            let at = basic_comment_at(body);
+            if body[at..].trim().is_empty() {
+                continue;
+            }
+            saw_code = true;
+            if comment_prefix_len(&body[at..], "REM").is_none() {
                 return false;
             }
         }
@@ -2079,6 +2153,65 @@ mod tests {
         assert_eq!(word.text(), "REM REMote");
         assert!(word.toggle_line_comment("REM"));
         assert_eq!(word.text(), "REMote");
+    }
+
+    #[test]
+    fn toggle_basic_line_comment_keeps_a_leading_line_number() {
+        let round_trip = [
+            ("10 PRINT \"HI\"", "10 REM PRINT \"HI\""),
+            ("10  PRINT \"HI\"", "10 REM  PRINT \"HI\""),
+            ("labelSetup:", "REM labelSetup:"),
+            ("POKE 1,2: REM note", "REM POKE 1,2: REM note"),
+            ("    10 PRINT \"HI\"", "    10 REM PRINT \"HI\""),
+        ];
+        for (src, commented) in round_trip {
+            let mut b = Buffer::from_str(src, None);
+            assert!(b.toggle_basic_line_comment(), "{src}");
+            assert_eq!(b.text(), commented, "{src}");
+            assert!(b.toggle_basic_line_comment(), "{src}");
+            assert_eq!(b.text(), src, "{src}");
+        }
+
+        let mut glued = Buffer::from_str("10PRINT \"HI\"", None);
+        assert!(glued.toggle_basic_line_comment());
+        assert_eq!(glued.text(), "10 REM PRINT \"HI\"");
+        assert!(glued.toggle_basic_line_comment());
+        assert_eq!(glued.text(), "10 PRINT \"HI\"");
+
+        let mut already = Buffer::from_str("10REM PRINT \"HI\"", None);
+        assert!(already.toggle_basic_line_comment());
+        assert_eq!(already.text(), "10PRINT \"HI\"");
+        assert!(already.toggle_basic_line_comment());
+        assert_eq!(already.text(), "10 REM PRINT \"HI\"");
+
+        let mut lower = Buffer::from_str("10 rem PRINT \"HI\"", None);
+        assert!(lower.toggle_basic_line_comment());
+        assert_eq!(lower.text(), "10 PRINT \"HI\"");
+
+        let mut remote = Buffer::from_str("REMOTE = 1", None);
+        assert!(remote.toggle_basic_line_comment());
+        assert_eq!(remote.text(), "REM REMOTE = 1");
+
+        let mut kick = Buffer::from_str("    lda #$02\n", None);
+        assert!(kick.toggle_line_comment("//"));
+        assert_eq!(kick.text(), "    // lda #$02\n");
+        assert!(kick.toggle_line_comment("//"));
+        assert_eq!(kick.text(), "    lda #$02\n");
+
+        let mut batch = Buffer::from_str("10 ECHO hi", None);
+        assert!(batch.toggle_line_comment("REM"));
+        assert_eq!(batch.text(), "REM 10 ECHO hi");
+    }
+
+    #[test]
+    fn toggle_basic_line_comment_selection_is_one_undo() {
+        let mut b = Buffer::from_str("10 PRINT \"A\"\n\n20 GOTO 10\n", None);
+        b.selection = Some(0..b.rope.len_bytes());
+        b.selection_anchor = Some(0);
+        assert!(b.toggle_basic_line_comment());
+        assert_eq!(b.text(), "10 REM PRINT \"A\"\nREM \n20 REM GOTO 10\n");
+        b.undo();
+        assert_eq!(b.text(), "10 PRINT \"A\"\n\n20 GOTO 10\n");
     }
 
     #[test]
