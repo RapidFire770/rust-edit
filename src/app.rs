@@ -167,6 +167,10 @@ pub struct App {
     pub panel_focus: Option<crate::ui::side_panel::Side>,
     pub function_nav: crate::ui::side_panel::PanelNav,
     pub variable_nav: crate::ui::side_panel::PanelNav,
+    /// Buffer id last applied to each symbol list. A new id clears `free_scroll`
+    /// so the next settle shows that file instead of the previous window.
+    function_follow_id: Option<u64>,
+    variable_follow_id: Option<u64>,
     /// Scroll drag for a list's own bar. Separate from the editor bars.
     pub panel_scrollbar_drag: Option<crate::ui::side_panel::Side>,
     /// Chosen project folder for this session. Hiding the tree does not clear it.
@@ -384,6 +388,8 @@ impl App {
             panel_focus: None,
             function_nav: crate::ui::side_panel::PanelNav::default(),
             variable_nav: crate::ui::side_panel::PanelNav::default(),
+            function_follow_id: None,
+            variable_follow_id: None,
             panel_scrollbar_drag: None,
             project_root: None,
             project_tree: None,
@@ -1093,30 +1099,55 @@ impl App {
             .iter()
             .rposition(|symbol| symbol.line <= line)
             .unwrap_or(0);
+        let viewport = self
+            .side_of(kind)
+            .map(|side| self.list_viewport(side))
+            .unwrap_or(0);
         let nav = self.nav_mut(kind);
         nav.selected = selected;
+        nav.free_scroll = false;
         nav.scroll = 0;
+        crate::ui::side_panel::reveal(selected, &mut nav.scroll, viewport);
     }
 
     pub fn sync_open_list(&mut self, kind: crate::ui::side_panel::PanelKind, viewport: usize) {
+        let id = self.active_buffer().id;
+        let changed = match kind {
+            crate::ui::side_panel::PanelKind::Functions => {
+                let changed = self.function_follow_id.is_some_and(|prev| prev != id);
+                self.function_follow_id = Some(id);
+                changed
+            }
+            crate::ui::side_panel::PanelKind::Variables => {
+                let changed = self.variable_follow_id.is_some_and(|prev| prev != id);
+                self.variable_follow_id = Some(id);
+                changed
+            }
+            crate::ui::side_panel::PanelKind::Project => false,
+        };
+        if changed {
+            self.nav_mut(kind).free_scroll = false;
+        }
         let focused = self
             .side_of(kind)
             .is_some_and(|side| self.panel_focus == Some(side));
         let line = self.active_buffer().cursor_position().0;
         let symbols = self.symbols_of(kind);
         let len = symbols.len();
-        let selected = if focused {
-            self.nav_mut(kind).selected
-        } else {
-            symbols
+        if !focused && len > 0 {
+            let caret = symbols
                 .iter()
                 .rposition(|symbol| symbol.line <= line)
                 .unwrap_or(0)
-        };
-        let selected = if len == 0 { 0 } else { selected.min(len - 1) };
+                .min(len - 1);
+            let nav = self.nav_mut(kind);
+            if caret != nav.selected {
+                nav.selected = caret;
+                nav.free_scroll = false;
+            }
+        }
         let nav = self.nav_mut(kind);
-        nav.selected = selected;
-        crate::ui::side_panel::reveal(selected, &mut nav.scroll, viewport);
+        crate::ui::side_panel::settle(nav, len, viewport);
     }
 
     pub fn list_rows(
@@ -1147,6 +1178,7 @@ impl App {
         let nav = self.nav_mut(kind);
         let next = (nav.selected as isize + delta).clamp(0, len as isize - 1) as usize;
         nav.selected = next;
+        nav.free_scroll = false;
         crate::ui::side_panel::reveal(next, &mut nav.scroll, viewport);
     }
 
@@ -1157,7 +1189,11 @@ impl App {
         let Some(kind) = self.kind_on(side) else {
             return;
         };
-        let selected = self.nav_mut(kind).selected;
+        let viewport = self.list_viewport(side);
+        let nav = self.nav_mut(kind);
+        nav.free_scroll = false;
+        let selected = nav.selected;
+        crate::ui::side_panel::reveal(selected, &mut nav.scroll, viewport);
         self.activate_list_index(kind, selected);
     }
 
@@ -1211,6 +1247,7 @@ impl App {
         let nav = self.nav_mut(kind);
         let next = (nav.scroll as isize + delta).clamp(0, max_scroll as isize) as usize;
         nav.scroll = next;
+        nav.free_scroll = true;
     }
 
     pub fn scroll_panel_to_row(&mut self, side: crate::ui::side_panel::Side, y: u16) {
@@ -1231,7 +1268,9 @@ impl App {
         };
         if let Some(pos) = bar.target_for_row(y, geom.scrollbar) {
             let max_scroll = len.saturating_sub(viewport.max(1));
-            self.nav_mut(kind).scroll = pos.min(max_scroll);
+            let nav = self.nav_mut(kind);
+            nav.scroll = pos.min(max_scroll);
+            nav.free_scroll = true;
         }
     }
 
@@ -3780,6 +3819,154 @@ mod tests {
             line: 0,
             byte: 3,
         }]
+    }
+
+    fn many_functions(count: usize) -> Vec<crate::symbols::Symbol> {
+        use crate::symbols::{Symbol, SymbolKind};
+        (0..count)
+            .map(|line| Symbol {
+                name: format!("fn{line}"),
+                kind: SymbolKind::Function,
+                line,
+                byte: 0,
+            })
+            .collect()
+    }
+
+    fn panel_rect() -> ratatui::layout::Rect {
+        // header row + 10 list rows. list_viewport() reads this cell.
+        ratatui::layout::Rect::new(0, 2, 36, 11)
+    }
+
+    #[test]
+    fn project_wheel_reaches_the_bottom_and_returns_to_the_top() {
+        use crate::ui::side_panel::{self, PanelKind, Side};
+        let root = project_dir("projscroll");
+        for index in 0..40 {
+            fs::write(root.join(format!("f{index}.txt")), "x\n").unwrap();
+        }
+        let mut app = App::new(&[]);
+        app.header_width.set(120);
+        app.open_project_at(&root).unwrap();
+        app.left_panel_area.set(panel_rect());
+        let len = app.project_flat_rows().len();
+        assert!(len >= 40, "{len}");
+        let viewport = 10;
+        assert_eq!(app.project_nav.selected, 0);
+
+        app.scroll_panel(Side::Left, 30);
+        side_panel::settle(&mut app.project_nav, len, viewport);
+        assert_eq!(app.project_nav.scroll, 30);
+        assert_eq!(app.project_nav.selected, 0);
+
+        app.project_nav.selected = len - 1;
+        app.project_nav.free_scroll = false;
+        side_panel::settle(&mut app.project_nav, len, viewport);
+        let pinned = app.project_nav.scroll;
+        assert!(pinned > 0, "{pinned}");
+
+        app.scroll_panel(Side::Left, -100);
+        side_panel::settle(&mut app.project_nav, len, viewport);
+        assert_eq!(app.project_nav.scroll, 0);
+        assert_eq!(app.project_nav.selected, len - 1);
+        assert_eq!(app.left_panel, Some(PanelKind::Project));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn project_scrollbar_drag_is_not_pulled_back_to_the_highlight() {
+        use crate::ui::side_panel::{self, Side};
+        let root = project_dir("projbar");
+        for index in 0..40 {
+            fs::write(root.join(format!("f{index}.txt")), "x\n").unwrap();
+        }
+        let mut app = App::new(&[]);
+        app.header_width.set(120);
+        app.open_project_at(&root).unwrap();
+        let area = panel_rect();
+        app.left_panel_area.set(area);
+        let len = app.project_flat_rows().len();
+        // Scrollbar occupies the list column. The bottom cell is the ↓ cap and
+        // maps to max scroll. See OverflowBar::target_for_row.
+        let bottom = area.y + area.height - 1;
+        app.scroll_panel_to_row(Side::Left, bottom);
+        side_panel::settle(&mut app.project_nav, len, 10);
+        assert_eq!(app.project_nav.scroll, len - 10);
+        assert_eq!(app.project_nav.selected, 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn symbol_wheel_sticks_until_the_caret_changes_symbol() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(many_functions(30));
+        let source = (0..30)
+            .map(|i| format!("fn fn{i}() {{}}\n"))
+            .collect::<String>();
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&source, None);
+        app.header_width.set(120);
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.panel_focus = None;
+        app.left_panel_area.set(panel_rect());
+        app.function_nav.selected = 0;
+        app.function_nav.scroll = 0;
+
+        app.scroll_panel(Side::Left, 12);
+        app.sync_open_list(PanelKind::Functions, 10);
+        assert_eq!(app.function_nav.scroll, 12);
+        assert_eq!(app.function_nav.selected, 0);
+
+        app.active_buffer_mut().cursor = app.active_buffer().rope.len_bytes();
+        app.sync_open_list(PanelKind::Functions, 10);
+        assert_eq!(app.function_nav.selected, 29);
+        assert!(app.function_nav.scroll > 12);
+    }
+
+    #[test]
+    fn symbol_scroll_resets_when_the_active_buffer_changes() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(many_functions(30));
+        let source = (0..30)
+            .map(|i| format!("fn fn{i}() {{}}\n"))
+            .collect::<String>();
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&source, None);
+        app.header_width.set(120);
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.panel_focus = None;
+        app.left_panel_area.set(panel_rect());
+        app.scroll_panel(Side::Left, 12);
+        app.sync_open_list(PanelKind::Functions, 10);
+        assert_eq!(app.function_nav.scroll, 12);
+
+        app.buffers
+            .push(crate::buffer::Buffer::from_str("fn other() {}\n", None));
+        app.switch_tab(1);
+        app.sync_open_list(PanelKind::Functions, 10);
+        assert_eq!(app.function_nav.selected, 0);
+        assert_eq!(app.function_nav.scroll, 0);
+        assert!(!app.function_nav.free_scroll);
+    }
+
+    #[test]
+    fn enter_brings_the_wheeled_highlight_on_screen_before_activating() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(many_functions(30));
+        let source = (0..30)
+            .map(|i| format!("fn fn{i}() {{}}\n"))
+            .collect::<String>();
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&source, None);
+        app.header_width.set(120);
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.left_panel_area.set(panel_rect());
+        app.scroll_panel(Side::Left, 12);
+        assert_eq!(app.function_nav.scroll, 12);
+        app.activate_focused_list();
+        assert_eq!(app.function_nav.scroll, 0);
+        assert!(!app.function_nav.free_scroll);
+        assert_eq!(app.panel_focus, None);
     }
 
     #[test]

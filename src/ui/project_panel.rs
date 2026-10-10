@@ -95,7 +95,7 @@ pub fn render_project(f: &mut Frame, area: Rect, view: ProjectView<'_>, theme: &
             )));
         }
     } else {
-        let start = nav.scroll.min(rows.len().saturating_sub(1));
+        let start = side_panel::clamp_scroll(nav.scroll, rows.len(), viewport.max(1));
         for (offset, row) in rows.iter().skip(start).take(viewport).enumerate() {
             let style = if start + offset == nav.selected {
                 selected_style

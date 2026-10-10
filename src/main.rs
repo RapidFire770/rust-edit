@@ -3414,7 +3414,9 @@ fn panel_click(app: &mut App, x: u16, y: u16) -> bool {
         match hit_test(geom, x, y) {
             PanelHit::Move => app.move_panel(side, side.other()),
             PanelHit::Close => app.close_side(side),
-            PanelHit::Header => app.panel_focus = Some(side),
+            PanelHit::Header => {
+                app.focus_side(side);
+            }
             PanelHit::Row(row) => app.activate_visible_row(side, row),
             PanelHit::Scrollbar => {
                 app.panel_scrollbar_drag = Some(side);
@@ -3446,11 +3448,7 @@ fn render_side_panel(
         } else if app.project_nav.selected >= len {
             app.project_nav.selected = len - 1;
         }
-        crate::ui::side_panel::reveal(
-            app.project_nav.selected,
-            &mut app.project_nav.scroll,
-            viewport,
-        );
+        crate::ui::side_panel::settle(&mut app.project_nav, len, viewport);
         let title = app
             .project_root
             .as_ref()
@@ -4486,6 +4484,41 @@ mod wheel_target_tests {
         assert!(layout.overflowing);
         assert_eq!(wheel_target(&app, 40, 0), WheelTarget::TabStrip);
         assert_eq!(wheel_target(&app, 40, 10), WheelTarget::Editor);
+    }
+
+    #[test]
+    fn header_click_snaps_a_wheeled_symbol_list_back_to_the_caret() {
+        use crate::symbols::{Symbol, SymbolKind};
+        use crate::ui::side_panel::PanelKind;
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(
+            (0..30)
+                .map(|line| Symbol {
+                    name: format!("fn{line}"),
+                    kind: SymbolKind::Function,
+                    line,
+                    byte: 0,
+                })
+                .collect(),
+        );
+        let source = (0..30)
+            .map(|i| format!("fn fn{i}() {{}}\n"))
+            .collect::<String>();
+        *app.active_buffer_mut() = crate::buffer::Buffer::from_str(&source, None);
+        app.header_width.set(120);
+        app.toggle_symbol_list(PanelKind::Functions);
+        let area = ratatui::layout::Rect::new(0, 2, 36, 11);
+        app.left_panel_area.set(area);
+        app.panel_focus = None;
+        app.scroll_panel(crate::ui::side_panel::Side::Left, 12);
+        app.sync_open_list(PanelKind::Functions, 10);
+        assert_eq!(app.function_nav.scroll, 12);
+
+        assert!(panel_click(&mut app, 1, area.y));
+        assert_eq!(app.panel_focus, Some(crate::ui::side_panel::Side::Left));
+        assert_eq!(app.function_nav.selected, 0);
+        assert_eq!(app.function_nav.scroll, 0);
+        assert!(!app.function_nav.free_scroll);
     }
 
     #[test]

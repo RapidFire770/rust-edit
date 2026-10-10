@@ -315,6 +315,9 @@ pub struct ListRow {
 pub struct PanelNav {
     pub selected: usize,
     pub scroll: usize,
+    /// Set by the wheel and the scrollbar. Paint must not pull `scroll`
+    /// back onto `selected` while this is set.
+    pub free_scroll: bool,
 }
 
 /// Keep `selected` inside the visible rows.
@@ -326,6 +329,30 @@ pub fn reveal(selected: usize, scroll: &mut usize, viewport: usize) {
         *scroll = selected;
     } else if selected >= scroll.saturating_add(viewport) {
         *scroll = selected + 1 - viewport;
+    }
+}
+
+pub fn clamp_scroll(scroll: usize, len: usize, viewport: usize) -> usize {
+    if len == 0 || viewport == 0 {
+        return 0;
+    }
+    scroll.min(len.saturating_sub(viewport))
+}
+
+/// Clamp the highlight into the list. A free scroll stays where the user
+/// put it. Otherwise the highlight is brought on screen.
+pub fn settle(nav: &mut PanelNav, len: usize, viewport: usize) {
+    if len == 0 || viewport == 0 {
+        nav.selected = 0;
+        nav.scroll = 0;
+        return;
+    }
+    nav.selected = nav.selected.min(len - 1);
+    if nav.free_scroll {
+        nav.scroll = clamp_scroll(nav.scroll, len, viewport);
+    } else {
+        reveal(nav.selected, &mut nav.scroll, viewport);
+        nav.scroll = clamp_scroll(nav.scroll, len, viewport);
     }
 }
 
@@ -422,7 +449,7 @@ pub fn render(f: &mut Frame, area: Rect, view: PanelView<'_>, theme: &Theme) {
             lines.push(Line::from(Span::styled(ellipsize(message, width), dim)));
         }
     } else {
-        let start = nav.scroll.min(rows.len().saturating_sub(1));
+        let start = clamp_scroll(nav.scroll, rows.len(), viewport.max(1));
         for (offset, row) in rows.iter().skip(start).take(viewport).enumerate() {
             let style = if start + offset == nav.selected {
                 selected_style
@@ -666,5 +693,45 @@ mod tests {
         assert_eq!(hit_test(geom, 57, 3), PanelHit::Row(1));
         assert_eq!(hit_test(geom, 79, 4), PanelHit::Scrollbar);
         assert_eq!(hit_test(geom, 10, 3), PanelHit::Miss);
+    }
+
+    #[test]
+    fn clamp_scroll_stops_on_the_last_full_page() {
+        assert_eq!(clamp_scroll(0, 40, 10), 0);
+        assert_eq!(clamp_scroll(100, 40, 10), 30);
+        assert_eq!(clamp_scroll(5, 4, 10), 0);
+        assert_eq!(clamp_scroll(3, 0, 10), 0);
+    }
+
+    #[test]
+    fn settle_keeps_a_free_scroll_away_from_the_highlight() {
+        let mut nav = PanelNav {
+            selected: 0,
+            scroll: 24,
+            free_scroll: true,
+        };
+        settle(&mut nav, 40, 10);
+        assert_eq!(nav.scroll, 24);
+        assert_eq!(nav.selected, 0);
+
+        nav.scroll = 100;
+        settle(&mut nav, 40, 10);
+        assert_eq!(nav.scroll, 30);
+    }
+
+    #[test]
+    fn settle_without_free_scroll_pins_the_highlight() {
+        let mut nav = PanelNav {
+            selected: 0,
+            scroll: 24,
+            free_scroll: false,
+        };
+        settle(&mut nav, 40, 10);
+        assert_eq!(nav.scroll, 0);
+
+        nav.selected = 39;
+        nav.scroll = 0;
+        settle(&mut nav, 40, 10);
+        assert_eq!(nav.scroll, 30);
     }
 }
