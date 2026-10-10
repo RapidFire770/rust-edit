@@ -493,4 +493,32 @@ mod tests {
             "a URL inside a JSONC string must stay a string, not a comment"
         );
     }
+
+    #[test]
+    fn basic_grammar_colors_code_strings_and_comments() {
+        let sh = SyntaxHighlighter::new();
+        assert!(distinct_fg_count(&sh, "10 PRINT \"HI\"\nREM note\n", Language::Basic) > 1);
+
+        let quoted = sh.highlight("10 PRINT \"REM {CLR}\"\n", Language::Basic);
+        let inside = fg_containing(&quoted[0], "REM");
+        let keyword = fg_containing(&quoted[0], "PRINT");
+        assert_ne!(inside, keyword, "REM inside quotes stays a string");
+
+        let comment = sh.highlight("POKE 1,2: REM note\n", Language::Basic);
+        let poke = fg_containing(&comment[0], "POKE");
+        let note = fg_containing(&comment[0], "note");
+        assert_ne!(poke, note, "a trailing REM starts a comment");
+        assert_eq!(
+            fg_containing(&comment[0], "REM"),
+            note,
+            "the REM token is part of the comment"
+        );
+
+        let remote = sh.highlight("REMOTE = 1\n", Language::Basic);
+        assert_ne!(
+            fg_containing(&remote[0], "OTE"),
+            note,
+            "REMOTE is not a REM comment"
+        );
+    }
 }

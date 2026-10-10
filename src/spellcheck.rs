@@ -955,6 +955,33 @@ mod tests {
     }
 
     #[test]
+    fn basic_spellcheck_reads_comments_and_strings_not_keywords_or_petscii() {
+        let highlighter = SyntaxHighlighter::new();
+        let basic = "10 PRINT \"HELLO {CLR} teh\"";
+        let regions = checkable_regions(&highlighter, Language::Basic, &[basic]);
+        let covers = |needle: &str| {
+            let at = basic.find(needle).unwrap();
+            regions[0]
+                .iter()
+                .any(|range| range.start <= at && range.end >= at + needle.len())
+        };
+        assert!(!covers("PRINT"), "PRINT {:?}", regions[0]);
+        assert!(!covers("CLR"), "CLR {:?}", regions[0]);
+        assert!(covers("teh"), "teh {:?}", regions[0]);
+
+        let rem = "10 REM teh";
+        let rem_regions = checkable_regions(&highlighter, Language::Basic, &[rem]);
+        let at = rem.find("teh").unwrap();
+        assert!(
+            rem_regions[0]
+                .iter()
+                .any(|range| range.start <= at && range.end >= at + 3),
+            "{:?}",
+            rem_regions[0]
+        );
+    }
+
+    #[test]
     fn cursor_on_or_just_after_a_word_selects_it() {
         #[allow(clippy::single_range_in_vec_init)]
         let ranges = vec![2..5];

@@ -6,4 +6,45 @@ file_extensions:
 scope: source.basic
 contexts:
   main:
-    - match: '$'
+    - match: '^[ \t]*#[A-Za-z_][A-Za-z0-9_]*'
+      scope: keyword.control.preprocessor.basic
+      push:
+        - meta_scope: keyword.control.preprocessor.basic
+        - match: '$'
+          pop: true
+    - include: string
+    - match: '(?i)(?<![A-Za-z0-9_])REM(?![A-Za-z0-9_])'
+      scope: punctuation.definition.comment.basic
+      push:
+        - meta_scope: comment.line.rem.basic
+        - match: '$'
+          pop: true
+    - match: '^[ \t]*([0-9]+)([ \t]+)([A-Za-z_][A-Za-z0-9_]*)[ \t]*(:)'
+      captures:
+        1: constant.numeric.basic
+        3: entity.name.label.basic
+        4: punctuation.separator.basic
+    - match: '^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*(:)'
+      captures:
+        1: entity.name.label.basic
+        2: punctuation.separator.basic
+    - match: '(?i)(?<![A-Za-z0-9_])(?:INPUT#|PRINT#|CHR\$|LEFT\$|RIGHT\$|MID\$|STR\$|RESTORE|RETURN|GOSUB|VERIFY|PRINT|INPUT|CLOSE|OPEN|THEN|NEXT|READ|DATA|STEP|STOP|WAIT|LOAD|SAVE|POKE|GOTO|CONT|LIST|DEF|DIM|FOR|GET|LET|NEW|NOT|RUN|SYS|TAB|SPC|AND|END|CLR|CMD|VAL|ABS|ASC|ATN|COS|EXP|FRE|INT|LEN|LOG|PEEK|POS|RND|SGN|SIN|SQR|TAN|USR|OR|FN|IF|ON|TO)(?![A-Za-z0-9_])'
+      scope: keyword.control.basic
+    - match: '(?<![A-Za-z0-9_])\?(?![A-Za-z0-9_])'
+      scope: keyword.control.basic
+    - match: '(?<![A-Za-z0-9_])[0-9]+(?![A-Za-z0-9_])'
+      scope: constant.numeric.basic
+
+  string:
+    - match: '"'
+      scope: punctuation.definition.string.begin.basic
+      push:
+        - meta_include_prototype: false
+        - meta_scope: string.quoted.double.basic
+        - match: '"'
+          scope: punctuation.definition.string.end.basic
+          pop: true
+        - match: '\{[A-Za-z][A-Za-z0-9 -]*\}'
+          scope: variable.other.petscii.basic
+        - match: '$'
+          pop: true
