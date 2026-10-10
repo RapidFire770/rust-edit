@@ -5,6 +5,7 @@
 - [x] When a whole line of text gets pasted at one time by the user and they do ctrl+z it should erase the whole pasted line instead of one letter at a time. This appears to be an issue when it is an item pasted from the Operating systems clipboard instead of something copied and pasted from within the rust-edit program.
 - [x] Cut, copy and paste shortcuts are not using the Operating systems clipboard correctly. Nothing copied or cut appears in the operating systems clipboard for use outside of the rust-edit program.
 - [x] Add better descriptions to the help.rs in the "View & Tools" section for Format Document, Function List and Variables List. Current descriptions do not properly describe to the user what they do or open.
+- [ ] Esc unfocuses from the Function or Variable list sidebars but there doesn't seem to be a way to refocus on either of the sidebars with the keyboard once you leave focus on them. This leaves the mouse as the only option for using the sidebars which is against our Keyboard and Mouse being first class citizens with every action having to be reachable both ways.
 
 ### Major:
 
