@@ -11,7 +11,7 @@
 
 <div align="center">
 
-![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)![Version](https://img.shields.io/badge/version-0.1.0-blue)![Platform](https://img.shields.io/badge/platform-Linux-blue?logo=linux&logoColor=white)
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)![Version](https://img.shields.io/badge/version-0.1.2-blue)![Platform](https://img.shields.io/badge/platform-Linux-blue?logo=linux&logoColor=white)
 
 </div>
 
