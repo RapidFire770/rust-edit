@@ -169,6 +169,15 @@ pub struct App {
     pub variable_nav: crate::ui::side_panel::PanelNav,
     /// Scroll drag for a list's own bar. Separate from the editor bars.
     pub panel_scrollbar_drag: Option<crate::ui::side_panel::Side>,
+    /// Chosen project folder for this session. Hiding the tree does not clear it.
+    /// Not written to config. Recent folders live in `config.recent_projects`.
+    pub project_root: Option<PathBuf>,
+    pub project_tree: Option<crate::project_tree::ProjectTree>,
+    pub project_nav: crate::ui::side_panel::PanelNav,
+    pub project_show_hidden: bool,
+    /// `Some` while the project-folder picker is open. Task 7 replaces `()`
+    /// with the picker state. A restart leaves this `None`.
+    pub project_picker: Option<()>,
     pub symbol_cache: Option<crate::symbols::SymbolCache>,
     /// Tests inject definitions so the lists can jump before a scanner exists.
     #[cfg(test)]
@@ -358,6 +367,11 @@ impl App {
             function_nav: crate::ui::side_panel::PanelNav::default(),
             variable_nav: crate::ui::side_panel::PanelNav::default(),
             panel_scrollbar_drag: None,
+            project_root: None,
+            project_tree: None,
+            project_nav: crate::ui::side_panel::PanelNav::default(),
+            project_show_hidden: false,
+            project_picker: None,
             symbol_cache: None,
             #[cfg(test)]
             symbol_override: None,
@@ -450,8 +464,9 @@ impl App {
     ) -> &mut crate::ui::side_panel::PanelNav {
         use crate::ui::side_panel::PanelKind;
         match kind {
-            PanelKind::Functions | PanelKind::Project => &mut self.function_nav,
+            PanelKind::Functions => &mut self.function_nav,
             PanelKind::Variables => &mut self.variable_nav,
+            PanelKind::Project => &mut self.project_nav,
         }
     }
 
@@ -494,13 +509,16 @@ impl App {
 
     pub fn list_message(&self, kind: crate::ui::side_panel::PanelKind) -> &'static str {
         use crate::ui::side_panel::PanelKind;
+        if kind == PanelKind::Project {
+            return "Empty folder";
+        }
         if !self.buffer_supports_symbols() {
             "Not a code file"
         } else {
             match kind {
                 PanelKind::Functions => "No functions",
                 PanelKind::Variables => "No variables",
-                PanelKind::Project => "",
+                PanelKind::Project => "Empty folder",
             }
         }
     }
@@ -514,7 +532,7 @@ impl App {
         };
         let already = self.panel_focus == Some(side);
         self.panel_focus = Some(side);
-        if !already {
+        if !already && kind != crate::ui::side_panel::PanelKind::Project {
             self.snap_list_to_caret(kind);
         }
         true
@@ -575,6 +593,192 @@ impl App {
         if self.panel_scrollbar_drag == Some(side) {
             self.panel_scrollbar_drag = None;
         }
+    }
+
+    fn panel_width(&self) -> u16 {
+        let width = self.header_width.get() as u16;
+        if width == 0 {
+            80
+        } else {
+            width
+        }
+    }
+
+    pub fn project_flat_rows(&self) -> Vec<crate::project_tree::FlatRow> {
+        self.project_tree
+            .as_ref()
+            .map(|tree| tree.flatten())
+            .unwrap_or_default()
+    }
+
+    fn panel_row_count(&mut self, kind: crate::ui::side_panel::PanelKind) -> usize {
+        use crate::ui::side_panel::PanelKind;
+        match kind {
+            PanelKind::Functions | PanelKind::Variables => self.symbols_of(kind).len(),
+            PanelKind::Project => self.project_flat_rows().len(),
+        }
+    }
+
+    pub fn project_panel_focused(&self) -> bool {
+        self.panel_focus.is_some_and(|side| {
+            self.kind_on(side) == Some(crate::ui::side_panel::PanelKind::Project)
+        })
+    }
+
+    /// Open the folder picker unless another popup already owns input.
+    pub fn show_project_picker(&mut self) {
+        if self.popup_focus().is_some() {
+            return;
+        }
+        self.project_picker = Some(());
+    }
+
+    /// Load `path` as the session project and show the tree. A failure leaves
+    /// the current root and panels alone.
+    pub fn open_project_at(&mut self, path: &Path) -> Result<(), String> {
+        if !path.is_dir() {
+            return Err("Cannot open that folder".to_string());
+        }
+        let tree = crate::project_tree::ProjectTree::load(path, self.project_show_hidden)
+            .map_err(|err| format!("Cannot open that folder: {err}"))?;
+        let root = tree.root.clone();
+        self.config.record_recent_project(&root);
+        self.project_root = Some(root);
+        self.project_tree = Some(tree);
+        self.project_nav = crate::ui::side_panel::PanelNav::default();
+        self.project_picker = None;
+        self.show_project_panel();
+        Ok(())
+    }
+
+    pub fn toggle_project_browser(&mut self) {
+        use crate::ui::side_panel::PanelKind;
+        if self.project_root.is_none() {
+            self.show_project_picker();
+            return;
+        }
+        if let Some(side) = self.side_of(PanelKind::Project) {
+            if self.panel_focus == Some(side) {
+                self.close_side(side);
+            } else {
+                self.focus_side(side);
+            }
+            return;
+        }
+        self.show_project_panel();
+    }
+
+    /// Put the project tree on the left when it is hidden. An open tree stays
+    /// on its current side. The other side is dropped only when it does not fit.
+    fn show_project_panel(&mut self) {
+        use crate::ui::side_panel::{fit_panels, PanelKind};
+        let width = self.panel_width();
+        if self.side_of(PanelKind::Project).is_some() {
+            let fitted = fit_panels(self.left_panel, self.right_panel, width);
+            self.apply_project_fit(fitted);
+            return;
+        }
+        let previous = (self.left_panel, self.right_panel, self.panel_focus);
+        let fitted = fit_panels(Some(PanelKind::Project), self.right_panel, width);
+        let kept =
+            fitted.left == Some(PanelKind::Project) || fitted.right == Some(PanelKind::Project);
+        if !kept {
+            self.left_panel = previous.0;
+            self.right_panel = previous.1;
+            self.panel_focus = previous.2;
+            self.format_status = Some(fitted.notice.unwrap_or("Window is too narrow").to_string());
+            return;
+        }
+        self.apply_project_fit(fitted);
+    }
+
+    fn apply_project_fit(&mut self, fitted: crate::ui::side_panel::Fit) {
+        if let Some(notice) = fitted.notice {
+            self.format_status = Some(notice.to_string());
+        }
+        self.left_panel = fitted.left;
+        self.right_panel = fitted.right;
+        if let Some(side) = self.side_of(crate::ui::side_panel::PanelKind::Project) {
+            self.panel_focus = Some(side);
+        } else if self
+            .panel_focus
+            .is_some_and(|side| self.kind_on(side).is_none())
+        {
+            self.panel_focus = None;
+        }
+    }
+
+    pub fn activate_project_index(&mut self, index: usize) {
+        use crate::project_tree::ExpandOutcome;
+        let Some(row) = self.project_flat_rows().get(index).cloned() else {
+            if let Some(side) = self.side_of(crate::ui::side_panel::PanelKind::Project) {
+                self.panel_focus = Some(side);
+            }
+            return;
+        };
+        self.project_nav.selected = index;
+        if row.is_dir {
+            let outcome = self
+                .project_tree
+                .as_mut()
+                .map(|tree| tree.toggle(&row.path));
+            match outcome {
+                Some(ExpandOutcome::OutsideRoot) => {
+                    self.format_status = Some("That link leaves the project folder".to_string());
+                }
+                Some(ExpandOutcome::Loop) => {
+                    self.format_status = Some("That folder is already open above".to_string());
+                }
+                Some(ExpandOutcome::Io(message)) => {
+                    self.format_status = Some(format!("Cannot read that folder: {message}"));
+                }
+                _ => {}
+            }
+            let len = self.project_flat_rows().len();
+            if len == 0 {
+                self.project_nav.selected = 0;
+            } else if self.project_nav.selected >= len {
+                self.project_nav.selected = len - 1;
+            }
+            return;
+        }
+        match self.open_file_in_tab(&row.path) {
+            Ok(opened) => {
+                if opened.loaded && opened.read_only {
+                    self.warn_active_read_only();
+                }
+                self.panel_focus = None;
+            }
+            Err(message) => self.show_info_popup("Cannot Open", message),
+        }
+    }
+
+    pub fn reload_project_tree(&mut self) {
+        let failed = self
+            .project_tree
+            .as_mut()
+            .and_then(|tree| tree.reload().err());
+        if let Some(message) = failed {
+            self.format_status = Some(format!("Cannot read that folder: {message}"));
+        }
+        let len = self.project_flat_rows().len();
+        if len == 0 {
+            self.project_nav.selected = 0;
+        } else if self.project_nav.selected >= len {
+            self.project_nav.selected = len - 1;
+        }
+    }
+
+    pub fn toggle_project_hidden(&mut self) {
+        let on = !self.project_show_hidden;
+        if let Some(tree) = self.project_tree.as_mut() {
+            if let Err(message) = tree.set_show_hidden(on) {
+                self.project_show_hidden = tree.show_hidden();
+                self.format_status = Some(format!("Cannot read that folder: {message}"));
+                return;
+            }
+        }
+        self.project_show_hidden = on;
     }
 
     /// Move the panel on `from` to `to`, swapping when `to` is occupied.
@@ -646,7 +850,7 @@ impl App {
         let Some(kind) = self.kind_on(side) else {
             return;
         };
-        let len = self.symbols_of(kind).len();
+        let len = self.panel_row_count(kind);
         if len == 0 {
             return;
         }
@@ -677,6 +881,10 @@ impl App {
     }
 
     fn activate_list_index(&mut self, kind: crate::ui::side_panel::PanelKind, index: usize) {
+        if kind == crate::ui::side_panel::PanelKind::Project {
+            self.activate_project_index(index);
+            return;
+        }
         let symbols = self.symbols_of(kind);
         let Some(symbol) = symbols.get(index) else {
             self.panel_focus = self.side_of(kind);
@@ -708,7 +916,7 @@ impl App {
         let Some(kind) = self.kind_on(side) else {
             return;
         };
-        let len = self.symbols_of(kind).len();
+        let len = self.panel_row_count(kind);
         let viewport = self.list_viewport(side).max(1);
         let max_scroll = len.saturating_sub(viewport);
         let nav = self.nav_mut(kind);
@@ -725,7 +933,7 @@ impl App {
             crate::ui::side_panel::Side::Right => self.right_panel_area.get(),
         };
         let geom = crate::ui::side_panel::panel_geom(rect, side);
-        let len = self.symbols_of(kind).len();
+        let len = self.panel_row_count(kind);
         let viewport = geom.list.height as usize;
         let bar = crate::ui::scrollbar::OverflowBar {
             total: len,
@@ -3258,6 +3466,189 @@ mod tests {
         ));
         fs::write(&p, contents).unwrap();
         p
+    }
+
+    fn project_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rust-edit-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn one_function() -> Vec<crate::symbols::Symbol> {
+        use crate::symbols::{Symbol, SymbolKind};
+        vec![Symbol {
+            name: "main".into(),
+            kind: SymbolKind::Function,
+            line: 0,
+            byte: 3,
+        }]
+    }
+
+    #[test]
+    fn opening_the_project_replaces_the_left_list_and_keeps_a_wide_right_list() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let root = project_dir("projwide");
+        fs::write(root.join("README.md"), "hi\n").unwrap();
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(one_function());
+        app.header_width.set(120);
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.toggle_symbol_list(PanelKind::Variables);
+        app.open_project_at(&root).unwrap();
+        assert_eq!(app.left_panel, Some(PanelKind::Project));
+        assert_eq!(app.right_panel, Some(PanelKind::Variables));
+        assert_eq!(app.panel_focus, Some(Side::Left));
+        assert_eq!(
+            app.project_root.as_deref(),
+            Some(fs::canonicalize(&root).unwrap().as_path())
+        );
+        assert!(app.config.recent_projects[0].contains("projwide"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn opening_the_project_on_80_columns_drops_the_right_list() {
+        use crate::ui::side_panel::PanelKind;
+        let root = project_dir("proj80");
+        fs::write(root.join("README.md"), "hi\n").unwrap();
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(one_function());
+        app.header_width.set(80);
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.toggle_symbol_list(PanelKind::Variables);
+        app.open_project_at(&root).unwrap();
+        assert_eq!(app.left_panel, Some(PanelKind::Project));
+        assert_eq!(app.right_panel, None);
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Window is too narrow for both panels")
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn hiding_the_project_keeps_the_folder_for_the_next_show() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let root = project_dir("projhide");
+        fs::write(root.join("README.md"), "hi\n").unwrap();
+        let mut app = App::new(&[]);
+        app.header_width.set(80);
+        app.open_project_at(&root).unwrap();
+        app.close_side(Side::Left);
+        assert!(app.left_panel.is_none());
+        assert!(app.project_root.is_some());
+        app.toggle_project_browser();
+        assert_eq!(app.left_panel, Some(PanelKind::Project));
+        assert!(app.project_picker.is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn project_browser_with_no_folder_opens_the_picker() {
+        let mut app = App::new(&[]);
+        app.toggle_project_browser();
+        assert!(app.project_picker.is_some());
+        assert!(app.left_panel.is_none());
+    }
+
+    #[test]
+    fn enter_on_a_directory_expands_and_enter_on_a_file_opens_a_tab() {
+        use crate::ui::side_panel::PanelKind;
+        let root = project_dir("projopen");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let mut app = App::new(&[]);
+        app.header_width.set(80);
+        app.open_project_at(&root).unwrap();
+        let src = app
+            .project_flat_rows()
+            .iter()
+            .position(|row| row.name == "src")
+            .unwrap();
+        app.activate_project_index(src);
+        assert!(app
+            .project_flat_rows()
+            .iter()
+            .any(|row| row.name == "main.rs"));
+        let main_at = app
+            .project_flat_rows()
+            .iter()
+            .position(|row| row.name == "main.rs")
+            .unwrap();
+        app.activate_project_index(main_at);
+        assert!(app.active_buffer().text().contains("fn main"));
+        assert!(app
+            .active_buffer()
+            .path
+            .as_ref()
+            .unwrap()
+            .ends_with("main.rs"));
+        assert!(app.panel_focus.is_none());
+        assert_eq!(app.left_panel, Some(PanelKind::Project));
+        let src = app
+            .project_flat_rows()
+            .iter()
+            .position(|row| row.name == "src")
+            .unwrap();
+        app.activate_project_index(src);
+        assert!(!app
+            .project_flat_rows()
+            .iter()
+            .any(|row| row.name == "main.rs"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_link_outside_the_project_does_not_expand() {
+        let root = project_dir("projout");
+        std::os::unix::fs::symlink("/tmp", root.join("out")).unwrap();
+        let mut app = App::new(&[]);
+        app.header_width.set(80);
+        app.open_project_at(&root).unwrap();
+        let index = app
+            .project_flat_rows()
+            .iter()
+            .position(|row| row.name == "out")
+            .unwrap();
+        app.activate_project_index(index);
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("That link leaves the project folder")
+        );
+        assert!(
+            !app.project_flat_rows()
+                .iter()
+                .find(|row| row.name == "out")
+                .unwrap()
+                .expanded
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn function_list_does_not_replace_the_project_on_a_narrow_window() {
+        use crate::ui::side_panel::PanelKind;
+        let root = project_dir("projfn");
+        fs::write(root.join("README.md"), "hi\n").unwrap();
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(one_function());
+        app.header_width.set(80);
+        app.open_project_at(&root).unwrap();
+        app.toggle_symbol_list(PanelKind::Functions);
+        assert_eq!(app.left_panel, Some(PanelKind::Project));
+        assert!(app.right_panel.is_none());
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Window is too narrow for both panels")
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
