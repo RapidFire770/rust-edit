@@ -129,6 +129,8 @@ pub enum Language {
     Lisp,
     D,
     Batch,
+    Basic,
+    KickAsm,
 }
 
 impl Language {
@@ -179,6 +181,8 @@ impl Language {
         Language::Lisp,
         Language::D,
         Language::Batch,
+        Language::Basic,
+        Language::KickAsm,
     ];
 
     /// Status-bar name. Matches the Help list, shortened where that row is a sentence.
@@ -229,6 +233,8 @@ impl Language {
             Language::Lisp => "Lisp",
             Language::D => "D",
             Language::Batch => "Batch",
+            Language::Basic => "BASIC",
+            Language::KickAsm => "KickAss",
         }
     }
 
@@ -293,6 +299,8 @@ impl Language {
             "lisp" | "cl" | "el" | "scm" | "ss" => Language::Lisp,
             "d" | "di" => Language::D,
             "bat" | "cmd" => Language::Batch,
+            "bas" => Language::Basic,
+            "asm" => Language::KickAsm,
             _ => Language::Plain,
         }
     }
@@ -321,7 +329,8 @@ impl Language {
             | Language::ObjectiveC
             | Language::ObjectiveCpp
             | Language::Zig
-            | Language::Jsonc => Some("//"),
+            | Language::Jsonc
+            | Language::KickAsm => Some("//"),
             Language::Python
             | Language::Toml
             | Language::Yaml
@@ -335,7 +344,7 @@ impl Language {
             Language::Sql | Language::Lua | Language::Haskell => Some("--"),
             Language::Ini | Language::Clojure | Language::Lisp => Some(";"),
             Language::Erlang | Language::Latex | Language::Tex => Some("%"),
-            Language::Batch => Some("REM"),
+            Language::Batch | Language::Basic => Some("REM"),
             Language::Plain
             | Language::Markdown
             | Language::Json
@@ -2010,6 +2019,8 @@ mod tests {
             (Language::Latex, Some("%"), None),
             (Language::Tex, Some("%"), None),
             (Language::Batch, Some("REM"), None),
+            (Language::Basic, Some("REM"), None),
+            (Language::KickAsm, Some("//"), None),
             (Language::Markdown, None, Some(("<!--", "-->"))),
             (Language::Html, None, Some(("<!--", "-->"))),
             (Language::Xml, None, Some(("<!--", "-->"))),
@@ -2397,6 +2408,14 @@ mod tests {
             ("suite.t", Language::Plain),
             ("mod.pyx", Language::Plain),
             ("readme", Language::Plain),
+            ("main.bas", Language::Basic),
+            ("MAIN.BAS", Language::Basic),
+            ("basic-ide.asm", Language::KickAsm),
+            ("file.ASM", Language::KickAsm),
+            ("file.s", Language::Plain),
+            ("file.inc", Language::Plain),
+            ("file.a65", Language::Plain),
+            ("file.prg", Language::Plain),
         ];
         for (path, lang) in cases {
             assert_eq!(Language::from_path(Path::new(path)), lang, "{path}");

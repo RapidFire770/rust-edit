@@ -89,7 +89,9 @@ fn dummy_filename(language: Language) -> &'static str {
         | Language::RestructuredText
         | Language::Lisp
         | Language::D
-        | Language::Batch => "buffer.txt",
+        | Language::Batch
+        | Language::Basic
+        | Language::KickAsm => "buffer.txt",
     }
 }
 
@@ -220,7 +222,9 @@ pub fn command_spec(language: Language, path: Option<&Path>) -> Option<CommandSp
         | Language::RestructuredText
         | Language::Lisp
         | Language::D
-        | Language::Batch => None,
+        | Language::Batch
+        | Language::Basic
+        | Language::KickAsm => None,
     }
 }
 
@@ -625,6 +629,8 @@ mod spec_tests {
             Language::Sql,
             Language::Haskell,
             Language::Makefile,
+            Language::Basic,
+            Language::KickAsm,
         ] {
             assert!(command_spec(lang, None).is_none(), "{lang:?}");
         }

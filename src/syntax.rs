@@ -133,6 +133,8 @@ impl SyntaxHighlighter {
             Language::Lisp => "Lisp",
             Language::D => "D",
             Language::Batch => "Batch File",
+            Language::Basic => "BASIC",
+            Language::KickAsm => "KickAss",
             Language::Plain => "Plain Text",
         }
     }

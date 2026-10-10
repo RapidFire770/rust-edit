@@ -1,0 +1,9 @@
+%YAML 1.2
+---
+name: KickAss
+file_extensions:
+  - asm
+scope: source.kickass
+contexts:
+  main:
+    - match: '$'

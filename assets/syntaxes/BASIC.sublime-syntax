@@ -1,0 +1,9 @@
+%YAML 1.2
+---
+name: BASIC
+file_extensions:
+  - bas
+scope: source.basic
+contexts:
+  main:
+    - match: '$'
