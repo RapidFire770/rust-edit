@@ -585,7 +585,11 @@ mod tests {
         assert!(rows.contains(&("KickAss", ".asm")));
         let basic = rows.iter().position(|row| row.0 == "BASIC").unwrap();
         let batch = rows.iter().position(|row| row.0 == "Batch").unwrap();
-        assert!(basic < batch);
+        let bash = rows.iter().position(|row| row.0 == "Bash / Shell").unwrap();
+        assert!(
+            bash < basic && basic < batch,
+            "BASIC sits between Bash and Batch"
+        );
         let kick = rows.iter().position(|row| row.0 == "KickAss").unwrap();
         let jsonc = rows.iter().position(|row| row.0 == "JSONC").unwrap();
         let latex = rows.iter().position(|row| row.0 == "LaTeX").unwrap();
