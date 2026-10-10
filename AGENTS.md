@@ -14,7 +14,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
 - Delete dead or obsolete code, unreachable code, or functions that are never called.
 - Code must look hand-written for this repository. Changes that read like generic AI-generated code will be rejected automatically: unnecessary helper layers, vague names, boilerplate comments, defensive branches without a real failure mode, broad rewrites, or code that ignores the local style.
 - For small one file changes, they can be preformed on the main git branch then use a code reviewer subagent to review the work afterward and create a commit once work is validated.
-- For medium multi file changes break them down into a multiple task plan and implement the tasks using subagents for each step of the plan. Use a code reviewer subagent to review the work afterward and create a commit once work is validated.
+- For medium multi file changes break them down into a multiple task plan. Implement the plans tasks using the subagent-driven-development skill. Use a code reviewer subagent to review the work afterward and create a commit once work is validated.
 - For large multi file changes and refactors always use the subagent-driven-development skill, if a git worktree is not setup, configure one in a .worktrees folder before handoff to the subagent.
 - Verify that any changes do not break existing functionality.
 - Keep this AGENTS.md file updated with information about the project that other AI agents would need to know to keep the project consistent from session to session. (Project layout/structure, technology stack, tool chain, coding standards & style, testing, pitfalls and conflicts to avoid, features, etc.)
