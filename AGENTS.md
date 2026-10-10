@@ -10,6 +10,7 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
 **IMPORTANT:**
 
 - Always check available skills and invoke them when relevant to the user's request.
+- If adding a new crate explain to the user why it is needed or should be used compared to what it will take to do the work without it and give them the option to say yes or no to its inclusion.
 - Delete dead or obsolete code, unreachable code, or functions that are never called.
 - Code must look hand-written for this repository. Changes that read like generic AI-generated code will be rejected automatically: unnecessary helper layers, vague names, boilerplate comments, defensive branches without a real failure mode, broad rewrites, or code that ignores the local style.
 - For small one file changes, they can be preformed on the main git branch then use a code reviewer subagent to review the work afterward and create a commit once work is validated.
@@ -50,7 +51,6 @@ This file defines how coding agents (Grok Build, Cursor, Claude, human contribut
      - **Clipboard copy uses the OS clipboard, and a terminal paste is one undo.** `arboard` is built with `wayland-data-control`. On Wayland, Ctrl+C, Ctrl+X, and Ctrl+V talk to that clipboard, which is the one Foot and other programs read. arboard falls back to X11 when the protocol is missing. `App` keeps the `Clipboard` for the session because the copying process serves the data. Startup enables bracketed paste and shutdown disables it. `Event::Paste` goes through `apply_bracketed_paste`: the editor `insert`s the whole string (`\r\n` and a lone `\r` become `\n`) as one undo step. A focused single-line field (find query or replace, file-dialog path, Save As name, dictionary word, theme name or hex) receives that text with control characters removed. Find text focus still receives the paste when a menu is also open, matching typed characters. Find command mode, a menu with no text field, and a non-text popup swallow the paste. Shift+drag is Foot's own selection while mouse capture is on; Ctrl+Shift+C and Super+C copy that selection and do not read the editor selection.
      - **Function List and Variables List are session-only side panels.** Tools opens them. There is no chord. Function List prefers the left; Variables List prefers the right. They share a side only by swapping. A side holds one panel. `App.editor_origin_x` is the editor's screen column (gutter, text, vertical bar). Mouse hits, the hardware cursor, and both scrollbars add it. `ui/side_panel.rs` is the only paint and hit-test geometry. `PANEL_COLS` is 24 and `MIN_EDITOR_COLS` is 24, so both panels fit on 80 columns and a narrower window drops the right panel first. Enter jumps to the name byte and returns focus to the editor. Esc leaves the panel open. `x` and `[x]` close it. Plain text and other unscanned languages set `No symbols for this file` and do not open. Scanners live in `src/symbols.rs` (Rust), `src/symbol_families.rs` (Python, Go, JavaScript, TypeScript), and `src/symbol_c_family.rs` (Java, C#, C, C++). They skip comments and strings. They do not list parameters, destructuring, or a C function whose return type is on the previous line. Methods read `Type::name` in Rust and `Type.name` elsewhere. The design spec's "no sidebar" line does not apply to these two panels. A project-folder sidebar is still not approved.
      - **Spellcheck is English, off by default, and scoped.** `Config.spellcheck` persists. Configure and Tools → Toggle Spellcheck flip it. F7 and Tools → Spelling open the suggestion popup (Enter or a click replaces; `a` adds the word; `i` ignores it until quit; Esc closes). Underlines use theme role `spell_error` (`Modifier::UNDERLINED` plus underline color) and keep the syntax foreground. Code languages check `comment` and `string` scopes only. JSONC checks comments. JSON and Diff are skipped. Plain, Markdown, and reStructuredText check prose and skip `markup.raw`, `meta.embedded`, and `source.` spans. Tokens shorter than 2 letters, tokens with a digit, and all-ASCII capitals are skipped. The Hunspell pair is `assets/dictionaries/en_US.aff` / `.dic` (SCOWL, MIT AND BSD; license text in `en.LICENSE`), loaded by `spellbook` 0.4.2. Personal words are `$XDG_CONFIG_HOME/rust-edit/dictionary.txt`. Tools → Dictionary lists them (spellcheck may be off; opening the list does not load Hunspell). `[ Add ]` and `[ Edit ]` (`a` / `e`, or Enter on a row) open a text box on top of the list. Save accepts one checker token (`don't`, `well-known`) and refuses an empty field, more than one word, a digit, a one-letter token, or all-ASCII capitals. Delete, Backspace, and `[x]` remove a word immediately and rewrite the file, keeping `#` comments and blank lines. A failed write leaves the list and the in-memory set unchanged. There is no Dictionary chord. Session ignores stay in memory and are not listed. Suggestions run only when the popup opens. The visible window is checked from the highlight checkpoint, not the whole file. The word being typed waits 750ms or until the caret leaves it; other marks stay immediate; F7 still reads the full cache.
-   - LSP is Phase 2+ only.
    - Printing/PDF export is future-only.
    - If the spec is unclear, ask before coding.
 
@@ -127,6 +127,7 @@ rust-edit/
 │   ├── buffer.rs              # Buffer struct + Ropey wrapper + editing ops + cursor/selection/scroll + line/block comment toggle
 │   ├── config.rs              # Config loading/saving (toml + XDG)
 │   ├── theme.rs               # Theme struct + color roles + built-in themes + serde
+│   ├── themes.rs								# Registry of built-in + user-installed custom themes.
 │   ├── highlight_cache.rs     # Parse-state checkpoints + overscan span window
 │   ├── format.rs              # Format Document: rustfmt/black/prettier/clang-format/gofmt/zig/perltidy/stylua/xmllint + builtin pass
 │   ├── file_watch.rs          # FileStamp mtime+len + DiskEvent classify for external reloads
@@ -222,14 +223,6 @@ rust-edit/
 - Theme changes must apply live (no restart) where possible.
 - All user-configurable values live in `config.toml` under clear sections (`[ui]`, `[editor]`, `[theme]`).
 - Provide sensible defaults; never require a config file on first run.
-
-### Markdown Preview (when implemented)
-
-Not current scope. See §1 and §8 before adding a preview or a formatting toolbar.
-
-- Source is always plain text + markdown syntax.
-- Preview renderer maps pulldown-cmark events to Ratatui `Span` / `Line` with theme colors (headings = bold + accent color, code blocks = bg color + inner syntax if possible, etc.).
-- Formatting toolbar inserts syntax into the source buffer (never mutates a "rich" representation).
 
 ---
 
@@ -364,7 +357,6 @@ Document any terminal-specific quirks you discover.
 
 ## 8. What NOT to Do Yet (needs approval)
 
-- Do not implement full LSP client, diagnostics from rust-analyzer, completions, etc.
 - Do not add session restore, split panes, a sidebar file tree, git integration, or a plugin system. Function List and Variables List are the exception to "no sidebar": they are the two symbol panels, not a project file tree. A project-folder sidebar is still not approved and must not overlap those panels.
 - Do not re-add a markdown rendered preview or Ctrl+B / Ctrl+I / Ctrl+backtick formatting inserters without a fresh design decision (both were removed — see §1). Ctrl+I is Tab.
 - Do not add "font size" or arbitrary rich-text WYSIWYG editing.
