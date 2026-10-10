@@ -436,6 +436,7 @@ impl App {
         let want = match kind {
             PanelKind::Functions => SymbolKind::Function,
             PanelKind::Variables => SymbolKind::Variable,
+            PanelKind::Project => return Vec::new(),
         };
         self.current_symbols()
             .into_iter()
@@ -449,7 +450,7 @@ impl App {
     ) -> &mut crate::ui::side_panel::PanelNav {
         use crate::ui::side_panel::PanelKind;
         match kind {
-            PanelKind::Functions => &mut self.function_nav,
+            PanelKind::Functions | PanelKind::Project => &mut self.function_nav,
             PanelKind::Variables => &mut self.variable_nav,
         }
     }
@@ -499,6 +500,7 @@ impl App {
             match kind {
                 PanelKind::Functions => "No functions",
                 PanelKind::Variables => "No variables",
+                PanelKind::Project => "",
             }
         }
     }

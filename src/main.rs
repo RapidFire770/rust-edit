@@ -3390,7 +3390,9 @@ fn render_side_panel(
     app.sync_open_list(kind, viewport);
     let rows = app.list_rows(kind);
     let nav = match kind {
-        crate::ui::side_panel::PanelKind::Functions => app.function_nav,
+        crate::ui::side_panel::PanelKind::Functions | crate::ui::side_panel::PanelKind::Project => {
+            app.function_nav
+        }
         crate::ui::side_panel::PanelKind::Variables => app.variable_nav,
     };
     let message = app.list_message(kind);
@@ -3433,8 +3435,8 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
     let sides = crate::ui::side_panel::split_editor_band(
         chunks[1],
-        app.left_panel.is_some(),
-        app.right_panel.is_some(),
+        app.left_panel,
+        app.right_panel,
         app.is_find_active(),
     );
 

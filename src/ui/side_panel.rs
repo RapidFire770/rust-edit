@@ -9,8 +9,12 @@ use ratatui::Frame;
 
 use crate::theme::Theme;
 
-/// Columns reserved for one side panel, including its separator and scrollbar.
+/// Columns reserved for one symbol list, including its separator and scrollbar.
 pub const PANEL_COLS: u16 = 24;
+
+/// Columns reserved for the project tree. Wider than a symbol list so nested
+/// names stay readable. A project panel plus one symbol list needs 84 columns.
+pub const PROJECT_PANEL_COLS: u16 = 36;
 
 /// Editor rect (gutter + text + vertical bar) that must remain when a panel is open.
 pub const MIN_EDITOR_COLS: u16 = 24;
@@ -39,6 +43,7 @@ impl Side {
 pub enum PanelKind {
     Functions,
     Variables,
+    Project,
 }
 
 impl PanelKind {
@@ -46,15 +51,23 @@ impl PanelKind {
         match self {
             PanelKind::Functions => "Functions",
             PanelKind::Variables => "Variables",
+            PanelKind::Project => "Project",
         }
     }
 
     /// Side used when the other list is not already there.
     pub fn preferred_side(self) -> Side {
         match self {
-            PanelKind::Functions => Side::Left,
+            PanelKind::Functions | PanelKind::Project => Side::Left,
             PanelKind::Variables => Side::Right,
         }
+    }
+}
+
+pub fn panel_cols(kind: PanelKind) -> u16 {
+    match kind {
+        PanelKind::Functions | PanelKind::Variables => PANEL_COLS,
+        PanelKind::Project => PROJECT_PANEL_COLS,
     }
 }
 
@@ -66,19 +79,31 @@ pub struct Fit {
     pub notice: Option<&'static str>,
 }
 
-/// Drop the right panel first, then any remaining panel, when the editor
-/// would be narrower than [`MIN_EDITOR_COLS`].
+fn panels_need(left: Option<PanelKind>, right: Option<PanelKind>) -> u16 {
+    left.map(panel_cols).unwrap_or(0) + right.map(panel_cols).unwrap_or(0) + MIN_EDITOR_COLS
+}
+
+/// Drop a panel when the editor would be narrower than [`MIN_EDITOR_COLS`].
+/// Two symbol lists drop the right one. A project panel is kept and the
+/// other side is dropped, because the project tree is the wider slot.
 pub fn fit_panels(left: Option<PanelKind>, right: Option<PanelKind>, width: u16) -> Fit {
-    let one = PANEL_COLS.saturating_add(MIN_EDITOR_COLS);
-    let two = PANEL_COLS.saturating_mul(2).saturating_add(MIN_EDITOR_COLS);
     let mut left = left;
     let mut right = right;
     let mut notice = None;
-    if left.is_some() && right.is_some() && width < two {
-        right = None;
-        notice = Some("Window is too narrow for both lists");
+    if left.is_some() && right.is_some() && width < panels_need(left, right) {
+        let project = left == Some(PanelKind::Project) || right == Some(PanelKind::Project);
+        if project && left == Some(PanelKind::Project) {
+            right = None;
+            notice = Some("Window is too narrow for both panels");
+        } else if project {
+            left = None;
+            notice = Some("Window is too narrow for both panels");
+        } else {
+            right = None;
+            notice = Some("Window is too narrow for both lists");
+        }
     }
-    if (left.is_some() || right.is_some()) && width < one {
+    if (left.is_some() || right.is_some()) && width < panels_need(left, right) {
         left = None;
         right = None;
         notice = Some("Window is too narrow");
@@ -103,8 +128,8 @@ pub struct SideSplit {
 /// The find bar stays full width. Panels occupy only the rows beside the editor.
 pub fn split_editor_band(
     area: Rect,
-    show_left: bool,
-    show_right: bool,
+    left: Option<PanelKind>,
+    right: Option<PanelKind>,
     find_open: bool,
 ) -> SideSplit {
     let (body, find) = if find_open {
@@ -115,12 +140,12 @@ pub fn split_editor_band(
     };
 
     let mut constraints = Vec::with_capacity(3);
-    if show_left {
-        constraints.push(Constraint::Length(PANEL_COLS));
+    if let Some(kind) = left {
+        constraints.push(Constraint::Length(panel_cols(kind)));
     }
     constraints.push(Constraint::Min(MIN_EDITOR_COLS));
-    if show_right {
-        constraints.push(Constraint::Length(PANEL_COLS));
+    if let Some(kind) = right {
+        constraints.push(Constraint::Length(panel_cols(kind)));
     }
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -128,7 +153,7 @@ pub fn split_editor_band(
         .split(body);
 
     let mut index = 0;
-    let left = if show_left {
+    let left = if left.is_some() {
         let rect = chunks[index];
         index += 1;
         Some(rect)
@@ -136,7 +161,7 @@ pub fn split_editor_band(
         None
     };
     let editor = chunks[index];
-    let right = if show_right {
+    let right = if right.is_some() {
         index += 1;
         Some(chunks[index])
     } else {
@@ -218,7 +243,7 @@ fn header_buttons(header: Rect) -> ((u16, u16), (u16, u16)) {
 
 /// Header text for `width` columns. The last six columns are `[>][x]` or `[<][x]`
 /// when they fit, matching [`PanelGeom::move_button`] and `close_button`.
-pub fn header_label(kind: PanelKind, side: Side, width: usize) -> String {
+pub fn header_label(title: &str, side: Side, width: usize) -> String {
     let move_txt = match side {
         Side::Left => MOVE_BUTTON,
         Side::Right => MOVE_BUTTON_LEFT,
@@ -228,12 +253,12 @@ pub fn header_label(kind: PanelKind, side: Side, width: usize) -> String {
         return buttons.chars().take(width).collect();
     }
     let title_room = width - buttons.len();
-    let mut title: String = kind.title().chars().take(title_room).collect();
-    while title.chars().count() < title_room {
-        title.push(' ');
+    let mut shown: String = title.chars().take(title_room).collect();
+    while shown.chars().count() < title_room {
+        shown.push(' ');
     }
-    title.push_str(&buttons);
-    title
+    shown.push_str(&buttons);
+    shown
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,7 +345,7 @@ pub fn row_line(label: &str, line_no: usize, width: usize) -> String {
     }
 }
 
-fn ellipsize(text: &str, width: usize) -> String {
+pub(crate) fn ellipsize(text: &str, width: usize) -> String {
     let count = text.chars().count();
     if count <= width {
         return text.to_string();
@@ -372,7 +397,7 @@ pub fn render(f: &mut Frame, area: Rect, view: PanelView<'_>, theme: &Theme) {
     f.render_widget(Paragraph::new("").style(body), area);
 
     if geom.header.width > 0 && geom.header.height > 0 {
-        let label = header_label(kind, side, geom.header.width as usize);
+        let label = header_label(kind.title(), side, geom.header.width as usize);
         f.render_widget(
             Paragraph::new(label).style(panel_header_style(theme, focused)),
             geom.header,
@@ -454,6 +479,7 @@ mod tests {
     fn lists_prefer_opposite_sides() {
         assert_eq!(PanelKind::Functions.preferred_side(), Side::Left);
         assert_eq!(PanelKind::Variables.preferred_side(), Side::Right);
+        assert_eq!(PanelKind::Project.preferred_side(), Side::Left);
     }
 
     #[test]
@@ -469,7 +495,12 @@ mod tests {
 
     #[test]
     fn both_panels_on_80_leave_32_for_the_editor() {
-        let split = split_editor_band(band(80, 10), true, true, false);
+        let split = split_editor_band(
+            band(80, 10),
+            Some(PanelKind::Functions),
+            Some(PanelKind::Variables),
+            false,
+        );
         assert_eq!(split.left, Some(Rect::new(0, 0, 24, 10)));
         assert_eq!(split.editor, Rect::new(24, 0, 32, 10));
         assert_eq!(split.right, Some(Rect::new(56, 0, 24, 10)));
@@ -478,7 +509,12 @@ mod tests {
 
     #[test]
     fn find_bar_stays_full_width_under_the_panels() {
-        let split = split_editor_band(band(80, 10), true, true, true);
+        let split = split_editor_band(
+            band(80, 10),
+            Some(PanelKind::Functions),
+            Some(PanelKind::Variables),
+            true,
+        );
         assert_eq!(split.find, Some(Rect::new(0, 9, 80, 1)));
         assert_eq!(split.left.unwrap().height, 9);
         assert_eq!(split.editor, Rect::new(24, 0, 32, 9));
@@ -487,12 +523,12 @@ mod tests {
 
     #[test]
     fn one_panel_takes_its_side_only() {
-        let left = split_editor_band(band(80, 10), true, false, false);
+        let left = split_editor_band(band(80, 10), Some(PanelKind::Functions), None, false);
         assert_eq!(left.left, Some(Rect::new(0, 0, 24, 10)));
         assert_eq!(left.editor, Rect::new(24, 0, 56, 10));
         assert_eq!(left.right, None);
 
-        let right = split_editor_band(band(80, 10), false, true, false);
+        let right = split_editor_band(band(80, 10), None, Some(PanelKind::Variables), false);
         assert_eq!(right.left, None);
         assert_eq!(right.editor, Rect::new(0, 0, 56, 10));
         assert_eq!(right.right, Some(Rect::new(56, 0, 24, 10)));
@@ -553,6 +589,49 @@ mod tests {
     }
 
     #[test]
+    fn project_panel_is_36_columns_and_blocks_a_second_panel_on_80() {
+        let split = split_editor_band(band(80, 10), Some(PanelKind::Project), None, false);
+        assert_eq!(split.left.unwrap().width, 36);
+        assert_eq!(split.editor.x, 36);
+        assert_eq!(split.right, None);
+
+        let wide = split_editor_band(
+            band(100, 10),
+            Some(PanelKind::Project),
+            Some(PanelKind::Variables),
+            false,
+        );
+        assert_eq!(wide.left.unwrap().width, 36);
+        assert_eq!(wide.right.unwrap().width, 24);
+        assert_eq!(wide.editor.width, 40);
+
+        assert_eq!(
+            fit_panels(Some(PanelKind::Project), Some(PanelKind::Variables), 80),
+            Fit {
+                left: Some(PanelKind::Project),
+                right: None,
+                notice: Some("Window is too narrow for both panels"),
+            }
+        );
+        assert_eq!(
+            fit_panels(Some(PanelKind::Functions), Some(PanelKind::Project), 80),
+            Fit {
+                left: None,
+                right: Some(PanelKind::Project),
+                notice: Some("Window is too narrow for both panels"),
+            }
+        );
+        assert_eq!(
+            fit_panels(Some(PanelKind::Project), None, 59),
+            Fit {
+                left: None,
+                right: None,
+                notice: Some("Window is too narrow"),
+            }
+        );
+    }
+
+    #[test]
     fn left_geom_puts_the_separator_on_the_inner_edge() {
         let outer = Rect::new(0, 1, PANEL_COLS, 8);
         let geom = panel_geom(outer, Side::Left);
@@ -563,7 +642,7 @@ mod tests {
         assert_eq!(geom.scrollbar, Rect::new(22, 2, 1, 7));
         assert_eq!(geom.move_button, (16, 19));
         assert_eq!(geom.close_button, (19, 22));
-        let label = header_label(PanelKind::Functions, Side::Left, 22);
+        let label = header_label("Functions", Side::Left, 22);
         assert_eq!(label.chars().count(), 22);
         assert!(label.ends_with("[>][x]"), "{label}");
         assert!(label.starts_with("Functions"), "{label}");
@@ -578,7 +657,7 @@ mod tests {
         assert_eq!(geom.scrollbar, Rect::new(79, 2, 1, 7));
         assert_eq!(geom.move_button, (73, 76));
         assert_eq!(geom.close_button, (76, 79));
-        let label = header_label(PanelKind::Variables, Side::Right, 22);
+        let label = header_label("Variables", Side::Right, 22);
         assert!(label.ends_with("[<][x]"), "{label}");
         assert_eq!(hit_test(geom, 56, 2), PanelHit::Miss);
         assert_eq!(hit_test(geom, 74, 1), PanelHit::Move);
