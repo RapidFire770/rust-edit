@@ -982,6 +982,29 @@ mod tests {
     }
 
     #[test]
+    fn kickass_spellcheck_reads_comments_not_mnemonics() {
+        let highlighter = SyntaxHighlighter::new();
+        let kick = "    lda #$02 // teh";
+        let regions = checkable_regions(&highlighter, Language::KickAsm, &[kick]);
+        let lda_at = kick.find("lda").unwrap();
+        assert!(
+            !regions[0]
+                .iter()
+                .any(|range| range.start <= lda_at && range.end >= lda_at + 3),
+            "{:?}",
+            regions[0]
+        );
+        let teh_at = kick.find("teh").unwrap();
+        assert!(
+            regions[0]
+                .iter()
+                .any(|range| range.start <= teh_at && range.end >= teh_at + 3),
+            "{:?}",
+            regions[0]
+        );
+    }
+
+    #[test]
     fn cursor_on_or_just_after_a_word_selects_it() {
         #[allow(clippy::single_range_in_vec_init)]
         let ranges = vec![2..5];

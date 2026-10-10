@@ -6,4 +6,40 @@ file_extensions:
 scope: source.kickass
 contexts:
   main:
-    - match: '$'
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.kickass
+      push:
+        - meta_scope: comment.block.kickass
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.kickass
+          pop: true
+    - match: '//'
+      scope: punctuation.definition.comment.kickass
+      push:
+        - meta_scope: comment.line.double-slash.kickass
+        - match: '$'
+          pop: true
+    - include: string
+    - match: '^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*:'
+      captures:
+        1: entity.name.label.kickass
+    - match: '\*\s*='
+      scope: keyword.operator.kickass
+    - match: '(?i)\.(importonce|byte|word|text|fill|const|var|label|macro|function|import|cpu|if|else|for|while|return)\b'
+      scope: keyword.control.directive.kickass
+    - match: '(#\$[0-9A-Fa-f]+|#%[01]+|#[0-9]+|\$[0-9A-Fa-f]+|%[01]+|(?<![A-Za-z0-9_])[0-9]+(?![A-Za-z0-9_]))'
+      scope: constant.numeric.kickass
+    - match: '(?i)(?<![A-Za-z0-9_])(?:ADC|AND|ASL|BCC|BCS|BEQ|BIT|BMI|BNE|BPL|BRK|BVC|BVS|CLC|CLD|CLI|CLV|CMP|CPX|CPY|DEC|DEX|DEY|EOR|INC|INX|INY|JMP|JSR|LDA|LDX|LDY|LSR|NOP|ORA|PHA|PHP|PLA|PLP|ROL|ROR|RTI|RTS|SBC|SEC|SED|SEI|STA|STX|STY|TAX|TAY|TSX|TXA|TXS|TYA)(?![A-Za-z0-9_])'
+      scope: keyword.control.mnemonic.kickass
+
+  string:
+    - match: '"'
+      scope: punctuation.definition.string.begin.kickass
+      push:
+        - meta_include_prototype: false
+        - meta_scope: string.quoted.double.kickass
+        - match: '"'
+          scope: punctuation.definition.string.end.kickass
+          pop: true
+        - match: '$'
+          pop: true

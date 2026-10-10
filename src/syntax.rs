@@ -564,4 +564,24 @@ mod tests {
             contents(&label[0])
         );
     }
+
+    #[test]
+    fn kickass_grammar_colors_mnemonics_numbers_and_comments() {
+        let sh = SyntaxHighlighter::new();
+        assert!(distinct_fg_count(&sh, "main:\n    lda #$02\n", Language::KickAsm) > 1);
+
+        let quoted = sh.highlight("lda \"// not\"\n", Language::KickAsm);
+        let slash = fg_containing(&quoted[0], "//");
+        let word = fg_containing(&quoted[0], "not");
+        let mnem = fg_containing(&quoted[0], "lda");
+        assert_eq!(slash, word, "// inside a string stays a string");
+        assert_ne!(slash, mnem);
+
+        let block = sh.highlight("/*\nstill\n*/\n", Language::KickAsm);
+        assert_eq!(
+            fg_containing(&block[0], "/*"),
+            fg_containing(&block[1], "still"),
+            "a block comment continues onto the next line"
+        );
+    }
 }
