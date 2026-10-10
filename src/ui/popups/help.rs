@@ -135,12 +135,12 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Dictionary", "Tools list of your words"),
                 ("a / e", "Text box: add or edit"),
                 ("Del / [x]", "Remove the selected word"),
-                ("Format Document", "Tools menu (tool or tab size)"),
-                ("Function List", "Tools: names in this file, Enter jumps"),
-                (
-                    "Variables List",
-                    "Tools: declarations, other side from functions",
-                ),
+                ("Format Document", "Tools: reformat the open file"),
+                ("", "Installed formatter, else cleanup"),
+                ("Function List", "Tools: function panel, prefers left"),
+                ("", "Enter or a click jumps to a name"),
+                ("Variables List", "Tools: variable panel, prefers right"),
+                ("", "Enter or a click jumps to a name"),
                 ("Left / Right", "Move the focused list to that side"),
                 ("x", "Close the focused list"),
                 ("Esc", "Leave the list open and return to the editor"),
@@ -586,7 +586,33 @@ mod tests {
         assert!(text.contains("Alt+W"), "{text}");
         assert!(text.contains("Word count"), "{text}");
         assert!(text.contains("Format Document"), "{text}");
-        assert!(text.contains("Tools menu"), "{text}");
+        assert!(text.contains("Tools: reformat the open file"), "{text}");
+        assert!(text.contains("Installed formatter, else cleanup"), "{text}");
+        assert!(
+            text.contains("Tools: function panel, prefers left"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Tools: variable panel, prefers right"),
+            "{text}"
+        );
+        assert!(text.contains("Enter or a click jumps to a name"), "{text}");
+        // 80-column help body is 69 columns once the scrollbar is reserved.
+        // Descriptions start at column 32, so each of these lines must be <= 37.
+        for (key, desc) in [
+            ("Format Document", "Tools: reformat the open file"),
+            ("", "Installed formatter, else cleanup"),
+            ("Function List", "Tools: function panel, prefers left"),
+            ("", "Enter or a click jumps to a name"),
+            ("Variables List", "Tools: variable panel, prefers right"),
+        ] {
+            let pad = 28usize.saturating_sub(key.chars().count());
+            let width = 2 + key.chars().count() + pad + 2 + desc.chars().count();
+            assert!(
+                width <= 69,
+                "{key:?} / {desc} is {width} columns; 80-col help body is 69"
+            );
+        }
         assert!(text.contains("Clear selection"), "{text}");
         assert!(text.contains("Shift+PgUp / PgDn"), "{text}");
         assert!(text.contains("Shift+wheel"), "{text}");
