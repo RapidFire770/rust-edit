@@ -229,6 +229,8 @@ pub fn file_menu_items() -> &'static [&'static str] {
     &[
         "New (Ctrl+N)",
         "Open (Ctrl+O)",
+        "Open Project Folder",
+        "Project Browser",
         "Save (Ctrl+S)",
         "Save As (Ctrl+Alt+S)",
         "Close Tab (Ctrl+W)",

@@ -713,6 +713,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                 KeyCode::Char('7') | KeyCode::Char('/') => {
                                     app.toggle_line_comment();
                                 }
+                                KeyCode::Char('h') => {
+                                    if app.project_panel_focused() {
+                                        app.toggle_project_hidden();
+                                    }
+                                }
                                 _ => {}
                             }
                             continue;
@@ -3304,14 +3309,16 @@ fn handle_menu_action(app: &mut App) {
     };
     let idx = app.menu_selected;
     match (menu, idx) {
-        ("File", 0) => app.new_tab(),               // New
-        ("File", 1) => app.show_file_dialog(false), // Open
-        ("File", 2) => {
+        ("File", 0) => app.new_tab(),
+        ("File", 1) => app.show_file_dialog(false),
+        ("File", 2) => app.show_project_picker(),
+        ("File", 3) => app.toggle_project_browser(),
+        ("File", 4) => {
             let _ = app.save_current();
         }
-        ("File", 3) => app.show_file_dialog(true), // Save As
-        ("File", 4) => app.close_current_tab(),
-        ("File", 5) => app.request_quit(), // Quit
+        ("File", 5) => app.show_file_dialog(true),
+        ("File", 6) => app.close_current_tab(),
+        ("File", 7) => app.request_quit(),
         ("Edit", 0) => app.undo(),
         ("Edit", 1) => app.redo(),
         ("Edit", 2) => app.cut(),
@@ -3386,6 +3393,11 @@ fn handle_panel_key(key: &crossterm::event::KeyEvent, app: &mut App) {
         KeyCode::Char('x') => app.close_side(side),
         KeyCode::Left => app.move_panel(side, Side::Left),
         KeyCode::Right => app.move_panel(side, Side::Right),
+        KeyCode::Char('r')
+            if app.kind_on(side) == Some(crate::ui::side_panel::PanelKind::Project) =>
+        {
+            app.reload_project_tree();
+        }
         _ => {}
     }
 }
@@ -3427,14 +3439,49 @@ fn render_side_panel(
     side: crate::ui::side_panel::Side,
     kind: crate::ui::side_panel::PanelKind,
 ) {
+    if kind == crate::ui::side_panel::PanelKind::Project {
+        let viewport = crate::ui::side_panel::panel_geom(rect, side).list.height as usize;
+        let rows = app.project_flat_rows();
+        let len = rows.len();
+        if len == 0 {
+            app.project_nav.selected = 0;
+        } else if app.project_nav.selected >= len {
+            app.project_nav.selected = len - 1;
+        }
+        crate::ui::side_panel::reveal(
+            app.project_nav.selected,
+            &mut app.project_nav.scroll,
+            viewport,
+        );
+        let title = app
+            .project_root
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/".to_string());
+        let nav = app.project_nav;
+        let message = app.list_message(kind);
+        let theme = app.current_theme().clone();
+        crate::ui::project_panel::render_project(
+            f,
+            rect,
+            side,
+            &title,
+            &rows,
+            nav,
+            message,
+            app.panel_focus == Some(side),
+            &theme,
+        );
+        return;
+    }
     let viewport = crate::ui::side_panel::panel_geom(rect, side).list.height as usize;
     app.sync_open_list(kind, viewport);
     let rows = app.list_rows(kind);
     let nav = match kind {
-        crate::ui::side_panel::PanelKind::Functions | crate::ui::side_panel::PanelKind::Project => {
-            app.function_nav
-        }
+        crate::ui::side_panel::PanelKind::Functions => app.function_nav,
         crate::ui::side_panel::PanelKind::Variables => app.variable_nav,
+        crate::ui::side_panel::PanelKind::Project => app.project_nav,
     };
     let message = app.list_message(kind);
     let theme = app.current_theme().clone();
@@ -4898,6 +4945,113 @@ mod popup_mouse_focus_tests {
     }
 
     #[test]
+    fn file_menu_lists_project_items_between_open_and_save() {
+        let items = crate::ui::header::file_menu_items();
+        assert_eq!(
+            items,
+            &[
+                "New (Ctrl+N)",
+                "Open (Ctrl+O)",
+                "Open Project Folder",
+                "Project Browser",
+                "Save (Ctrl+S)",
+                "Save As (Ctrl+Alt+S)",
+                "Close Tab (Ctrl+W)",
+                "Quit (Ctrl+Q)",
+            ]
+        );
+    }
+
+    #[test]
+    fn file_menu_project_browser_toggles_a_chosen_folder() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let root = std::env::temp_dir().join(format!(
+            "rust-edit-menu-proj-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = App::new(&[]);
+        app.header_width.set(80);
+        app.open_project_at(&root).unwrap();
+        app.close_side(Side::Left);
+        app.active_menu = Some("File".into());
+        app.menu_selected = 3;
+        handle_menu_action(&mut app);
+        assert_eq!(app.left_panel, Some(PanelKind::Project));
+        handle_panel_key(
+            &crossterm::event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &mut app,
+        );
+        app.active_menu = Some("File".into());
+        app.menu_selected = 3;
+        handle_menu_action(&mut app);
+        assert_eq!(app.panel_focus, Some(Side::Left));
+        app.active_menu = Some("File".into());
+        app.menu_selected = 3;
+        handle_menu_action(&mut app);
+        assert!(app.left_panel.is_none());
+        assert!(app.project_root.is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn file_menu_open_project_folder_opens_the_picker() {
+        let mut app = App::new(&[]);
+        app.active_menu = Some("File".into());
+        app.menu_selected = 2;
+        handle_menu_action(&mut app);
+        assert!(app.project_picker.is_some());
+        app.project_picker = None;
+        app.active_menu = Some("File".into());
+        app.menu_selected = 4;
+        handle_menu_action(&mut app);
+        assert!(app.show_file_dialog);
+        assert!(app.file_dialog_is_save);
+        assert!(app.project_picker.is_none());
+    }
+
+    #[test]
+    fn project_panel_x_hides_and_r_reloads() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let root = std::env::temp_dir().join(format!(
+            "rust-edit-menu-reload-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = App::new(&[]);
+        app.header_width.set(80);
+        app.open_project_at(&root).unwrap();
+        std::fs::write(root.join("new.rs"), "").unwrap();
+        handle_panel_key(
+            &crossterm::event::KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+            &mut app,
+        );
+        assert!(app
+            .project_flat_rows()
+            .iter()
+            .any(|row| row.name == "new.rs"));
+        handle_panel_key(
+            &crossterm::event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            &mut app,
+        );
+        assert!(app.left_panel.is_none());
+        assert_eq!(app.left_panel, None);
+        assert!(app.project_root.is_some());
+        assert_eq!(app.panel_focus, None);
+        let _ = app.kind_on(Side::Left);
+        assert_ne!(app.left_panel, Some(PanelKind::Project));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn edit_menu_undo_then_redo_restores_typed_text() {
         let mut app = App::new(&[]);
         app.active_buffer_mut().insert("ab");
@@ -5582,6 +5736,42 @@ mod editor_mouse_click_scroll_tests {
         assert_eq!(app.left_panel, None);
         assert_eq!(app.format_status.as_deref(), Some("Window is too narrow"));
         assert_eq!(app.editor_origin_x.get(), 0);
+    }
+
+    #[test]
+    fn project_panel_is_36_columns_and_drops_the_other_side_on_80() {
+        let backend = TestBackend::new(100, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&[]);
+        app.left_panel = Some(crate::ui::side_panel::PanelKind::Project);
+        app.right_panel = Some(crate::ui::side_panel::PanelKind::Variables);
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        assert_eq!(
+            app.left_panel,
+            Some(crate::ui::side_panel::PanelKind::Project)
+        );
+        assert_eq!(
+            app.right_panel,
+            Some(crate::ui::side_panel::PanelKind::Variables)
+        );
+        assert_eq!(app.editor_origin_x.get(), 36);
+
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&[]);
+        app.left_panel = Some(crate::ui::side_panel::PanelKind::Project);
+        app.right_panel = Some(crate::ui::side_panel::PanelKind::Variables);
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        assert_eq!(
+            app.left_panel,
+            Some(crate::ui::side_panel::PanelKind::Project)
+        );
+        assert_eq!(app.right_panel, None);
+        assert_eq!(app.editor_origin_x.get(), 36);
+        assert_eq!(
+            app.format_status.as_deref(),
+            Some("Window is too narrow for both panels")
+        );
     }
 
     #[test]
