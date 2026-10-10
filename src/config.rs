@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 /// Maximum number of entries kept in the recent-files list (MRU order).
 pub const RECENT_FILES_MAX: usize = 10;
 
+/// Maximum number of project folders kept in the recent-projects list.
+pub const RECENT_PROJECTS_MAX: usize = 10;
+
 /// Missing keys in `config.toml` fall back to [`Config::default`] per field,
 /// so an older or partial file keeps every setting it does contain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +29,11 @@ pub struct Config {
     /// strings (not `PathBuf`) so the TOML stays human-readable and survives
     /// serde round-trips cleanly across platforms.
     pub recent_files: Vec<String>,
+
+    /// Recently opened project folders, most-recent-first. Capped at
+    /// [`RECENT_PROJECTS_MAX`] by [`Config::record_recent_project`].
+    /// Directories only. A missing key in an older `config.toml` stays empty.
+    pub recent_projects: Vec<String>,
 
     /// When true, clean buffers reload from disk without prompting.
     /// Dirty buffers still prompt. Default false (ask per file).
@@ -44,6 +52,7 @@ impl Default for Config {
             word_wrap: false,
 
             recent_files: Vec::new(),
+            recent_projects: Vec::new(),
             auto_reload_all: false,
             spellcheck: false,
         }
@@ -219,6 +228,95 @@ impl Config {
             .retain(|s| recent_path_is_regular_file(Path::new(s)));
         before != self.recent_files.len()
     }
+
+    /// Record a project folder: move it to the front of `recent_projects`,
+    /// dedupe by canonical path, and cap the list. Persists immediately
+    /// except under `cfg(test)`. No-op unless `path` is an existing directory.
+    pub fn record_recent_project(&mut self, path: &Path) {
+        if self.record_recent_project_inmemory(path) {
+            #[cfg(not(test))]
+            self.save();
+        }
+    }
+
+    fn record_recent_project_inmemory(&mut self, path: &Path) -> bool {
+        if !path.is_dir() {
+            return false;
+        }
+        let canonical = match fs::canonicalize(path) {
+            Ok(p) => p.to_string_lossy().to_string(),
+            Err(_) => path.to_string_lossy().to_string(),
+        };
+        if self.recent_projects.first() == Some(&canonical) {
+            return false;
+        }
+        self.recent_projects.retain(|s| s != &canonical);
+        self.recent_projects.insert(0, canonical);
+        if self.recent_projects.len() > RECENT_PROJECTS_MAX {
+            self.recent_projects.truncate(RECENT_PROJECTS_MAX);
+        }
+        true
+    }
+
+    /// Remove `path` from `recent_projects` if present. Persists when the
+    /// list changed, except under `cfg(test)`.
+    pub fn remove_recent_project(&mut self, path: &Path) -> bool {
+        let changed = self.remove_recent_project_inmemory(path);
+        #[cfg(not(test))]
+        if changed {
+            self.save();
+        }
+        changed
+    }
+
+    fn remove_recent_project_inmemory(&mut self, path: &Path) -> bool {
+        let key = path.to_string_lossy().to_string();
+        let canonical = fs::canonicalize(path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| key.clone());
+        let before = self.recent_projects.len();
+        self.recent_projects
+            .retain(|s| s != &key && s != &canonical);
+        before != self.recent_projects.len()
+    }
+
+    /// Empty `recent_projects`. Persists when the list was non-empty,
+    /// except under `cfg(test)`.
+    pub fn clear_recent_projects(&mut self) -> bool {
+        let changed = self.clear_recent_projects_inmemory();
+        #[cfg(not(test))]
+        if changed {
+            self.save();
+        }
+        changed
+    }
+
+    fn clear_recent_projects_inmemory(&mut self) -> bool {
+        if self.recent_projects.is_empty() {
+            return false;
+        }
+        self.recent_projects.clear();
+        true
+    }
+
+    /// Drop project recents that are gone or are no longer directories.
+    /// A permission error keeps the entry. Persists when the list changed,
+    /// except under `cfg(test)`.
+    pub fn prune_missing_recent_projects(&mut self) -> bool {
+        let changed = self.prune_missing_recent_projects_inmemory();
+        #[cfg(not(test))]
+        if changed {
+            self.save();
+        }
+        changed
+    }
+
+    fn prune_missing_recent_projects_inmemory(&mut self) -> bool {
+        let before = self.recent_projects.len();
+        self.recent_projects
+            .retain(|s| recent_path_is_directory(Path::new(s)));
+        before != self.recent_projects.len()
+    }
 }
 
 /// True when `path` is a regular file, or when metadata fails for a reason
@@ -226,6 +324,16 @@ impl Config {
 fn recent_path_is_regular_file(path: &Path) -> bool {
     match fs::metadata(path) {
         Ok(m) => m.is_file(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
+}
+
+/// True when `path` is a directory (symlinks followed), or when metadata
+/// fails for a reason other than NotFound.
+fn recent_path_is_directory(path: &Path) -> bool {
+    match fs::metadata(path) {
+        Ok(m) => m.is_dir(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(_) => true,
     }
@@ -366,6 +474,61 @@ mod tests {
         assert!(cfg.clear_recent_files_inmemory());
         assert!(cfg.recent_files.is_empty());
         assert!(!cfg.clear_recent_files_inmemory());
+    }
+
+    #[test]
+    fn record_recent_project_moves_an_existing_directory_to_front() {
+        let dir = std::env::temp_dir().join(format!("rust-edit-proj-{}", std::process::id()));
+        let a = dir.join("a");
+        let b = dir.join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let mut cfg = Config::default();
+        assert!(cfg.record_recent_project_inmemory(&a));
+        assert!(cfg.record_recent_project_inmemory(&b));
+        assert!(cfg.recent_projects[0].contains("b"));
+        assert!(cfg.recent_projects[1].contains("a"));
+        assert!(!cfg.record_recent_project_inmemory(&b));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn record_recent_project_rejects_a_file_and_caps_at_ten() {
+        let dir = std::env::temp_dir().join(format!("rust-edit-proj-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.txt");
+        std::fs::write(&file, "x").unwrap();
+        let mut cfg = Config::default();
+        assert!(!cfg.record_recent_project_inmemory(&file));
+        for i in 0..RECENT_PROJECTS_MAX + 2 {
+            let sub = dir.join(format!("p{i}"));
+            std::fs::create_dir_all(&sub).unwrap();
+            cfg.record_recent_project_inmemory(&sub);
+        }
+        assert_eq!(cfg.recent_projects.len(), RECENT_PROJECTS_MAX);
+        assert!(cfg.recent_projects[0].contains(&format!("p{}", RECENT_PROJECTS_MAX + 1)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_recent_projects_drops_missing_and_files_only() {
+        let mut cfg = Config::default();
+        cfg.recent_projects
+            .push("/tmp/rust-edit-proj-missing".into());
+        cfg.recent_projects.push("/etc/hosts".into());
+        let kept = std::env::temp_dir();
+        cfg.recent_projects.push(kept.display().to_string());
+        assert!(cfg.prune_missing_recent_projects_inmemory());
+        assert_eq!(cfg.recent_projects.len(), 1);
+        assert!(cfg.recent_projects[0].contains("tmp"));
+    }
+
+    #[test]
+    fn old_config_without_recent_projects_still_loads() {
+        let cfg: Config =
+            toml::from_str("theme = \"light\"\nrecent_files = [\"/tmp/a.rs\"]\n").unwrap();
+        assert!(cfg.recent_projects.is_empty());
+        assert_eq!(cfg.recent_files, vec!["/tmp/a.rs".to_string()]);
     }
 
     #[test]
