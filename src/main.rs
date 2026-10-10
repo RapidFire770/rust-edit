@@ -712,6 +712,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             continue;
                         }
 
+                        // Popups already returned. Alt+Left / Alt+Right focus an open
+                        // list from the editor, the other list, Find, or a menu.
+                        if handle_panel_focus_chord(&key, app) {
+                            continue;
+                        }
+
                         if app.panel_focus.is_some()
                             && app.active_menu.is_none()
                             && !panel_key_reaches_global(&key)
@@ -3302,6 +3308,28 @@ fn panel_key_reaches_global(key: &crossterm::event::KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::ALT) || matches!(key.code, KeyCode::F(1) | KeyCode::F(7))
 }
 
+/// Alt+Left / Alt+Right focus the open list on that side.
+/// The chord is consumed either way, so a missing list does not move the caret.
+/// Shift or Control keeps the key for selection and for the Ctrl dispatcher.
+fn handle_panel_focus_chord(key: &crossterm::event::KeyEvent, app: &mut App) -> bool {
+    use crate::ui::side_panel::Side;
+    let alt_only = key.modifiers.contains(KeyModifiers::ALT)
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::SHIFT);
+    if !alt_only {
+        return false;
+    }
+    let side = match key.code {
+        KeyCode::Left => Side::Left,
+        KeyCode::Right => Side::Right,
+        _ => return false,
+    };
+    if app.focus_side(side) {
+        app.close_menu();
+    }
+    true
+}
+
 /// Keys while a symbol list is focused. Other typing is swallowed.
 fn handle_panel_key(key: &crossterm::event::KeyEvent, app: &mut App) {
     use crate::ui::side_panel::Side;
@@ -3375,6 +3403,7 @@ fn render_side_panel(
             rows: &rows,
             nav,
             message,
+            focused: app.panel_focus == Some(side),
         },
         &theme,
     );
@@ -4644,6 +4673,173 @@ mod popup_mouse_focus_tests {
             app.format_status.as_deref(),
             Some("Window is too narrow for both lists")
         );
+    }
+
+    fn alt_arrow(code: KeyCode) -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::new(code, KeyModifiers::ALT)
+    }
+
+    #[test]
+    fn alt_left_refocuses_the_open_list_after_esc() {
+        use crate::symbols::{Symbol, SymbolKind};
+        use crate::ui::side_panel::{PanelKind, Side};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(vec![
+            Symbol {
+                name: "main".into(),
+                kind: SymbolKind::Function,
+                line: 0,
+                byte: 3,
+            },
+            Symbol {
+                name: "helper".into(),
+                kind: SymbolKind::Function,
+                line: 2,
+                byte: 17,
+            },
+        ]);
+        *app.active_buffer_mut() =
+            crate::buffer::Buffer::from_str("fn main() {}\n\nfn helper() {}\n", None);
+        app.active_buffer_mut().cursor = 17;
+        app.toggle_symbol_list(PanelKind::Functions);
+        assert_eq!(app.function_nav.selected, 1);
+        let esc = crossterm::event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_panel_key(&esc, &mut app);
+        assert_eq!(app.panel_focus, None);
+        app.function_nav.selected = 0;
+
+        assert!(handle_panel_focus_chord(
+            &alt_arrow(KeyCode::Left),
+            &mut app
+        ));
+        assert_eq!(app.panel_focus, Some(Side::Left));
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+        assert_eq!(app.function_nav.selected, 1);
+        assert_eq!(app.active_buffer().cursor, 17);
+
+        app.function_nav.selected = 0;
+        assert!(handle_panel_focus_chord(
+            &alt_arrow(KeyCode::Left),
+            &mut app
+        ));
+        assert_eq!(app.panel_focus, Some(Side::Left));
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+        assert_eq!(app.function_nav.selected, 0);
+    }
+
+    #[test]
+    fn alt_right_does_nothing_when_that_side_is_empty() {
+        use crate::ui::side_panel::PanelKind;
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(sample_symbols());
+        app.active_buffer_mut().insert("abc");
+        let cursor = app.active_buffer().cursor;
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.panel_focus = None;
+
+        assert!(handle_panel_focus_chord(
+            &alt_arrow(KeyCode::Right),
+            &mut app
+        ));
+        assert_eq!(app.panel_focus, None);
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+        assert!(app.right_panel.is_none());
+        assert_eq!(app.active_buffer().cursor, cursor);
+    }
+
+    #[test]
+    fn alt_arrows_move_focus_between_open_lists() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(sample_symbols());
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.toggle_symbol_list(PanelKind::Variables);
+        assert_eq!(app.panel_focus, Some(Side::Right));
+
+        assert!(handle_panel_focus_chord(
+            &alt_arrow(KeyCode::Left),
+            &mut app
+        ));
+        assert_eq!(app.panel_focus, Some(Side::Left));
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+        assert_eq!(app.right_panel, Some(PanelKind::Variables));
+
+        assert!(handle_panel_focus_chord(
+            &alt_arrow(KeyCode::Right),
+            &mut app
+        ));
+        assert_eq!(app.panel_focus, Some(Side::Right));
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+        assert_eq!(app.right_panel, Some(PanelKind::Variables));
+    }
+
+    #[test]
+    fn alt_left_with_no_list_leaves_focus_unset() {
+        let mut app = App::new(&[]);
+        app.active_buffer_mut().insert("abc");
+        let cursor = app.active_buffer().cursor;
+        app.active_menu = Some("File".into());
+        app.menu_selected = 2;
+
+        assert!(handle_panel_focus_chord(
+            &alt_arrow(KeyCode::Left),
+            &mut app
+        ));
+        assert!(app.panel_focus.is_none());
+        assert!(app.left_panel.is_none());
+        assert_eq!(app.active_buffer().cursor, cursor);
+        assert_eq!(app.active_menu.as_deref(), Some("File"));
+        assert_eq!(app.menu_selected, 2);
+
+        let shifted =
+            crossterm::event::KeyEvent::new(KeyCode::Left, KeyModifiers::ALT | KeyModifiers::SHIFT);
+        assert!(!handle_panel_focus_chord(&shifted, &mut app));
+        let controlled = crossterm::event::KeyEvent::new(
+            KeyCode::Left,
+            KeyModifiers::ALT | KeyModifiers::CONTROL,
+        );
+        assert!(!handle_panel_focus_chord(&controlled, &mut app));
+    }
+
+    #[test]
+    fn alt_left_closes_the_menu_when_it_focuses_a_list() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(sample_symbols());
+        app.toggle_symbol_list(PanelKind::Functions);
+        let esc = crossterm::event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_panel_key(&esc, &mut app);
+        app.active_menu = Some("Tools".into());
+        app.menu_selected = 4;
+
+        assert!(handle_panel_focus_chord(
+            &alt_arrow(KeyCode::Left),
+            &mut app
+        ));
+        assert_eq!(app.panel_focus, Some(Side::Left));
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+        assert!(app.active_menu.is_none());
+        assert_eq!(app.menu_selected, 0);
+    }
+
+    #[test]
+    fn alt_left_focuses_the_list_while_find_stays_open() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(sample_symbols());
+        app.toggle_symbol_list(PanelKind::Functions);
+        let esc = crossterm::event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_panel_key(&esc, &mut app);
+        app.toggle_find();
+        assert!(app.is_find_active());
+
+        assert!(handle_panel_focus_chord(
+            &alt_arrow(KeyCode::Left),
+            &mut app
+        ));
+        assert_eq!(app.panel_focus, Some(Side::Left));
+        assert_eq!(app.left_panel, Some(PanelKind::Functions));
+        assert!(app.is_find_active());
     }
 
     /// System clipboard is shared. Edit-menu tests that copy must not run at once.

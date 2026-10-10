@@ -144,6 +144,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Left / Right", "Move the focused list to that side"),
                 ("x", "Close the focused list"),
                 ("Esc", "Leave the list open and return to the editor"),
+                ("Alt+Left / Alt+Right", "Focus the open list on that side"),
                 ("1 / 2 / 3", "Help tab: Shortcuts / Languages / About"),
             ],
         ),
@@ -586,25 +587,22 @@ mod tests {
         assert!(text.contains("Alt+W"), "{text}");
         assert!(text.contains("Word count"), "{text}");
         assert!(text.contains("Format Document"), "{text}");
-        assert!(text.contains("Tools: reformat the open file"), "{text}");
+        assert!(text.contains("Reformat the open file"), "{text}");
         assert!(text.contains("Installed formatter, else cleanup"), "{text}");
-        assert!(
-            text.contains("Tools: function panel, prefers left"),
-            "{text}"
-        );
-        assert!(
-            text.contains("Tools: variable panel, prefers right"),
-            "{text}"
-        );
+        assert!(text.contains("Function panel, prefers left"), "{text}");
+        assert!(text.contains("Variable panel, prefers right"), "{text}");
         assert!(text.contains("Enter or a click jumps to a name"), "{text}");
+        assert!(text.contains("Alt+Left / Alt+Right"), "{text}");
+        assert!(text.contains("Focus the open list on that side"), "{text}");
         // 80-column help body is 69 columns once the scrollbar is reserved.
         // Descriptions start at column 32, so each of these lines must be <= 37.
         for (key, desc) in [
-            ("Format Document", "Tools: reformat the open file"),
+            ("Format Document", "Reformat the open file"),
             ("", "Installed formatter, else cleanup"),
-            ("Function List", "Tools: function panel, prefers left"),
+            ("Function List", "Function panel, prefers left"),
             ("", "Enter or a click jumps to a name"),
-            ("Variables List", "Tools: variable panel, prefers right"),
+            ("Variables List", "Variable panel, prefers right"),
+            ("Alt+Left / Alt+Right", "Focus the open list on that side"),
         ] {
             let pad = 28usize.saturating_sub(key.chars().count());
             let width = 2 + key.chars().count() + pad + 2 + desc.chars().count();

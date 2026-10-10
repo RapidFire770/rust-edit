@@ -2,7 +2,7 @@
 // Geometry is the paint and hit-test source. Scanning lives in `symbols`.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -340,6 +340,19 @@ pub struct PanelView<'a> {
     pub rows: &'a [ListRow],
     pub nav: PanelNav,
     pub message: &'a str,
+    pub focused: bool,
+}
+
+/// Accent background while the list has the keyboard, matching the active tab.
+fn panel_header_style(theme: &Theme, focused: bool) -> Style {
+    if focused {
+        Style::default()
+            .bg(Color::from(&theme.accent))
+            .fg(Color::from(&theme.header_fg))
+            .add_modifier(Modifier::BOLD)
+    } else {
+        theme.header_style()
+    }
 }
 
 pub fn render(f: &mut Frame, area: Rect, view: PanelView<'_>, theme: &Theme) {
@@ -349,6 +362,7 @@ pub fn render(f: &mut Frame, area: Rect, view: PanelView<'_>, theme: &Theme) {
         rows,
         nav,
         message,
+        focused,
     } = view;
     if area.width == 0 || area.height == 0 {
         return;
@@ -360,7 +374,7 @@ pub fn render(f: &mut Frame, area: Rect, view: PanelView<'_>, theme: &Theme) {
     if geom.header.width > 0 && geom.header.height > 0 {
         let label = header_label(kind, side, geom.header.width as usize);
         f.render_widget(
-            Paragraph::new(label).style(theme.header_style()),
+            Paragraph::new(label).style(panel_header_style(theme, focused)),
             geom.header,
         );
     }
@@ -440,6 +454,17 @@ mod tests {
     fn lists_prefer_opposite_sides() {
         assert_eq!(PanelKind::Functions.preferred_side(), Side::Left);
         assert_eq!(PanelKind::Variables.preferred_side(), Side::Right);
+    }
+
+    #[test]
+    fn focused_header_uses_the_accent_background() {
+        let theme = Theme::dark_red();
+        let focused = panel_header_style(&theme, true);
+        let idle = panel_header_style(&theme, false);
+        assert_eq!(focused.bg, Some(Color::from(&theme.accent)));
+        assert_eq!(focused.fg, Some(Color::from(&theme.header_fg)));
+        assert!(focused.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(idle, theme.header_style());
     }
 
     #[test]

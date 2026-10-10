@@ -163,6 +163,7 @@ pub struct App {
     /// Symbol list docked on the right. The two lists never share a side.
     pub right_panel: Option<crate::ui::side_panel::PanelKind>,
     /// Which open list owns Up/Down, Enter, and Esc. `None` means the editor.
+    /// Alt+Left and Alt+Right set this when that side already has a list.
     pub panel_focus: Option<crate::ui::side_panel::Side>,
     pub function_nav: crate::ui::side_panel::PanelNav,
     pub variable_nav: crate::ui::side_panel::PanelNav,
@@ -502,6 +503,21 @@ impl App {
         }
     }
 
+    /// Give the keyboard to the open list on `side`.
+    /// The highlight snaps to the symbol at or above the caret.
+    /// Returns false when that side has no list.
+    pub fn focus_side(&mut self, side: crate::ui::side_panel::Side) -> bool {
+        let Some(kind) = self.kind_on(side) else {
+            return false;
+        };
+        let already = self.panel_focus == Some(side);
+        self.panel_focus = Some(side);
+        if !already {
+            self.snap_list_to_caret(kind);
+        }
+        true
+    }
+
     /// Open, focus, or close `kind`. A closed list prefers its own side and
     /// takes the other side when that one is free. Both lists never share a side.
     pub fn toggle_symbol_list(&mut self, kind: crate::ui::side_panel::PanelKind) {
@@ -513,8 +529,7 @@ impl App {
             if self.panel_focus == Some(side) {
                 self.close_side(side);
             } else {
-                self.panel_focus = Some(side);
-                self.snap_list_to_caret(kind);
+                self.focus_side(side);
             }
             return;
         }
@@ -547,8 +562,7 @@ impl App {
         }
         self.left_panel = fitted.left;
         self.right_panel = fitted.right;
-        self.panel_focus = Some(side);
-        self.snap_list_to_caret(kind);
+        self.focus_side(side);
     }
 
     pub fn close_side(&mut self, side: crate::ui::side_panel::Side) {
