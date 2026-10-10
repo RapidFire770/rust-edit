@@ -5,6 +5,7 @@ pub mod dictionary;
 pub mod file_browser;
 pub mod file_dialog;
 pub mod help;
+pub mod project_folder;
 pub mod reload;
 pub mod spelling;
 pub mod themes;

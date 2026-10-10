@@ -175,9 +175,8 @@ pub struct App {
     pub project_tree: Option<crate::project_tree::ProjectTree>,
     pub project_nav: crate::ui::side_panel::PanelNav,
     pub project_show_hidden: bool,
-    /// `Some` while the project-folder picker is open. Task 7 replaces `()`
-    /// with the picker state. A restart leaves this `None`.
-    pub project_picker: Option<()>,
+    /// Project-folder picker. `None` when it is closed. Not restored on startup.
+    pub project_picker: Option<crate::ui::popups::project_folder::PickerState>,
     pub symbol_cache: Option<crate::symbols::SymbolCache>,
     /// Tests inject definitions so the lists can jump before a scanner exists.
     #[cfg(test)]
@@ -218,6 +217,7 @@ pub struct App {
 pub enum PopupFocus {
     Confirm,
     Reload,
+    ProjectFolder,
     FileBrowser,
     FileDialog,
     Themes,
@@ -235,6 +235,24 @@ pub enum PopupFocus {
 pub struct OpenedFile {
     pub read_only: bool,
     pub loaded: bool,
+}
+
+fn recent_project_entries(paths: &[String]) -> Vec<crate::ui::popups::file_browser::BrowserEntry> {
+    paths
+        .iter()
+        .map(|stored| {
+            let path = PathBuf::from(stored);
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| stored.clone());
+            crate::ui::popups::file_browser::BrowserEntry {
+                name,
+                is_dir: true,
+                path,
+            }
+        })
+        .collect()
 }
 
 impl App {
@@ -630,7 +648,278 @@ impl App {
         if self.popup_focus().is_some() {
             return;
         }
-        self.project_picker = Some(());
+        self.config.prune_missing_recent_projects();
+        let cwd = self.project_picker_start();
+        let mut state = crate::ui::popups::project_folder::PickerState::recent(cwd);
+        state.entries = recent_project_entries(&self.config.recent_projects);
+        self.project_picker = Some(state);
+    }
+
+    fn project_picker_start(&self) -> PathBuf {
+        if let Some(root) = &self.project_root {
+            if root.is_dir() {
+                return root.clone();
+            }
+        }
+        if let Some(path) = self.active_buffer().path.as_ref().and_then(|p| p.parent()) {
+            if path.is_dir() {
+                return path.to_path_buf();
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = PathBuf::from(home);
+            if home.is_dir() {
+                return home;
+            }
+        }
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    }
+
+    fn refill_project_picker(&mut self) {
+        use crate::ui::popups::file_browser::read_directory;
+        use crate::ui::popups::project_folder::PickerMode;
+        let Some(state) = self.project_picker.as_ref() else {
+            return;
+        };
+        let mode = state.mode;
+        let cwd = state.cwd.clone();
+        let show_hidden = state.show_hidden;
+        let (entries, error) = match mode {
+            PickerMode::Recent => (recent_project_entries(&self.config.recent_projects), None),
+            PickerMode::Browse => match read_directory(&cwd, show_hidden) {
+                Ok(entries) => (entries, None),
+                Err(err) => (Vec::new(), Some(err.to_string())),
+            },
+        };
+        if let Some(state) = self.project_picker.as_mut() {
+            state.entries = entries;
+            state.error = error;
+            if state.selected >= state.entries.len() {
+                state.selected = 0;
+            }
+        }
+    }
+
+    pub fn project_picker_cancel(&mut self) {
+        self.project_picker = None;
+    }
+
+    pub fn project_picker_key(&mut self, code: crossterm::event::KeyCode) {
+        use crate::ui::popups::project_folder::{footer_labels, PickerMode, FOCUS_LIST};
+        use crossterm::event::KeyCode;
+        let Some(state) = self.project_picker.as_ref() else {
+            return;
+        };
+        let mode = state.mode;
+        let on_list = state.button == FOCUS_LIST;
+        match code {
+            KeyCode::Esc => self.project_picker_cancel(),
+            KeyCode::Up | KeyCode::Char('k') => self.project_picker_move(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.project_picker_move(1),
+            KeyCode::Tab => {
+                let labels = footer_labels(mode);
+                if let Some(state) = self.project_picker.as_mut() {
+                    if state.button == FOCUS_LIST {
+                        state.button = 0;
+                    } else if state.button + 1 >= labels.len() {
+                        state.button = FOCUS_LIST;
+                    } else {
+                        state.button += 1;
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                if on_list {
+                    self.project_picker_activate_row();
+                } else if let Some(index) = self.project_picker.as_ref().map(|s| s.button) {
+                    self.project_picker_activate_button(index);
+                }
+            }
+            KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('-')
+                if mode == PickerMode::Browse =>
+            {
+                self.project_picker_up();
+            }
+            KeyCode::Delete | KeyCode::Backspace if mode == PickerMode::Recent => {
+                self.project_picker_remove_selected();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn project_picker_move_public(&mut self, delta: isize) {
+        self.project_picker_move(delta);
+    }
+
+    fn project_picker_move(&mut self, delta: isize) {
+        let Some(state) = self.project_picker.as_mut() else {
+            return;
+        };
+        if state.entries.is_empty() {
+            return;
+        }
+        let next = (state.selected as isize + delta).clamp(0, state.entries.len() as isize - 1);
+        state.selected = next as usize;
+    }
+
+    fn project_picker_activate_row(&mut self) {
+        use crate::ui::popups::project_folder::PickerMode;
+        let Some(state) = self.project_picker.as_ref() else {
+            return;
+        };
+        let mode = state.mode;
+        let entry = state.entries.get(state.selected).cloned();
+        let Some(entry) = entry else {
+            return;
+        };
+        match mode {
+            PickerMode::Recent => self.confirm_project_dir(&entry.path),
+            PickerMode::Browse if entry.is_dir => {
+                if let Some(state) = self.project_picker.as_mut() {
+                    state.cwd = entry.path;
+                    state.selected = 0;
+                }
+                self.refill_project_picker();
+            }
+            PickerMode::Browse => {}
+        }
+    }
+
+    fn project_picker_activate_button(&mut self, index: usize) {
+        use crate::ui::popups::project_folder::{PickerMode, FOCUS_LIST};
+        let Some(mode) = self.project_picker.as_ref().map(|s| s.mode) else {
+            return;
+        };
+        match (mode, index) {
+            (PickerMode::Recent, 0) | (PickerMode::Browse, 3) => {
+                let next = if mode == PickerMode::Recent {
+                    PickerMode::Browse
+                } else {
+                    PickerMode::Recent
+                };
+                if let Some(state) = self.project_picker.as_mut() {
+                    state.mode = next;
+                    state.selected = 0;
+                    state.button = FOCUS_LIST;
+                }
+                self.refill_project_picker();
+            }
+            (PickerMode::Recent, 1) => {
+                self.config.clear_recent_projects();
+                self.refill_project_picker();
+            }
+            (PickerMode::Recent, 2) | (PickerMode::Browse, 4) => self.project_picker_cancel(),
+            (PickerMode::Browse, 0) => self.project_picker_up(),
+            (PickerMode::Browse, 1) => {
+                let cwd = self
+                    .project_picker
+                    .as_ref()
+                    .map(|s| s.cwd.clone())
+                    .unwrap_or_default();
+                self.confirm_project_dir(&cwd);
+            }
+            (PickerMode::Browse, 2) => self.project_picker_toggle_hidden(),
+            _ => {}
+        }
+    }
+
+    pub fn project_picker_toggle_hidden(&mut self) {
+        use crate::ui::popups::project_folder::PickerMode;
+        let Some(state) = self.project_picker.as_mut() else {
+            return;
+        };
+        if state.mode != PickerMode::Browse {
+            return;
+        }
+        state.show_hidden = !state.show_hidden;
+        self.refill_project_picker();
+    }
+
+    fn project_picker_up(&mut self) {
+        let parent = self
+            .project_picker
+            .as_ref()
+            .and_then(|s| s.cwd.parent().map(|p| p.to_path_buf()));
+        let Some(parent) = parent else {
+            return;
+        };
+        if let Some(state) = self.project_picker.as_mut() {
+            state.cwd = parent;
+            state.selected = 0;
+        }
+        self.refill_project_picker();
+    }
+
+    fn project_picker_remove_selected(&mut self) {
+        use crate::ui::popups::project_folder::PickerMode;
+        let path = self.project_picker.as_ref().and_then(|state| {
+            if state.mode != PickerMode::Recent {
+                return None;
+            }
+            state.entries.get(state.selected).map(|e| e.path.clone())
+        });
+        let Some(path) = path else {
+            return;
+        };
+        self.config.remove_recent_project(&path);
+        self.refill_project_picker();
+    }
+
+    fn confirm_project_dir(&mut self, path: &Path) {
+        if let Err(err) = self.open_project_at(path) {
+            if let Some(state) = self.project_picker.as_mut() {
+                state.error = Some(err);
+            }
+        }
+    }
+
+    pub fn project_picker_click(&mut self, x: usize, y: usize, area: ratatui::layout::Rect) {
+        use crate::ui::popups::project_folder::{
+            footer_button_at, list_row_at, outside_popup, recent_x_is_clear, PickerMode, FOCUS_LIST,
+        };
+        if self.project_picker.is_none() {
+            return;
+        }
+        let x = x as u16;
+        let y = y as u16;
+        if outside_popup(x, y, area) {
+            self.project_picker_cancel();
+            return;
+        }
+        let Some(state) = self.project_picker.as_ref() else {
+            return;
+        };
+        let mode = state.mode;
+        let selected = state.selected;
+        let count = state.entries.len();
+        if let Some(index) = footer_button_at(x, y, area, mode) {
+            if let Some(state) = self.project_picker.as_mut() {
+                state.button = index;
+            }
+            self.project_picker_activate_button(index);
+            return;
+        }
+        if mode == PickerMode::Recent {
+            let popup = crate::ui::popups::file_browser::file_browser_rect(area);
+            let (start, end) = crate::ui::popups::file_browser::list_area(popup, false);
+            let body_h = end.saturating_sub(start).max(1);
+            let overflowing = count > body_h;
+            if recent_x_is_clear(x, area, overflowing) {
+                if list_row_at(y, area, selected).is_some() {
+                    self.project_picker_remove_selected();
+                }
+                return;
+            }
+        }
+        if let Some(index) = list_row_at(y, area, selected) {
+            if index < count {
+                if let Some(state) = self.project_picker.as_mut() {
+                    state.selected = index;
+                    state.button = FOCUS_LIST;
+                }
+                self.project_picker_activate_row();
+            }
+        }
     }
 
     /// Load `path` as the session project and show the tree. A failure leaves
@@ -2506,6 +2795,8 @@ impl App {
             Some(PopupFocus::Confirm)
         } else if self.show_reload {
             Some(PopupFocus::Reload)
+        } else if self.project_picker.is_some() {
+            Some(PopupFocus::ProjectFolder)
         } else if self.show_file_browser {
             Some(PopupFocus::FileBrowser)
         } else if self.show_file_dialog {
@@ -3555,7 +3846,185 @@ mod tests {
         let mut app = App::new(&[]);
         app.toggle_project_browser();
         assert!(app.project_picker.is_some());
+        assert_eq!(app.popup_focus(), Some(PopupFocus::ProjectFolder));
         assert!(app.left_panel.is_none());
+    }
+
+    #[test]
+    fn project_picker_prunes_missing_folders_and_blocks_on_help() {
+        let kept = project_dir("projkeep");
+        let mut app = App::new(&[]);
+        app.config
+            .recent_projects
+            .push("/tmp/rust-edit-proj-gone".into());
+        app.config.record_recent_project(&kept);
+        app.show_project_picker();
+        let names: Vec<_> = app
+            .project_picker
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert!(names.iter().any(|n| n.contains("projkeep")));
+        assert!(!names.iter().any(|n| n.contains("gone")));
+        app.project_picker_cancel();
+        app.open_help();
+        app.show_project_picker();
+        assert!(app.project_picker.is_none());
+        assert_eq!(app.popup_focus(), Some(PopupFocus::Help));
+        let _ = fs::remove_dir_all(&kept);
+    }
+
+    #[test]
+    fn project_picker_enter_opens_and_delete_removes_one_recent() {
+        use crossterm::event::KeyCode;
+        let first = project_dir("projfirst");
+        let second = project_dir("projsecond");
+        fs::write(first.join("README.md"), "a\n").unwrap();
+        let mut app = App::new(&[]);
+        app.header_width.set(80);
+        app.config.record_recent_project(&first);
+        app.config.record_recent_project(&second);
+        app.show_project_picker();
+        app.project_picker_key(KeyCode::Delete);
+        assert!(app.project_picker.is_some());
+        assert_eq!(app.project_picker.as_ref().unwrap().entries.len(), 1);
+        app.project_picker_key(KeyCode::Enter);
+        assert!(app.project_picker.is_none());
+        assert_eq!(
+            app.left_panel,
+            Some(crate::ui::side_panel::PanelKind::Project)
+        );
+        assert!(app
+            .project_root
+            .as_ref()
+            .unwrap()
+            .ends_with(app.project_root.as_ref().unwrap().file_name().unwrap()));
+        let _ = fs::remove_dir_all(&first);
+        let _ = fs::remove_dir_all(&second);
+    }
+
+    #[test]
+    fn project_picker_escape_keeps_the_current_root() {
+        use crossterm::event::KeyCode;
+        let root = project_dir("projstay");
+        let mut app = App::new(&[]);
+        app.header_width.set(80);
+        app.open_project_at(&root).unwrap();
+        app.show_project_picker();
+        app.project_picker_key(KeyCode::Esc);
+        assert!(app.project_picker.is_none());
+        assert!(app
+            .project_root
+            .as_ref()
+            .unwrap()
+            .ends_with(std::fs::canonicalize(&root).unwrap().file_name().unwrap()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn project_picker_browse_steps_into_dirs_and_use_folder_confirms() {
+        use crate::ui::popups::project_folder::{PickerMode, FOCUS_LIST};
+        use crossterm::event::KeyCode;
+        let root = project_dir("projbrowse");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join(".secret"), "").unwrap();
+        let mut app = App::new(&[]);
+        app.header_width.set(100);
+        app.open_project_at(&root).unwrap();
+        app.close_side(crate::ui::side_panel::Side::Left);
+        app.show_project_picker();
+        assert_eq!(
+            app.project_picker.as_ref().unwrap().cwd,
+            fs::canonicalize(&root).unwrap()
+        );
+        app.project_picker_key(KeyCode::Tab);
+        app.project_picker_key(KeyCode::Enter);
+        {
+            let state = app.project_picker.as_ref().unwrap();
+            assert_eq!(state.mode, PickerMode::Browse);
+            assert!(state.entries.iter().any(|e| e.name == "src"));
+            assert!(!state.entries.iter().any(|e| e.name == ".secret"));
+        }
+        app.project_picker_toggle_hidden();
+        assert!(app
+            .project_picker
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|e| e.name == ".secret"));
+        app.project_picker_toggle_hidden();
+        let src = app
+            .project_picker
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .position(|e| e.name == "src")
+            .unwrap();
+        app.project_picker.as_mut().unwrap().selected = src;
+        app.project_picker.as_mut().unwrap().button = FOCUS_LIST;
+        app.project_picker_key(KeyCode::Enter);
+        assert!(app.project_picker.as_ref().unwrap().cwd.ends_with("src"));
+        let file = app
+            .project_picker
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .position(|e| e.name == "main.rs")
+            .unwrap();
+        app.project_picker.as_mut().unwrap().selected = file;
+        app.project_picker_key(KeyCode::Enter);
+        assert!(app.project_picker.as_ref().unwrap().cwd.ends_with("src"));
+        app.project_picker_key(KeyCode::Char('h'));
+        assert_eq!(
+            app.project_picker.as_ref().unwrap().cwd,
+            fs::canonicalize(&root).unwrap()
+        );
+        app.project_picker_key(KeyCode::Tab);
+        app.project_picker_key(KeyCode::Tab);
+        app.project_picker_key(KeyCode::Enter);
+        assert!(app.project_picker.is_none());
+        assert_eq!(
+            app.left_panel,
+            Some(crate::ui::side_panel::PanelKind::Project)
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn project_picker_click_outside_cancels() {
+        let root = project_dir("projclick");
+        let mut app = App::new(&[]);
+        app.header_width.set(80);
+        app.open_project_at(&root).unwrap();
+        let root_name = app.project_root.clone();
+        app.show_project_picker();
+        app.project_picker_click(0, 0, ratatui::layout::Rect::new(0, 0, 80, 24));
+        assert!(app.project_picker.is_none());
+        assert_eq!(app.project_root, root_name);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn project_picker_clear_empties_recents_and_stays_open() {
+        use crossterm::event::KeyCode;
+        let root = project_dir("projclear");
+        let mut app = App::new(&[]);
+        app.config.record_recent_project(&root);
+        app.show_project_picker();
+        app.project_picker_key(KeyCode::Tab);
+        app.project_picker_key(KeyCode::Tab);
+        app.project_picker_key(KeyCode::Enter);
+        assert!(app.project_picker.is_some());
+        assert!(app.config.recent_projects.is_empty());
+        assert!(app.project_picker.as_ref().unwrap().entries.is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

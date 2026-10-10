@@ -145,6 +145,9 @@ struct HoverVisual {
     dictionary_row_hover: Option<usize>,
     dictionary_button_hover: Option<usize>,
     dictionary_editor_hover: Option<usize>,
+    project_picker_selected: usize,
+    project_picker_button: usize,
+    project_picker_hover: Option<usize>,
     menu_selected: usize,
 }
 
@@ -170,6 +173,20 @@ fn hover_visual(app: &App) -> HoverVisual {
             .dictionary
             .as_ref()
             .and_then(|state| state.editor.as_ref().and_then(|editor| editor.button_hover)),
+        project_picker_selected: app
+            .project_picker
+            .as_ref()
+            .map(|state| state.selected)
+            .unwrap_or(0),
+        project_picker_button: app
+            .project_picker
+            .as_ref()
+            .map(|state| state.button)
+            .unwrap_or(0),
+        project_picker_hover: app
+            .project_picker
+            .as_ref()
+            .and_then(|state| state.row_hover),
         menu_selected: app.menu_selected,
     }
 }
@@ -200,6 +217,7 @@ enum WheelTarget {
     Editor,
     Help,
     FileBrowser,
+    ProjectFolder,
     Swallow,
     TabStrip,
     Themes,
@@ -211,6 +229,7 @@ fn wheel_target(app: &App, wheel_col: u16, wheel_row: u16) -> WheelTarget {
     match app.popup_focus() {
         Some(PopupFocus::Help) => WheelTarget::Help,
         Some(PopupFocus::FileBrowser) => WheelTarget::FileBrowser,
+        Some(PopupFocus::ProjectFolder) => WheelTarget::ProjectFolder,
         Some(PopupFocus::Themes) => WheelTarget::Themes,
         Some(PopupFocus::Dictionary) => {
             if app
@@ -556,6 +575,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                     WheelTarget::FileBrowser => {
                         app.browser_move_cursor(wheel_delta as i32);
                     }
+                    WheelTarget::ProjectFolder => {
+                        app.project_picker_move_public(wheel_delta);
+                    }
                     WheelTarget::Help => {
                         apply_help_scroll(app, wheel_delta as i32);
                     }
@@ -608,6 +630,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                     Some(PopupCtrl::Quit) => app.request_quit(),
                                     Some(PopupCtrl::BrowserToggleHidden) => {
                                         app.browser_toggle_hidden()
+                                    }
+                                    Some(PopupCtrl::ProjectToggleHidden) => {
+                                        app.project_picker_toggle_hidden();
                                     }
                                     None => {}
                                 }
@@ -701,6 +726,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                     }
                                 }
                                 PopupFocus::Reload => handle_reload_key(key.code, app),
+                                PopupFocus::ProjectFolder => {
+                                    app.project_picker_key(key.code);
+                                }
                                 PopupFocus::FileBrowser => handle_file_browser_key(key.code, app),
                                 PopupFocus::FileDialog => handle_file_dialog_key(key.code, app),
                                 PopupFocus::Help => handle_help_key(key.code, app),
@@ -1125,6 +1153,7 @@ fn paste_into_popup(app: &mut App, focus: PopupFocus, text: &str) {
         }
         PopupFocus::Confirm
         | PopupFocus::Reload
+        | PopupFocus::ProjectFolder
         | PopupFocus::Help
         | PopupFocus::Configure
         | PopupFocus::WordCount
@@ -1188,6 +1217,11 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
     }
 
     match app.popup_focus() {
+        Some(PopupFocus::ProjectFolder) => {
+            if let Some(state) = app.project_picker.as_mut() {
+                state.row_hover = popups::project_folder::list_row_at(y, term_area, state.selected);
+            }
+        }
         Some(PopupFocus::FileDialog) => {
             let popup = popups::file_dialog::file_dialog_rect(term_area);
             let btn_y = popups::file_dialog::file_dialog_button_row(popup) as usize;
@@ -1662,6 +1696,9 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
                     match focus {
                         PopupFocus::Confirm => handle_confirm_click(x, y, app),
                         PopupFocus::Reload => handle_reload_click(x, y, app),
+                        PopupFocus::ProjectFolder => {
+                            app.project_picker_click(x, y, term_area());
+                        }
                         PopupFocus::FileBrowser => handle_file_browser_click(x, y, app),
                         PopupFocus::FileDialog => handle_file_dialog_click(x, y, app),
                         PopupFocus::Configure => handle_configure_click(x, y, app),
@@ -2380,6 +2417,7 @@ fn themes_popup_handle_click(app: &mut App, pos: (usize, usize), skip_editor: &m
 enum PopupCtrl {
     Quit,
     BrowserToggleHidden,
+    ProjectToggleHidden,
 }
 
 fn popup_ctrl_action(code: KeyCode, app: &App) -> Option<PopupCtrl> {
@@ -2387,6 +2425,9 @@ fn popup_ctrl_action(code: KeyCode, app: &App) -> Option<PopupCtrl> {
         KeyCode::Char('q') => Some(PopupCtrl::Quit),
         KeyCode::Char('h') if app.popup_focus() == Some(PopupFocus::FileBrowser) => {
             Some(PopupCtrl::BrowserToggleHidden)
+        }
+        KeyCode::Char('h') if app.popup_focus() == Some(PopupFocus::ProjectFolder) => {
+            Some(PopupCtrl::ProjectToggleHidden)
         }
         _ => None,
     }
@@ -3535,6 +3576,11 @@ fn ui(f: &mut Frame, app: &mut App) {
     // Browser renders on top of the file dialog when open.
     if app.show_file_browser {
         popups::file_browser::render(f, area, app.current_theme(), app);
+    }
+
+    if let Some(state) = app.project_picker.as_ref() {
+        let theme = app.current_theme().clone();
+        popups::project_folder::render(f, area, &theme, state);
     }
 
     if let Some(ref menu) = app.active_menu {
