@@ -3711,13 +3711,16 @@ impl App {
     }
 
     /// Toggle comments for the active buffer's language.
-    /// Line-prefix languages (`//`, `#`) keep that path. Markdown wraps a
-    /// single line as `<!-- text -->`, or a multi-line selection as one
-    /// `<!--` / `-->` block. Files with neither leave the text alone and
-    /// say so on the status bar.
+    /// BASIC inserts `REM` after a leading line number. KickAss uses `//`.
+    /// Other line-prefix languages (`//`, `#`, `--`, `;`, `%`, Batch `REM`)
+    /// keep that path. Markdown wraps a single line as `<!-- text -->`, or a
+    /// multi-line selection as one `<!--` / `-->` block. Files with neither
+    /// leave the text alone and say so on the status bar.
     pub fn toggle_line_comment(&mut self) {
         let lang = self.active_buffer().language;
-        let changed = if let Some(prefix) = lang.line_comment_prefix() {
+        let changed = if lang == crate::buffer::Language::Basic {
+            self.active_buffer_mut().toggle_basic_line_comment()
+        } else if let Some(prefix) = lang.line_comment_prefix() {
             self.active_buffer_mut().toggle_line_comment(prefix)
         } else if let Some((open, close)) = lang.block_comment_pair() {
             self.active_buffer_mut().toggle_block_comment(open, close)
@@ -5609,6 +5612,22 @@ mod tests {
             json.format_status.as_deref(),
             Some("No comment for this file")
         );
+    }
+
+    #[test]
+    fn toggle_comment_basic_keeps_the_line_number() {
+        let mut app = App::new(&[]);
+        app.buffers[0] = Buffer::from_str("10 PRINT \"HI\"\n", Some(PathBuf::from("main.bas")));
+        app.toggle_line_comment();
+        assert_eq!(app.active_buffer().text(), "10 REM PRINT \"HI\"\n");
+        assert!(app.format_status.is_none());
+        app.toggle_line_comment();
+        assert_eq!(app.active_buffer().text(), "10 PRINT \"HI\"\n");
+
+        let mut kick = App::new(&[]);
+        kick.buffers[0] = Buffer::from_str("    lda #$02\n", Some(PathBuf::from("basic-ide.asm")));
+        kick.toggle_line_comment();
+        assert_eq!(kick.active_buffer().text(), "    // lda #$02\n");
     }
 
     #[test]
