@@ -173,12 +173,13 @@ F1 lists every shortcut. These are the ones you need on the first day.
 
 Ctrl+/ comments or uncomments the current line, or the selected lines.
 
-- `//` for Rust, C, C++, JavaScript, TypeScript, Java, C#, Go, PHP, Scala, Groovy, D, Objective-C, Objective-C++, Zig, and JSONC
+- `//` for Rust, C, C++, JavaScript, TypeScript, Java, C#, Go, PHP, Scala, Groovy, D, Objective-C, Objective-C++, Zig, JSONC, and KickAss
 - `#` for Python, TOML, YAML, shell, Ruby, Perl, R, Tcl, Java Properties, and Makefiles
 - `--` for SQL, Lua, and Haskell
 - `;` for INI, Clojure, and Lisp. An INI line that starts with `#` is not treated as a comment, so the toggle inserts `;` in front of it
 - `%` for Erlang, LaTeX, and TeX
 - `REM` for Batch, in any letter case. A longer word such as `REMote` is not a comment
+- `REM` for BASIC, in any letter case, placed after a leading line number. `10 PRINT "HI"` becomes `10 REM PRINT "HI"`. A longer word such as `REMOTE` is not a comment
 - Markdown, HTML, and XML wrap one line as `<!-- text -->`, and wrap a multi-line selection as a `<!--` line above and a `-->` line below
 - CSS uses `/* */` the same way. OCaml uses `(* *)`
 
@@ -216,6 +217,7 @@ Highlighting follows the file extension. A few names are recognized with no exte
 | Language         | Extensions                                                             |
 |------------------|------------------------------------------------------------------------|
 | Bash / shell     | `.sh`, `.bash`, `.zsh`, `.fish`                                        |
+| BASIC            | `.bas`                                                                 |
 | Batch            | `.bat`, `.cmd`                                                         |
 | C                | `.c`, `.h`                                                             |
 | C#               | `.cs`, `.csx`                                                          |
@@ -235,6 +237,7 @@ Highlighting follows the file extension. A few names are recognized with no exte
 | JavaScript       | `.js`, `.mjs`, `.jsx`                                                  |
 | JSON             | `.json`                                                                |
 | JSONC            | `.jsonc`                                                               |
+| KickAss          | `.asm`                                                                 |
 | LaTeX            | `.tex`, `.ltx`                                                         |
 | Lisp             | `.lisp`, `.cl`, `.el`, `.scm`, `.ss`                                   |
 | Lua              | `.lua`                                                                 |

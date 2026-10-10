@@ -20,5 +20,5 @@
 - [x] A project file browser sidebar that can be opened on left or right side for the user to quickly open more files that are within the projects directory. This will require a new option in the file menu to open a project folder. Will need the ability to hide and reopen the sidebar without having to reselect the folder each time you open the sidebar. Cannot overlap an open function list or variable list sidebar. Should remember recent project folders like how we remember recently opened files in the file browser popup so the user can quickly select and reopen a project folder.
 - [x] Add an edit menu option to the top bar between file and tools. It should have options for undo, redo, cut, copy, paste, select all.
 - [x] Make side panels re-sizable with a keyboard shortcut when in focus. Also add a keyboard shortcut to close them when they are in focus.
-- [ ] Add BASIC and Assembly as a supported programming language so projects in my ~/Documents/Programming/C64 can be opened and highlighted, commented, etc.
+- [x] Add BASIC and Assembly as a supported programming language so projects in my ~/Documents/Programming/C64 can be opened and highlighted, commented, etc.
 - [ ] Possibly have it work on Mac and Windows as well.

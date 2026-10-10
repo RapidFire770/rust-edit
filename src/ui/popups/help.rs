@@ -207,6 +207,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
 fn languages_rows() -> Vec<Row<'static>> {
     vec![
         ("Bash / Shell", ".sh, .bash, .zsh, .fish"),
+        ("BASIC", ".bas"),
         ("Batch", ".bat, .cmd"),
         ("C", ".c, .h"),
         ("C#", ".cs, .csx"),
@@ -226,6 +227,7 @@ fn languages_rows() -> Vec<Row<'static>> {
         ("JavaScript", ".js, .mjs, .jsx"),
         ("JSON", ".json"),
         ("JSONC", ".jsonc"),
+        ("KickAss", ".asm"),
         ("LaTeX", ".tex, .ltx"),
         ("Lisp", ".lisp, .el, .scm"),
         ("Lua", ".lua"),
@@ -574,6 +576,20 @@ mod tests {
                 "{name} / {ext} is {width} columns; min help body is 58"
             );
         }
+    }
+
+    #[test]
+    fn help_lists_basic_and_kickass() {
+        let rows = languages_rows();
+        assert!(rows.contains(&("BASIC", ".bas")));
+        assert!(rows.contains(&("KickAss", ".asm")));
+        let basic = rows.iter().position(|row| row.0 == "BASIC").unwrap();
+        let batch = rows.iter().position(|row| row.0 == "Batch").unwrap();
+        assert!(basic < batch);
+        let kick = rows.iter().position(|row| row.0 == "KickAss").unwrap();
+        let jsonc = rows.iter().position(|row| row.0 == "JSONC").unwrap();
+        let latex = rows.iter().position(|row| row.0 == "LaTeX").unwrap();
+        assert!(jsonc < kick && kick < latex);
     }
 
     fn shortcuts_text() -> String {
