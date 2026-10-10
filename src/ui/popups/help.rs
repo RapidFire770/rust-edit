@@ -42,6 +42,8 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
             vec![
                 ("Ctrl+N", "New tab"),
                 ("Ctrl+O", "Open file"),
+                ("Open Project Folder", "Pick a folder; recents are kept"),
+                ("Project Browser", "Show or hide that folder's tree"),
                 ("Ctrl+S", "Save"),
                 ("Ctrl+Alt+S", "Save As"),
                 ("Read-only", "Save warns when you cannot write the file"),
@@ -63,7 +65,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Name:", "Save As browse: type the new filename here"),
                 ("↑/↓ Enter", "Browse: navigate / enter dir, or pick a file"),
                 ("Backspace/←/h", "Directory browse: go up one directory"),
-                ("Ctrl+H", "Browse: toggle hidden files"),
+                ("Ctrl+H", "Hidden files: browse or project"),
                 (
                     "Tab",
                     "Browse: cycle focus (Save As: list → Name → buttons)",
@@ -141,6 +143,11 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("", "Enter or a click jumps to a name"),
                 ("Variables List", "Variable panel, prefers right"),
                 ("", "Enter or a click jumps to a name"),
+                ("Project Browser", "Folder tree, 36 columns"),
+                ("", "Enter opens a file or a folder"),
+                ("", "Replaces the left panel"),
+                ("x / [x]", "Hide the tree; the folder stays"),
+                ("r", "Reload the open folders"),
                 ("Left / Right", "Move the focused list to that side"),
                 ("x", "Close the focused list"),
                 ("Esc", "Leave the list open and return to the editor"),
@@ -594,6 +601,10 @@ mod tests {
         assert!(text.contains("Enter or a click jumps to a name"), "{text}");
         assert!(text.contains("Alt+Left / Alt+Right"), "{text}");
         assert!(text.contains("Focus the open list on that side"), "{text}");
+        assert!(text.contains("Open Project Folder"), "{text}");
+        assert!(text.contains("Project Browser"), "{text}");
+        assert!(text.contains("Hide the tree; the folder stays"), "{text}");
+        assert!(text.contains("Hidden files: browse or project"), "{text}");
         // 80-column help body is 69 columns once the scrollbar is reserved.
         // Descriptions start at column 32, so each of these lines must be <= 37.
         for (key, desc) in [
@@ -603,6 +614,14 @@ mod tests {
             ("", "Enter or a click jumps to a name"),
             ("Variables List", "Variable panel, prefers right"),
             ("Alt+Left / Alt+Right", "Focus the open list on that side"),
+            ("Open Project Folder", "Pick a folder; recents are kept"),
+            ("Project Browser", "Show or hide that folder's tree"),
+            ("Project Browser", "Folder tree, 36 columns"),
+            ("", "Enter opens a file or a folder"),
+            ("", "Replaces the left panel"),
+            ("x / [x]", "Hide the tree; the folder stays"),
+            ("r", "Reload the open folders"),
+            ("Ctrl+H", "Hidden files: browse or project"),
         ] {
             let pad = 28usize.saturating_sub(key.chars().count());
             let width = 2 + key.chars().count() + pad + 2 + desc.chars().count();
