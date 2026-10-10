@@ -143,13 +143,14 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("", "Enter or a click jumps to a name"),
                 ("Variables List", "Variable panel, prefers right"),
                 ("", "Enter or a click jumps to a name"),
-                ("Project Browser", "Folder tree, 36 columns"),
+                ("Project Browser", "Folder tree starts at 36 columns"),
                 ("", "Enter opens a file or a folder"),
                 ("", "Replaces the left panel"),
                 ("x / [x]", "Hide the tree; the folder stays"),
                 ("r", "Reload the open folders"),
                 ("Left / Right", "Move the focused list to that side"),
                 ("x", "Close the focused list"),
+                ("[ / ]", "Narrow or widen the focused panel"),
                 ("Esc", "Leave the list open and return to the editor"),
                 ("Alt+Left / Alt+Right", "Focus the open list on that side"),
                 ("1 / 2 / 3", "Help tab: Shortcuts / Languages / About"),
@@ -191,6 +192,7 @@ fn shortcuts_rows() -> Vec<(&'static str, Vec<Row<'static>>)> {
                 ("Scroll wheel", "Scroll vertically"),
                 ("Shift+wheel", "Scroll horizontally"),
                 ("Click / drag bars", "Vertical and horizontal bars"),
+                ("Drag panel edge", "Resize that panel"),
                 ("Click buttons", "Click any [ button ] in popups"),
                 ("Click < / >", "Step tab size in Configure"),
                 (
@@ -601,6 +603,8 @@ mod tests {
         assert!(text.contains("Enter or a click jumps to a name"), "{text}");
         assert!(text.contains("Alt+Left / Alt+Right"), "{text}");
         assert!(text.contains("Focus the open list on that side"), "{text}");
+        assert!(text.contains("[ / ]"), "{text}");
+        assert!(text.contains("Narrow or widen the focused panel"), "{text}");
         assert!(text.contains("Open Project Folder"), "{text}");
         assert!(text.contains("Project Browser"), "{text}");
         assert!(text.contains("Hide the tree; the folder stays"), "{text}");
@@ -616,7 +620,9 @@ mod tests {
             ("Alt+Left / Alt+Right", "Focus the open list on that side"),
             ("Open Project Folder", "Pick a folder; recents are kept"),
             ("Project Browser", "Show or hide that folder's tree"),
-            ("Project Browser", "Folder tree, 36 columns"),
+            ("Project Browser", "Folder tree starts at 36 columns"),
+            ("[ / ]", "Narrow or widen the focused panel"),
+            ("Drag panel edge", "Resize that panel"),
             ("", "Enter opens a file or a folder"),
             ("", "Replaces the left panel"),
             ("x / [x]", "Hide the tree; the folder stays"),

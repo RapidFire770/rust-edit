@@ -165,6 +165,10 @@ pub struct App {
     /// Which open list owns Up/Down, Enter, and Esc. `None` means the editor.
     /// Alt+Left and Alt+Right set this when that side already has a list.
     pub panel_focus: Option<crate::ui::side_panel::Side>,
+    /// Session width of each panel kind. Not written to config.
+    pub panel_widths: crate::ui::side_panel::PanelWidths,
+    /// Drag on a panel's inner `│`. Separate from the list scrollbar.
+    pub panel_resize_drag: Option<crate::ui::side_panel::Side>,
     pub function_nav: crate::ui::side_panel::PanelNav,
     pub variable_nav: crate::ui::side_panel::PanelNav,
     /// Buffer id last applied to each symbol list. A new id clears `free_scroll`
@@ -386,6 +390,8 @@ impl App {
             left_panel: None,
             right_panel: None,
             panel_focus: None,
+            panel_widths: crate::ui::side_panel::PanelWidths::default(),
+            panel_resize_drag: None,
             function_nav: crate::ui::side_panel::PanelNav::default(),
             variable_nav: crate::ui::side_panel::PanelNav::default(),
             function_follow_id: None,
@@ -599,7 +605,7 @@ impl App {
             Side::Left => left = Some(kind),
             Side::Right => right = Some(kind),
         }
-        let fitted = fit_panels(left, right, width);
+        let fitted = fit_panels(left, right, width, self.panel_widths);
         if fitted.left != left || fitted.right != right {
             self.format_status = Some(fitted.notice.unwrap_or("Window is too narrow").to_string());
             return;
@@ -616,6 +622,77 @@ impl App {
         }
         if self.panel_scrollbar_drag == Some(side) {
             self.panel_scrollbar_drag = None;
+        }
+        if self.panel_resize_drag == Some(side) {
+            self.panel_resize_drag = None;
+        }
+    }
+
+    /// Grow or shrink the focused panel by `delta` columns.
+    /// The step starts from the width on screen, so a key that cannot
+    /// draw a wider panel leaves the saved width alone.
+    pub fn resize_focused_panel(&mut self, delta: i16) {
+        use crate::ui::side_panel::{painted_widths, step_panel_cols, MIN_EDITOR_COLS};
+        let Some(side) = self.panel_focus else {
+            return;
+        };
+        let Some(kind) = self.kind_on(side) else {
+            return;
+        };
+        let term = self.panel_width();
+        let (left_w, right_w) =
+            painted_widths(self.left_panel, self.right_panel, self.panel_widths, term);
+        let (current, other) = match side {
+            crate::ui::side_panel::Side::Left => (left_w, right_w.unwrap_or(0)),
+            crate::ui::side_panel::Side::Right => (right_w, left_w.unwrap_or(0)),
+        };
+        let Some(current) = current else {
+            return;
+        };
+        let room = term.saturating_sub(MIN_EDITOR_COLS).saturating_sub(other);
+        let Some(next) = step_panel_cols(current, delta, room) else {
+            return;
+        };
+        if next != current {
+            self.panel_widths.set(kind, next);
+        }
+    }
+
+    /// Set the panel on `side` to the column under the pointer.
+    /// The editor keeps 24 columns, and the other panel keeps its drawn width.
+    pub fn resize_panel_to_pointer(&mut self, side: crate::ui::side_panel::Side, mouse_x: u16) {
+        use crate::ui::side_panel::{
+            clamp_panel_cols, painted_widths, width_at_pointer, MIN_EDITOR_COLS,
+        };
+        let Some(kind) = self.kind_on(side) else {
+            return;
+        };
+        let area = match side {
+            crate::ui::side_panel::Side::Left => self.left_panel_area.get(),
+            crate::ui::side_panel::Side::Right => self.right_panel_area.get(),
+        };
+        if area.width == 0 {
+            return;
+        }
+        let term = self.panel_width();
+        let (left_w, right_w) =
+            painted_widths(self.left_panel, self.right_panel, self.panel_widths, term);
+        let other = match side {
+            crate::ui::side_panel::Side::Left => right_w.unwrap_or(0),
+            crate::ui::side_panel::Side::Right => left_w.unwrap_or(0),
+        };
+        let room = term.saturating_sub(MIN_EDITOR_COLS).saturating_sub(other);
+        let Some(cols) = clamp_panel_cols(width_at_pointer(side, area, mouse_x), room) else {
+            return;
+        };
+        let painted = match side {
+            crate::ui::side_panel::Side::Left => left_w,
+            crate::ui::side_panel::Side::Right => right_w,
+        };
+        // A drag that lands on the width already on screen must keep a larger
+        // saved width, so growing the window can restore it.
+        if painted != Some(cols) {
+            self.panel_widths.set(kind, cols);
         }
     }
 
@@ -964,17 +1041,22 @@ impl App {
     }
 
     /// Put the project tree on the left when it is hidden. An open tree stays
-    /// on its current side. The other side is dropped only when it does not fit.
+    /// on its current side. Choosing another folder does not re-fit it; the
+    /// frame keeps a list that can still draw at 12 columns.
     fn show_project_panel(&mut self) {
         use crate::ui::side_panel::{fit_panels, PanelKind};
         let width = self.panel_width();
-        if self.side_of(PanelKind::Project).is_some() {
-            let fitted = fit_panels(self.left_panel, self.right_panel, width);
-            self.apply_project_fit(fitted);
+        if let Some(side) = self.side_of(PanelKind::Project) {
+            self.panel_focus = Some(side);
             return;
         }
         let previous = (self.left_panel, self.right_panel, self.panel_focus);
-        let fitted = fit_panels(Some(PanelKind::Project), self.right_panel, width);
+        let fitted = fit_panels(
+            Some(PanelKind::Project),
+            self.right_panel,
+            width,
+            self.panel_widths,
+        );
         let kept =
             fitted.left == Some(PanelKind::Project) || fitted.right == Some(PanelKind::Project);
         if !kept {
@@ -3833,6 +3915,89 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn resize_changes_the_focused_kind_and_survives_a_move() {
+        use crate::ui::side_panel::{PanelKind, Side, PANEL_COLS};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(one_function());
+        app.header_width.set(100);
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.toggle_symbol_list(PanelKind::Variables);
+        app.panel_focus = Some(Side::Left);
+        app.resize_focused_panel(4);
+        assert_eq!(app.panel_widths.get(PanelKind::Functions), PANEL_COLS + 4);
+        assert_eq!(app.panel_widths.get(PanelKind::Variables), PANEL_COLS);
+        app.move_panel(Side::Left, Side::Right);
+        assert_eq!(app.panel_widths.get(PanelKind::Functions), PANEL_COLS + 4);
+        assert_eq!(app.right_panel, Some(PanelKind::Functions));
+    }
+
+    #[test]
+    fn resize_does_nothing_without_focus_or_past_the_editor_floor() {
+        use crate::ui::side_panel::{PanelKind, PANEL_COLS};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(one_function());
+        app.header_width.set(80);
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.panel_focus = None;
+        app.resize_focused_panel(1);
+        assert_eq!(app.panel_widths.get(PanelKind::Functions), PANEL_COLS);
+        app.panel_focus = Some(crate::ui::side_panel::Side::Left);
+        app.panel_widths.set(PanelKind::Functions, 56);
+        app.resize_focused_panel(1);
+        assert_eq!(app.panel_widths.get(PanelKind::Functions), 56);
+    }
+
+    #[test]
+    fn drag_sets_the_panel_width_from_the_pointer() {
+        use crate::ui::side_panel::{PanelKind, Side, PANEL_COLS};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(one_function());
+        app.header_width.set(80);
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.left_panel_area
+            .set(ratatui::layout::Rect::new(0, 1, PANEL_COLS, 10));
+        app.resize_panel_to_pointer(Side::Left, 29);
+        assert_eq!(app.panel_widths.get(PanelKind::Functions), 30);
+        app.resize_panel_to_pointer(Side::Left, 70);
+        assert_eq!(app.panel_widths.get(PanelKind::Functions), 56);
+    }
+
+    #[test]
+    fn drag_at_the_cap_keeps_a_wider_saved_width() {
+        use crate::ui::side_panel::{PanelKind, Side};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(one_function());
+        app.header_width.set(80);
+        app.toggle_symbol_list(PanelKind::Functions);
+        app.panel_widths.set(PanelKind::Functions, 60);
+        app.left_panel_area
+            .set(ratatui::layout::Rect::new(0, 1, 56, 10));
+        app.resize_panel_to_pointer(Side::Left, 90);
+        assert_eq!(app.panel_widths.get(PanelKind::Functions), 60);
+    }
+
+    #[test]
+    fn opening_another_folder_keeps_a_list_that_is_still_on_screen() {
+        use crate::ui::side_panel::PanelKind;
+        let first = project_dir("projkeep-a");
+        let second = project_dir("projkeep-b");
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(one_function());
+        app.header_width.set(120);
+        app.open_project_at(&first).unwrap();
+        app.toggle_symbol_list(PanelKind::Variables);
+        assert_eq!(app.left_panel, Some(PanelKind::Project));
+        assert_eq!(app.right_panel, Some(PanelKind::Variables));
+        app.header_width.set(80);
+        app.open_project_at(&second).unwrap();
+        assert_eq!(app.left_panel, Some(PanelKind::Project));
+        assert_eq!(app.right_panel, Some(PanelKind::Variables));
+        assert_eq!(app.panel_widths.project, 36);
+        let _ = fs::remove_dir_all(&first);
+        let _ = fs::remove_dir_all(&second);
+    }
+
     fn panel_rect() -> ratatui::layout::Rect {
         // header row + 10 list rows. list_viewport() reads this cell.
         ratatui::layout::Rect::new(0, 2, 36, 11)
@@ -4072,6 +4237,9 @@ mod tests {
         fs::write(first.join("README.md"), "a\n").unwrap();
         let mut app = App::new(&[]);
         app.header_width.set(80);
+        // App::new loads the real config. Start from an empty list so Delete
+        // is checked against the two folders this test records.
+        app.config.recent_projects.clear();
         app.config.record_recent_project(&first);
         app.config.record_recent_project(&second);
         app.show_project_picker();

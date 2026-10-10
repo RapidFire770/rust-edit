@@ -1821,6 +1821,10 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             update_hover_states(x, y, app);
         }
         MouseEventKind::Drag(MouseButton::Left) => {
+            if let Some(side) = app.panel_resize_drag {
+                app.resize_panel_to_pointer(side, x);
+                return;
+            }
             if let Some(side) = app.panel_scrollbar_drag {
                 app.scroll_panel_to_row(side, y);
                 return;
@@ -1913,6 +1917,7 @@ fn handle_mouse(mouse: MouseEvent, app: &mut App) {
             app.hscrollbar_drag_active = false;
             app.popup_scrollbar_drag = None;
             app.panel_scrollbar_drag = None;
+            app.panel_resize_drag = None;
         }
         // Horizontal mouse-wheel (Shift+wheel on most terminals) scrolls the
         // view sideways. Vertical wheel is coalesced in run_app, but horizontal
@@ -3389,6 +3394,8 @@ fn handle_panel_key(key: &crossterm::event::KeyEvent, app: &mut App) {
         KeyCode::Enter => app.activate_focused_list(),
         KeyCode::Esc => app.panel_focus = None,
         KeyCode::Char('x') => app.close_side(side),
+        KeyCode::Char('[') => app.resize_focused_panel(-1),
+        KeyCode::Char(']') => app.resize_focused_panel(1),
         KeyCode::Left => app.move_panel(side, Side::Left),
         KeyCode::Right => app.move_panel(side, Side::Right),
         KeyCode::Char('r')
@@ -3414,6 +3421,13 @@ fn panel_click(app: &mut App, x: u16, y: u16) -> bool {
         match hit_test(geom, x, y) {
             PanelHit::Move => app.move_panel(side, side.other()),
             PanelHit::Close => app.close_side(side),
+            PanelHit::Resize => {
+                app.panel_resize_drag = Some(side);
+                app.panel_scrollbar_drag = None;
+                app.mouse_drag_active = false;
+                app.scrollbar_drag_active = false;
+                app.hscrollbar_drag_active = false;
+            }
             PanelHit::Header => {
                 app.focus_side(side);
             }
@@ -3502,8 +3516,12 @@ fn ui(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let chunks = crate::ui::layout::main_layout(area);
 
-    let fitted =
-        crate::ui::side_panel::fit_panels(app.left_panel, app.right_panel, chunks[1].width);
+    let fitted = crate::ui::side_panel::fit_panels(
+        app.left_panel,
+        app.right_panel,
+        chunks[1].width,
+        crate::ui::side_panel::PanelWidths::minimum(),
+    );
     if fitted.left != app.left_panel || fitted.right != app.right_panel {
         if let Some(notice) = fitted.notice {
             app.format_status = Some(notice.to_string());
@@ -3519,10 +3537,16 @@ fn ui(f: &mut Frame, app: &mut App) {
             app.panel_focus = None;
         }
     }
-    let sides = crate::ui::side_panel::split_editor_band(
-        chunks[1],
+    let (left_cols, right_cols) = crate::ui::side_panel::painted_widths(
         app.left_panel,
         app.right_panel,
+        app.panel_widths,
+        chunks[1].width,
+    );
+    let sides = crate::ui::side_panel::split_editor_band(
+        chunks[1],
+        left_cols,
+        right_cols,
         app.is_find_active(),
     );
 
@@ -4773,6 +4797,28 @@ mod popup_mouse_focus_tests {
     }
 
     #[test]
+    fn bracket_keys_resize_the_focused_panel_only() {
+        use crate::ui::side_panel::{PanelKind, Side, PANEL_COLS};
+        let mut app = App::new(&[]);
+        app.symbol_override = Some(sample_symbols());
+        app.header_width.set(100);
+        app.toggle_symbol_list(PanelKind::Functions);
+        let wider = crossterm::event::KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE);
+        handle_panel_key(&wider, &mut app);
+        assert_eq!(app.panel_widths.get(PanelKind::Functions), PANEL_COLS + 1);
+        let narrower = crossterm::event::KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE);
+        handle_panel_key(&narrower, &mut app);
+        assert_eq!(app.panel_widths.get(PanelKind::Functions), PANEL_COLS);
+        app.panel_focus = None;
+        handle_panel_key(&wider, &mut app);
+        assert_eq!(app.panel_widths.get(PanelKind::Functions), PANEL_COLS);
+        app.panel_focus = Some(Side::Left);
+        let close = crossterm::event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        handle_panel_key(&close, &mut app);
+        assert!(app.left_panel.is_none());
+    }
+
+    #[test]
     fn right_arrow_swaps_the_two_lists() {
         use crate::ui::side_panel::{PanelKind, Side};
         let mut app = App::new(&[]);
@@ -5743,7 +5789,9 @@ mod editor_mouse_click_scroll_tests {
     }
 
     #[test]
-    fn narrow_window_closes_the_right_panel_then_both() {
+    fn narrow_window_draws_panels_narrower_until_twelve_columns_will_not_fit() {
+        // 60 columns cannot hold two 24-column lists and a 24-column editor.
+        // Both lists stay. The right one draws at the 12-column floor.
         let backend = TestBackend::new(60, 12);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new(&[]);
@@ -5754,14 +5802,29 @@ mod editor_mouse_click_scroll_tests {
             app.left_panel,
             Some(crate::ui::side_panel::PanelKind::Functions)
         );
-        assert_eq!(app.right_panel, None);
         assert_eq!(
-            app.format_status.as_deref(),
-            Some("Window is too narrow for both lists")
+            app.right_panel,
+            Some(crate::ui::side_panel::PanelKind::Variables)
         );
+        assert_eq!(app.format_status, None);
         assert_eq!(app.editor_origin_x.get(), 24);
+        assert_eq!(app.right_panel_area.get().width, 12);
 
+        // 40 columns still holds one list. It draws at 16, leaving the editor 24.
         let backend = TestBackend::new(40, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&[]);
+        app.left_panel = Some(crate::ui::side_panel::PanelKind::Functions);
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        assert_eq!(
+            app.left_panel,
+            Some(crate::ui::side_panel::PanelKind::Functions)
+        );
+        assert_eq!(app.editor_origin_x.get(), 16);
+        assert_eq!(app.format_status, None);
+
+        // 35 columns cannot hold a 12-column list and a 24-column editor.
+        let backend = TestBackend::new(35, 12);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new(&[]);
         app.left_panel = Some(crate::ui::side_panel::PanelKind::Functions);
@@ -5772,7 +5835,7 @@ mod editor_mouse_click_scroll_tests {
     }
 
     #[test]
-    fn project_panel_is_36_columns_and_drops_the_other_side_on_80() {
+    fn project_panel_is_36_columns_and_shrinks_beside_a_list_on_80() {
         let backend = TestBackend::new(100, 12);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new(&[]);
@@ -5789,6 +5852,8 @@ mod editor_mouse_click_scroll_tests {
         );
         assert_eq!(app.editor_origin_x.get(), 36);
 
+        // Already open on 80 columns: both stay. The project tree draws at 32
+        // so the variable list can keep 24 and the editor can keep 24.
         let backend = TestBackend::new(80, 12);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new(&[]);
@@ -5799,12 +5864,15 @@ mod editor_mouse_click_scroll_tests {
             app.left_panel,
             Some(crate::ui::side_panel::PanelKind::Project)
         );
-        assert_eq!(app.right_panel, None);
-        assert_eq!(app.editor_origin_x.get(), 36);
         assert_eq!(
-            app.format_status.as_deref(),
-            Some("Window is too narrow for both panels")
+            app.right_panel,
+            Some(crate::ui::side_panel::PanelKind::Variables)
         );
+        assert_eq!(app.editor_origin_x.get(), 32);
+        assert_eq!(app.left_panel_area.get().width, 32);
+        assert_eq!(app.right_panel_area.get().width, 24);
+        assert_eq!(app.format_status, None);
+        assert_eq!(app.panel_widths.project, 36);
     }
 
     #[test]
