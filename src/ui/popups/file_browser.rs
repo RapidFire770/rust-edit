@@ -95,15 +95,13 @@ pub fn filter_hidden(entries: Vec<BrowserEntry>, show_hidden: bool) -> Vec<Brows
         .collect()
 }
 
-/// Read a directory and return a sorted, optionally-filtered listing.
-///
-/// The pinned `..` entry (when the cwd has a parent) is always first and is
-/// never filtered out by `filter_hidden` — the user always needs a way up.
+/// Sorted children of `cwd`. Dotfiles are omitted unless `show_hidden`.
+/// There is no pinned `..` row.
 ///
 /// Symlinks are followed via `metadata()` so a symlink to a directory is
 /// enterable. Broken symlinks fall back to `symlink_metadata` and are shown as
 /// files (best-effort — they are not selectable as directories).
-pub fn read_directory(cwd: &Path, show_hidden: bool) -> std::io::Result<Vec<BrowserEntry>> {
+pub fn read_children(cwd: &Path, show_hidden: bool) -> std::io::Result<Vec<BrowserEntry>> {
     let mut entries: Vec<BrowserEntry> = Vec::new();
 
     for entry in std::fs::read_dir(cwd)? {
@@ -131,13 +129,18 @@ pub fn read_directory(cwd: &Path, show_hidden: bool) -> std::io::Result<Vec<Brow
         });
     }
 
-    let mut sorted = sort_entries(entries);
+    Ok(sort_entries(entries))
+}
 
-    // Pin `..` at the top so it is always reachable regardless of hidden filter.
+/// Read a directory and return a sorted, optionally-filtered listing.
+///
+/// The pinned `..` entry (when the cwd has a parent) is always first and is
+/// never filtered out by `filter_hidden` — the user always needs a way up.
+pub fn read_directory(cwd: &Path, show_hidden: bool) -> std::io::Result<Vec<BrowserEntry>> {
+    let mut sorted = read_children(cwd, show_hidden)?;
     if let Some(parent) = BrowserEntry::parent_entry(cwd) {
         sorted.insert(0, parent);
     }
-
     Ok(sorted)
 }
 
@@ -601,6 +604,23 @@ mod tests {
         );
 
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_children_omits_parent_and_sorts_directories_first() {
+        let dir = std::env::temp_dir().join(format!("rust-edit-children-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("b.txt"), "").unwrap();
+        std::fs::write(dir.join("a.txt"), "").unwrap();
+        std::fs::write(dir.join(".hidden"), "").unwrap();
+        let shown = read_children(&dir, false).unwrap();
+        let names: Vec<_> = shown.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["src", "a.txt", "b.txt"]);
+        let all = read_children(&dir, true).unwrap();
+        assert!(all.iter().any(|e| e.name == ".hidden"));
+        assert!(all.iter().all(|e| e.name != ".."));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
