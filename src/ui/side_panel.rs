@@ -369,7 +369,7 @@ pub struct PanelView<'a> {
 }
 
 /// Accent background while the list has the keyboard, matching the active tab.
-fn panel_header_style(theme: &Theme, focused: bool) -> Style {
+pub(crate) fn panel_header_style(theme: &Theme, focused: bool) -> Style {
     if focused {
         Style::default()
             .bg(Color::from(&theme.accent))

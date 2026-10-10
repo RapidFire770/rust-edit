@@ -7,6 +7,7 @@ pub mod find;
 pub mod header;
 pub mod layout;
 pub mod popups;
+pub mod project_panel;
 pub mod scrollbar;
 pub mod side_panel;
 pub mod spans;
