@@ -3,7 +3,7 @@
 **Project:** Rust-Edit — Feature-rich terminal text & code editor (TUI)  
 **Primary Framework:** Ratatui v0.30+  
 **Status:** v0.1.1 released - v0.1.2 in development
-**Last Updated:** October 10, 2026
+**Last Updated:** October 18, 2026
 
 This file defines how coding agents (Grok Build, Cursor, Claude, human contributors, etc.) should work on the project. It exists to keep changes consistent, high-quality, and aligned with the terminal-first philosophy.
 
@@ -106,6 +106,8 @@ CARGO="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo"
 Discover the path with `ls ~/.rustup/toolchains/*/bin/cargo`. It is also recorded
 in `docs/zcode cargo toolchain location.md`. All `cargo` commands in this file assume
 you've set this `CARGO` variable (or that the proxy is fixed).
+
+Cloud Agents already have rustup stable on `PATH` (`/usr/local/cargo/bin/cargo`, rustup home `/usr/local/rustup`). There is no `~/.rustup` tree, and the Zcode proxy note does not apply. `xterm` is installed. Start it with `stty -ixon` so Ctrl+S reaches the editor instead of XOFF.
 
 ---
 
