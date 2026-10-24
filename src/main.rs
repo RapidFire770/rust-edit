@@ -1218,11 +1218,38 @@ fn update_hover_states(x: u16, y: u16, app: &mut App) {
             editor.button_hover = None;
         }
     }
+    if let Some(state) = app.project_picker.as_mut() {
+        state.row_hover = None;
+    }
 
     match app.popup_focus() {
         Some(PopupFocus::ProjectFolder) => {
+            let popup = popups::file_browser::file_browser_rect(term_area);
+            let in_popup_x =
+                x as usize >= popup.x as usize && (x as usize) < (popup.x + popup.width) as usize;
             if let Some(state) = app.project_picker.as_mut() {
-                state.row_hover = popups::project_folder::list_row_at(y, term_area, state.selected);
+                // Footer button hover uses the click handler's hit-test, so
+                // the highlighted button is always the one a click would fire.
+                // Hover steals the selection like the file browser: the button
+                // highlight stays put when the mouse leaves the button row.
+                if let Some(idx) =
+                    popups::project_folder::footer_button_at(x, y, term_area, state.mode)
+                {
+                    state.button = idx;
+                    state.row_hover = None;
+                } else {
+                    state.row_hover = if in_popup_x {
+                        popups::project_folder::list_row_at(y, term_area, state.selected)
+                            .filter(|&i| i < state.entries.len())
+                    } else {
+                        None
+                    };
+                    // Mouse owns focus: over the list means list focus, so a
+                    // previously hovered footer button stops being highlighted.
+                    if state.row_hover.is_some() {
+                        state.button = popups::project_folder::FOCUS_LIST;
+                    }
+                }
             }
         }
         Some(PopupFocus::FileDialog) => {
@@ -4637,6 +4664,56 @@ mod popup_mouse_focus_tests {
         assert_eq!(app.reload_button_hover, Some(0));
         assert_eq!(app.configure_row_hover, None);
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn update_hover_highlights_project_picker_footer_button() {
+        let mut app = App::new(&[]);
+        app.show_project_picker();
+        assert_eq!(app.popup_focus(), Some(PopupFocus::ProjectFolder));
+
+        let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+        let area = Rect::new(0, 0, tw, th);
+        let popup = popups::file_browser::file_browser_rect(area);
+        let labels =
+            popups::project_folder::footer_labels(popups::project_folder::PickerMode::Recent);
+        let ranges = crate::ui::button::ButtonRow::button_x_ranges(popup.x + 1, labels);
+        let y = popups::file_browser::footer_button_row(popup);
+        let (x_cancel, _) = ranges[2];
+        update_hover_states(x_cancel, y, &mut app);
+        assert_eq!(app.project_picker.as_ref().unwrap().button, 2);
+    }
+
+    #[test]
+    fn update_hover_highlights_project_picker_rows_and_focuses_list() {
+        let root = std::env::temp_dir().join(format!(
+            "rust-edit-projhover-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = App::new(&[]);
+        app.config.recent_projects = vec![root.display().to_string()];
+        app.show_project_picker();
+        app.project_picker.as_mut().unwrap().button = 0;
+
+        let (tw, th) = crossterm::terminal::size().unwrap_or((80, 24));
+        let area = Rect::new(0, 0, tw, th);
+        let popup = popups::file_browser::file_browser_rect(area);
+        let (start, _) = popups::file_browser::list_area(popup, false);
+        update_hover_states(popup.x + 1, start as u16, &mut app);
+        {
+            let state = app.project_picker.as_ref().unwrap();
+            assert_eq!(state.row_hover, Some(0));
+            assert_eq!(state.button, popups::project_folder::FOCUS_LIST);
+        }
+        // A cursor off to the side of the popup must not drag the row highlight.
+        update_hover_states(popup.x + popup.width + 1, start as u16, &mut app);
+        assert_eq!(app.project_picker.as_ref().unwrap().row_hover, None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

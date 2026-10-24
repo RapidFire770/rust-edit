@@ -139,7 +139,10 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, state: &PickerState) {
                     file_browser::format_recent_label(&name, "", name_budget.max(1))
                 }
             };
-            let style = if index == state.selected {
+            let is_hover = state.row_hover == Some(index);
+            let is_sel =
+                index == state.selected && state.button == FOCUS_LIST && state.row_hover.is_none();
+            let style = if is_hover || is_sel {
                 selected
             } else if entry.is_dir {
                 dir_style

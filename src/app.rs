@@ -777,6 +777,7 @@ impl App {
         if let Some(state) = self.project_picker.as_mut() {
             state.entries = entries;
             state.error = error;
+            state.row_hover = None;
             if state.selected >= state.entries.len() {
                 state.selected = 0;
             }
