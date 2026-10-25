@@ -935,17 +935,38 @@ impl App {
     }
 
     fn project_picker_remove_selected(&mut self) {
+        let index = self.project_picker.as_ref().map(|state| state.selected);
+        if let Some(index) = index {
+            self.project_picker_remove_at(index);
+        }
+    }
+
+    /// Drop the Recent row at `index`. The picker stays open. A removal above
+    /// the keyboard row shifts `selected` so it stays on the same folder.
+    /// Removing the last row leaves the highlight on the new last row.
+    fn project_picker_remove_at(&mut self, index: usize) {
         use crate::ui::popups::project_folder::PickerMode;
         let path = self.project_picker.as_ref().and_then(|state| {
             if state.mode != PickerMode::Recent {
                 return None;
             }
-            state.entries.get(state.selected).map(|e| e.path.clone())
+            state.entries.get(index).map(|e| e.path.clone())
         });
         let Some(path) = path else {
             return;
         };
-        self.config.remove_recent_project(&path);
+        if !self.config.remove_recent_project(&path) {
+            return;
+        }
+        if let Some(state) = self.project_picker.as_mut() {
+            if index < state.selected {
+                state.selected -= 1;
+            }
+            let remaining = state.entries.len().saturating_sub(1);
+            if state.selected >= remaining {
+                state.selected = remaining.saturating_sub(1);
+            }
+        }
         self.refill_project_picker();
     }
 
@@ -989,8 +1010,8 @@ impl App {
             let body_h = end.saturating_sub(start).max(1);
             let overflowing = count > body_h;
             if recent_x_is_clear(x, area, overflowing) {
-                if list_row_at(y, area, selected).is_some() {
-                    self.project_picker_remove_selected();
+                if let Some(index) = list_row_at(y, area, selected).filter(|&i| i < count) {
+                    self.project_picker_remove_at(index);
                 }
                 return;
             }
@@ -4368,6 +4389,65 @@ mod tests {
         assert!(app.project_picker.is_none());
         assert_eq!(app.project_root, root_name);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn project_picker_recent_x_click_removes_the_clicked_row() {
+        let first = project_dir("projx-a");
+        let second = project_dir("projx-b");
+        let third = project_dir("projx-c");
+        let mut app = App::new(&[]);
+        app.config.recent_projects.clear();
+        app.config.record_recent_project(&first);
+        app.config.record_recent_project(&second);
+        app.config.record_recent_project(&third);
+        app.show_project_picker();
+        // Newest is index 0. Leave the keyboard on the oldest row.
+        app.project_picker.as_mut().unwrap().selected = 2;
+
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        let popup = crate::ui::popups::file_browser::file_browser_rect(area);
+        let (start, end) = crate::ui::popups::file_browser::list_area(popup, false);
+        let count = app.project_picker.as_ref().unwrap().entries.len();
+        let overflowing = count > end.saturating_sub(start).max(1);
+        let (x0, _) = crate::ui::popups::file_browser::recent_clear_x_range(popup, overflowing);
+
+        app.project_picker_click(x0 as usize, start, area);
+        {
+            let state = app.project_picker.as_ref().expect("picker stays open");
+            assert!(
+                state.entries.iter().all(|e| !e.name.contains("projx-c")),
+                "the clicked row is the one that goes: {:?}",
+                state.entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+            );
+            assert!(
+                state.entries[state.selected].name.contains("projx-a"),
+                "keyboard selection stays on the same folder, got {}",
+                state.entries[state.selected].name
+            );
+        }
+        assert!(app.project_root.is_none());
+
+        let selected = app.project_picker.as_ref().unwrap().selected;
+        app.project_picker_click(x0 as usize, start + selected, area);
+        {
+            let state = app.project_picker.as_ref().unwrap();
+            assert_eq!(state.entries.len(), 1);
+            assert!(state.entries[0].name.contains("projx-b"));
+            assert_eq!(state.selected, 0);
+        }
+
+        app.project_picker_click(x0 as usize, start + 5, area);
+        {
+            let state = app.project_picker.as_ref().unwrap();
+            assert_eq!(state.entries.len(), 1);
+            assert!(state.entries[0].name.contains("projx-b"));
+        }
+        assert!(app.project_root.is_none());
+
+        let _ = fs::remove_dir_all(&first);
+        let _ = fs::remove_dir_all(&second);
+        let _ = fs::remove_dir_all(&third);
     }
 
     #[test]
