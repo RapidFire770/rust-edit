@@ -12,3 +12,4 @@ pub mod scrollbar;
 pub mod side_panel;
 pub mod spans;
 pub mod status;
+pub mod text_field;

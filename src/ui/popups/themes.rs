@@ -1151,6 +1151,37 @@ fn preview_chrome_lines(theme: &Theme, selected_role: usize, width: u16) -> Vec<
     ]
 }
 
+const FIELD_COLS: usize = 16;
+
+fn bracketed_field(
+    label: &str,
+    text: &str,
+    focused: bool,
+    dim: Style,
+    text_style: Style,
+    caret_style: Style,
+) -> Line<'static> {
+    let mut inner = crate::ui::text_field::field_spans(
+        text,
+        text.chars().count(),
+        focused,
+        FIELD_COLS,
+        text_style,
+        caret_style,
+    );
+    let used: usize = inner.iter().map(|s| s.content.chars().count()).sum();
+    if used < FIELD_COLS {
+        inner.push(Span::styled(" ".repeat(FIELD_COLS - used), text_style));
+    }
+    let mut spans = vec![
+        Span::styled(format!("{label}: "), dim),
+        Span::styled("[", text_style),
+    ];
+    spans.extend(inner);
+    spans.push(Span::styled("]", text_style));
+    Line::from(spans)
+}
+
 fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
     let edit = match &app.themes_edit {
         Some(e) => e,
@@ -1178,12 +1209,15 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
     } else {
         dim
     };
-    let name_line = Line::from(vec![
-        Span::styled("Name: ", dim),
-        Span::styled("[", name_style),
-        Span::styled(format!("{:<16}", edit.name), name_style),
-        Span::styled("]", name_style),
-    ]);
+    let caret_style = crate::ui::text_field::caret_cell_style(theme);
+    let name_line = bracketed_field(
+        "Name",
+        &edit.name,
+        edit.focus == EditFocus::Name,
+        dim,
+        name_style,
+        caret_style,
+    );
 
     let overflowing = roles_overflow_bar(edit.role_scroll).overflowing();
     let list = roles_list_area(popup, overflowing);
@@ -1262,14 +1296,18 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
         Some(e) => Span::styled(format!("  ! {e}"), err_style),
         None => Span::raw(""),
     };
-    let hex_line = Line::from(vec![
-        Span::styled("Hex: ", dim),
-        Span::styled("[", hex_style),
-        Span::styled(format!("{:<16}", edit.color_buf), hex_style),
-        Span::styled("]", hex_style),
-        Span::styled(format!("  ({selected_label})"), dim_dim),
-        err_span,
-    ]);
+    let mut hex_spans = bracketed_field(
+        "Hex",
+        &edit.color_buf,
+        edit.focus == EditFocus::Hex,
+        dim,
+        hex_style,
+        caret_style,
+    )
+    .spans;
+    hex_spans.push(Span::styled(format!("  ({selected_label})"), dim_dim));
+    hex_spans.push(err_span);
+    let hex_line = Line::from(hex_spans);
 
     let labels = edit_footer_labels();
     let mut footer_spans: Vec<Span> = vec![Span::raw(" ")];
@@ -1317,6 +1355,27 @@ fn render_edit(f: &mut Frame, area: Rect, theme: &Theme, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_line_paints_a_caret_only_while_the_name_is_focused() {
+        let theme = Theme::dark_red();
+        let caret = crate::ui::text_field::caret_cell_style(&theme);
+        assert!(!caret.add_modifier.contains(Modifier::REVERSED));
+        let dim = Style::default().fg(Color::from(&theme.editor_fg));
+        let accent = Style::default()
+            .fg(Color::from(&theme.accent))
+            .add_modifier(Modifier::BOLD);
+        let focused = bracketed_field("Name", "Red", true, dim, accent, caret);
+        let idle = bracketed_field("Name", "Red", false, dim, accent, caret);
+        let focused_text: String = focused.spans.iter().map(|s| s.content.as_ref()).collect();
+        let idle_text: String = idle.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(focused_text, idle_text);
+        assert!(focused_text.starts_with("Name: [Red "));
+        assert!(focused_text.ends_with(']'));
+        assert_eq!(focused_text.chars().count(), idle_text.chars().count());
+        assert!(focused.spans.iter().any(|s| s.style.bg == caret.bg));
+        assert!(idle.spans.iter().all(|s| s.style.bg != caret.bg));
+    }
 
     #[test]
     fn list_row_to_index_accounts_for_custom_divider() {

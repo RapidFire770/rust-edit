@@ -316,15 +316,10 @@ pub fn editor_button_y(popup: Rect) -> u16 {
     popup.y.saturating_add(4)
 }
 
-pub fn field_scroll(caret: usize, width: usize) -> usize {
-    let width = width.max(1);
-    (caret + 1).saturating_sub(width)
-}
-
 pub fn caret_from_click(draft: &str, caret: usize, field: Rect, x: u16) -> usize {
     let len = draft.chars().count();
     let width = (field.width as usize).max(1);
-    let scroll = field_scroll(caret, width);
+    let scroll = crate::ui::text_field::field_scroll(caret, width);
     if x < field.x {
         return scroll.min(len);
     }
@@ -390,26 +385,20 @@ fn button_line(
 fn field_line(
     draft: &str,
     caret: usize,
+    focused: bool,
     width: usize,
     dim: Style,
     caret_style: Style,
 ) -> Line<'static> {
-    let width = width.max(1);
-    let scroll = field_scroll(caret, width);
-    let chars: Vec<char> = draft.chars().skip(scroll).take(width).collect();
     let mut spans = vec![Span::raw(" ")];
-    let caret_col = caret.saturating_sub(scroll);
-    if chars.is_empty() {
-        spans.push(Span::styled(" ", caret_style));
-        return Line::from(spans);
-    }
-    for (index, ch) in chars.iter().enumerate() {
-        let style = if index == caret_col { caret_style } else { dim };
-        spans.push(Span::styled(ch.to_string(), style));
-    }
-    if caret_col >= chars.len() {
-        spans.push(Span::styled(" ", caret_style));
-    }
+    spans.extend(crate::ui::text_field::field_spans(
+        draft,
+        caret,
+        focused,
+        width,
+        dim,
+        caret_style,
+    ));
     Line::from(spans)
 }
 
@@ -493,18 +482,16 @@ fn render_editor(
     dim: Style,
 ) {
     let popup = editor_rect(area);
-    let caret_style = Style::default()
-        .fg(Color::from(&theme.editor_bg))
-        .bg(Color::from(&theme.accent));
     let field = editor_field_rect(popup);
     let mut lines = vec![
         Line::from(""),
         field_line(
             &editor.draft,
             editor.caret,
+            editor.focus == EditorFocus::Field,
             field.width as usize,
             dim,
-            caret_style,
+            crate::ui::text_field::caret_cell_style(theme),
         ),
         Line::from(""),
         button_line(
@@ -615,6 +602,21 @@ mod tests {
         assert_eq!(reveal(0, 0, 12), 0);
         assert_eq!(reveal(14, 0, 12), 3);
         assert_eq!(reveal(2, 5, 12), 2);
+    }
+
+    #[test]
+    fn word_field_hides_the_caret_while_the_buttons_are_focused() {
+        let theme = Theme::dark_red();
+        let caret = crate::ui::text_field::caret_cell_style(&theme);
+        assert!(!caret.add_modifier.contains(Modifier::REVERSED));
+        let dim = Style::default().fg(Color::from(&theme.editor_fg));
+        let on = field_line("hi", 2, true, 8, dim, caret);
+        let off = field_line("hi", 2, false, 8, dim, caret);
+        assert!(on.spans.iter().any(|s| s.style.bg == caret.bg));
+        assert!(off.spans.iter().all(|s| s.style.bg != caret.bg));
+        let on_text: String = on.spans.iter().map(|s| s.content.as_ref()).collect();
+        let off_text: String = off.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(on_text, off_text);
     }
 
     #[test]

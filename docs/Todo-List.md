@@ -9,7 +9,7 @@
 - [x] Project Browser Sidebar has an issue with the scrollbar. When several folders are open with many files the scrollbar stops allowing scrolling to the bottom of the file list. If you do manage to get it to scroll to the bottom of the list by opening and closing several folders it will get stuck not allowing scrolling back to the top of the list. This bug appears to be happening in the variables list and the function list as well. Scrolling appears to work fine when using the keyboard arrows to move up and down the list but not when using the mouse scroll wheel.
 - [x] The buttons in the open project folder popup do not highlight when the mouse is over them as it does in our other popup windows.
 - [x] Clicking the [x] on a Recent row in the open project folder popup removes the keyboard-selected row instead of the row that was clicked.
-- [ ] The text cursor does not appear in many of the popup text entry fields making it hard to tell if the text field is selected and able to be typed into.
+- [x] The text cursor does not appear in many of the popup text entry fields making it hard to tell if the text field is selected and able to be typed into.
 
 ### Major:
 

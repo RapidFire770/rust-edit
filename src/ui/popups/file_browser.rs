@@ -472,11 +472,19 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme, app: &crate::App) {
     if reserve_name {
         let focused = app.browser_button_selected == FOCUS_FILENAME;
         let name_style = if focused { selection_bg } else { dim };
-        let caret = if focused { "█" } else { "" };
-        lines.push(Line::from(vec![
-            Span::styled(" Name: ", dim),
-            Span::styled(format!("{}{}", app.browser_filename, caret), name_style),
-        ]));
+        let caret_style = crate::ui::text_field::caret_cell_style(theme);
+        let inner = (popup.width.saturating_sub(2)) as usize;
+        let field_w = inner.saturating_sub(" Name: ".chars().count()).max(1);
+        let mut spans = vec![Span::styled(" Name: ", dim)];
+        spans.extend(crate::ui::text_field::field_spans(
+            &app.browser_filename,
+            app.browser_filename.chars().count(),
+            focused,
+            field_w,
+            name_style,
+            caret_style,
+        ));
+        lines.push(Line::from(spans));
     }
 
     // Footer buttons.

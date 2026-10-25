@@ -3617,7 +3617,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
     if let Some(find_area) = sides.find {
         if let Some(fs) = &app.find_state {
-            crate::ui::find::render_bar(f, find_area, fs);
+            crate::ui::find::render_bar(f, find_area, fs, app.current_theme());
         }
     }
     crate::ui::status::render(f, chunks[2], app);

@@ -12,6 +12,8 @@
 #![allow(dead_code)]
 
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
@@ -60,16 +62,19 @@ pub fn render(
         .borders(Borders::ALL)
         .style(theme.editor_bg_style());
 
-    let field_w = (popup.width.saturating_sub(4)) as usize;
-    let path_chars: Vec<char> = path_input.chars().collect();
-    let visible_path: String = if path_chars.len() <= field_w {
-        path_input.to_string()
-    } else {
-        let take = field_w.saturating_sub(1);
-        let mut s: String = path_chars[path_chars.len() - take..].iter().collect();
-        s.insert(0, '…');
-        s
-    };
+    let text_style = Style::default().fg(Color::from(&theme.editor_fg));
+    let caret_style = crate::ui::text_field::caret_cell_style(theme);
+    let inner_w = (popup.width.saturating_sub(2)) as usize;
+    let field_w = inner_w.saturating_sub(2).max(1);
+    let mut path_spans = vec![Span::styled("> ", text_style)];
+    path_spans.extend(crate::ui::text_field::field_spans(
+        path_input,
+        path_input.chars().count(),
+        true,
+        field_w,
+        text_style,
+        caret_style,
+    ));
 
     let labels = button_labels(is_save);
     let is_primary = [true, false, false];
@@ -85,18 +90,18 @@ pub fn render(
     let btn_line = btn_row.render(theme);
 
     let lines = vec![
-        ratatui::text::Line::from("Path:"),
-        ratatui::text::Line::from(format!("> {}", visible_path)),
-        ratatui::text::Line::from(""),
-        ratatui::text::Line::from(message),
-        ratatui::text::Line::from(""),
-        ratatui::text::Line::from(""),
+        Line::from("Path:"),
+        Line::from(path_spans),
+        Line::from(""),
+        Line::from(message),
+        Line::from(""),
+        Line::from(""),
         btn_line,
     ];
 
     let para = Paragraph::new(lines)
         .block(block)
-        .style(ratatui::style::Style::default().fg(ratatui::style::Color::from(&theme.editor_fg)));
+        .style(Style::default().fg(Color::from(&theme.editor_fg)));
 
     f.render_widget(ratatui::widgets::Clear, popup);
     f.render_widget(para, popup);

@@ -64,23 +64,24 @@ impl FindState {
     }
 }
 
-/// Truncate a string for display so it never exceeds `max` visible cells,
-/// keeping its right end (where the editing cursor is). Prefixes with `…` when
-/// truncated. Operates on chars, not bytes, so multi-byte text is handled.
-fn truncate_keep_end(s: &str, max: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max {
-        return s.to_string();
-    }
-    if max == 0 {
-        return String::new();
-    }
-    let mut out: String = chars[chars.len() - (max - 1)..].iter().collect();
-    out.insert(0, '…');
-    out
+pub(crate) fn find_field_spans(
+    text: &str,
+    focused: bool,
+    width: usize,
+    text_style: Style,
+    caret_style: Style,
+) -> Vec<Span<'static>> {
+    crate::ui::text_field::field_spans(
+        text,
+        text.chars().count(),
+        focused,
+        width,
+        text_style,
+        caret_style,
+    )
 }
 
-pub fn render_bar(f: &mut Frame, area: Rect, state: &FindState) {
+pub fn render_bar(f: &mut Frame, area: Rect, state: &FindState, theme: &crate::theme::Theme) {
     let bg = Style::default().bg(Color::Rgb(50, 50, 70)).fg(Color::White);
     let dim = Style::default()
         .bg(Color::Rgb(50, 50, 70))
@@ -89,6 +90,7 @@ pub fn render_bar(f: &mut Frame, area: Rect, state: &FindState) {
         .bg(Color::Rgb(50, 50, 70))
         .fg(Color::Rgb(255, 180, 80))
         .add_modifier(Modifier::BOLD);
+    let caret_style = crate::ui::text_field::caret_cell_style(theme);
 
     // Budget the query/replace fields to a fraction of the bar width so a long
     // query never pushes the toggles and hints off-screen (the bar scales with
@@ -96,26 +98,39 @@ pub fn render_bar(f: &mut Frame, area: Rect, state: &FindState) {
     let w = area.width as usize;
     let field_budget = (w.saturating_sub(46) / 3).max(6);
 
-    let q = truncate_keep_end(&state.query, field_budget);
-    let r = truncate_keep_end(&state.replace, field_budget);
-
-    let mut spans: Vec<Span> = Vec::new();
-    spans.push(Span::styled(" Find:", dim));
-
     let qstyle = if state.focus == FindFocus::Query {
         accent
     } else {
         bg
     };
-    spans.push(Span::styled(format!(" [{q}] "), qstyle));
-
-    spans.push(Span::styled("Rep:", dim));
     let rstyle = if state.focus == FindFocus::Replace {
         accent
     } else {
         bg
     };
-    spans.push(Span::styled(format!(" [{r}] "), rstyle));
+
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::styled(" Find:", dim));
+    spans.push(Span::styled(" [", qstyle));
+    spans.extend(find_field_spans(
+        &state.query,
+        state.focus == FindFocus::Query,
+        field_budget,
+        qstyle,
+        caret_style,
+    ));
+    spans.push(Span::styled("] ", qstyle));
+
+    spans.push(Span::styled("Rep:", dim));
+    spans.push(Span::styled(" [", rstyle));
+    spans.extend(find_field_spans(
+        &state.replace,
+        state.focus == FindFocus::Replace,
+        field_budget,
+        rstyle,
+        caret_style,
+    ));
+    spans.push(Span::styled("] ", rstyle));
 
     spans.push(Span::styled(
         format!("| {} matches ", state.matches.len()),
@@ -149,4 +164,36 @@ pub fn render_bar(f: &mut Frame, area: Rect, state: &FindState) {
 
     let bar = Paragraph::new(Line::from(spans)).style(bg);
     f.render_widget(bar, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Color;
+
+    fn plain() -> Style {
+        Style::default()
+    }
+
+    fn block() -> Style {
+        Style::default().bg(Color::Red)
+    }
+
+    fn shown(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn focused_query_ends_with_the_caret_cell() {
+        let spans = find_field_spans("fn", true, 8, plain(), block());
+        assert_eq!(shown(&spans), "fn ");
+        assert_eq!(spans.last().unwrap().style.bg, Some(Color::Red));
+    }
+
+    #[test]
+    fn unfocused_replace_keeps_the_cell_plain() {
+        let spans = find_field_spans("fn", false, 8, plain(), block());
+        assert_eq!(shown(&spans), "fn ");
+        assert!(spans.iter().all(|s| s.style.bg.is_none()));
+    }
 }
