@@ -25,3 +25,35 @@
 - [x] Make side panels re-sizable with a keyboard shortcut when in focus. Also add a keyboard shortcut to close them when they are in focus.
 - [x] Add BASIC and Assembly as a supported programming language so projects in my ~/Documents/Programming/C64 can be opened and highlighted, commented, etc.
 - [ ] Possibly have it work on Mac and Windows as well.
+- [ ] Implement a compatibility mode for the Idun cartridge’s VT-100 80-column terminal for the C64.
+    How the Idun VT-100 terminal works:
+    The Idun cartridge ([github.com/idun-project/idun-cartridge](https://github.com/idun-project/idun-cartridge)) gives the Commodore a full VT-100 terminal into the Raspberry Pi’s Linux environment.
+
+    - On the C128 this uses the hardware VDC (proper 80-column display).
+    - On the C64 (or C128 in 64 mode) it uses a software 80-column mode (bitmap-based). It’s usable but slower, with limited colors/attributes and jump scrolling.
+    You can already run normal Linux tools (including vi) from the Commodore keyboard via this terminal. The default is typically 80×25 or 80×27.
+
+    What a compatibility mode would need:
+    rust-edit is a full Ratatui + crossterm TUI that currently expects modern terminal features (mouse, true color, UTF-8, rich menus). For Idun you’d want a reduced mode that:
+
+    Detects the environment
+    - TERM=vt100 (or similar)
+    - Terminal size around 80×25/27
+    - Optional explicit flag (--idun / --compat) or config setting
+    - Optionally check hostname (idunpi) or other Idun-specific signals
+
+    Simplifies the UI
+    - Switch to a monochrome or basic ANSI theme (you already have a monochrome theme and others). Disable truecolor.
+    - Completely disable mouse handling — the Commodore keyboard terminal almost certainly has none.
+    - Keep menus keyboard-navigable (arrow keys + Enter, or single-key mnemonics). Shorten labels if needed.
+    - Stick to ASCII or the VT-100 alternate character set for line drawing.
+
+    Adjusts keyboard handling
+    - Commodore keyboards have a different layout and limited modifier support.
+    - Provide a simplified shortcut set (more Ctrl-based, fewer Alt/function-key combos).
+    - Document the expected mappings once you test on real hardware.
+    
+    Tones down features
+    - Basic syntax highlighting only (or off).
+    - Simpler status bar / fewer panels.
+    - Minimize full redraws if the software 80-col mode on C64 feels laggy.
